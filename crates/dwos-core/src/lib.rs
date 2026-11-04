@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
 
 mod engine;
 mod error;
@@ -14,7 +15,7 @@ pub use engine::{
 };
 pub use error::Error;
 pub use lease::{LeaseKeeper, LeaseLoss};
-pub use store::Store;
+pub use store::{SendFrom, Store};
 pub use workflow::{
     Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE,
     RecordedStep, Started, Status, StepRecord, Workflow, WorkflowFilter, pickle_from_serializer,

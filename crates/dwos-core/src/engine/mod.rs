@@ -10,6 +10,7 @@ use crate::workflow::{
 use crate::{Error, Store};
 
 mod events;
+mod queues;
 mod recovery;
 mod sleep;
 mod steps;
@@ -258,17 +259,8 @@ impl Engine {
     }
 
     pub async fn begin(&self, begin: Begin<'_>) -> Result<Begun, Error> {
-        let workflow_id = match begin.parent {
-            Some(parent) => {
-                self.child_workflow_id(parent, begin.name, begin.workflow_id)
-                    .await?
-            }
-            None => begin
-                .workflow_id
-                .filter(|id| !id.is_empty())
-                .map_or_else(new_token, str::to_owned),
-        };
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
+        let workflow_id = self.workflow_id_for_begin(&begin).await?;
         let new = NewWorkflow {
             workflow_id: &workflow_id,
             name: begin.name,
@@ -290,6 +282,19 @@ impl Engine {
                 Some(result) => Begun::Stored(result),
                 None => Begun::Attach(workflow_id),
             }),
+        }
+    }
+
+    async fn workflow_id_for_begin(&self, begin: &Begin<'_>) -> Result<String, Error> {
+        match begin.parent {
+            Some(parent) => {
+                self.child_workflow_id(parent, begin.name, begin.workflow_id)
+                    .await
+            }
+            None => Ok(begin
+                .workflow_id
+                .filter(|id| !id.is_empty())
+                .map_or_else(new_token, str::to_owned)),
         }
     }
 
