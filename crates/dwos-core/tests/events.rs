@@ -581,3 +581,187 @@ all_dbs!(a_none_event_is_present_and_does_not_wait, backend, {
         Poll::Ready(json("null"))
     );
 });
+
+all_dbs!(
+    recovered_waits_use_arrivals_before_the_recorded_deadline,
+    backend,
+    {
+        let db = TestDb::create(backend).await;
+        let engine = engine(&db).await;
+        let recv = begin_run(&engine, "receiver").await;
+        let target = begin_run(&engine, "target").await;
+        assert!(matches!(
+            engine.poll_recv(&recv, 1, 2, None, 500).await.unwrap(),
+            Poll::Waiting { .. }
+        ));
+        assert!(matches!(
+            engine
+                .poll_recv(&recv, 3, 4, Some("early"), 500)
+                .await
+                .unwrap(),
+            Poll::Waiting { .. }
+        ));
+        assert!(matches!(
+            engine
+                .poll_event("target", "overwritten", 500, None, Some((&recv, 5, 6)))
+                .await
+                .unwrap(),
+            Poll::Waiting { .. }
+        ));
+        assert!(matches!(
+            engine
+                .poll_event("target", "late", 500, None, Some((&recv, 7, 8)))
+                .await
+                .unwrap(),
+            Poll::Waiting { .. }
+        ));
+        engine
+            .send(
+                "receiver",
+                Some("early"),
+                "\"before\"",
+                PORTABLE_JSON,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        engine
+            .set_event(&target, None, "overwritten", "\"before\"", PORTABLE_JSON)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        engine
+            .send(
+                "receiver",
+                None,
+                "\"after\"",
+                PORTABLE_JSON,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        engine
+            .set_event(&target, None, "overwritten", "\"after\"", PORTABLE_JSON)
+            .await
+            .unwrap();
+        engine
+            .set_event(&target, None, "late", "\"after\"", PORTABLE_JSON)
+            .await
+            .unwrap();
+        engine.release(&recv).await.unwrap();
+        let claim = engine.recover_now(&names()).await.unwrap().remove(0);
+        let recv = Run::new(claim.lease, claim.serialization, claim.deadline_epoch_ms);
+        assert_eq!(
+            engine.poll_recv(&recv, 1, 2, None, 500).await.unwrap(),
+            Poll::Ready(json("null"))
+        );
+        assert_eq!(
+            engine
+                .poll_recv(&recv, 3, 4, Some("early"), 500)
+                .await
+                .unwrap(),
+            Poll::Ready(json("\"before\""))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "overwritten", 500, None, Some((&recv, 5, 6)))
+                .await
+                .unwrap(),
+            Poll::Ready(json("\"before\""))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "late", 500, None, Some((&recv, 7, 8)))
+                .await
+                .unwrap(),
+            Poll::Ready(json("null"))
+        );
+        let messages = engine.store().list_messages("receiver").await.unwrap();
+        assert_eq!(
+            messages.iter().filter(|message| !message.consumed).count(),
+            1
+        );
+        assert_eq!(
+            engine.poll_recv(&recv, 9, 10, None, 0).await.unwrap(),
+            Poll::Ready(json("\"after\""))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "overwritten", 0, None, None)
+                .await
+                .unwrap(),
+            Poll::Ready(json("\"after\""))
+        );
+    }
+);
+
+all_dbs!(
+    legacy_events_are_read_immediately_but_have_no_recovered_arrival_time,
+    backend,
+    {
+        let db = TestDb::create(backend).await;
+        let engine = engine(&db).await;
+        let recv = begin_run(&engine, "receiver").await;
+        begin_run(&engine, "target").await;
+        assert!(matches!(
+            engine
+                .poll_event("target", "legacy", 10, None, Some((&recv, 1, 2)))
+                .await
+                .unwrap(),
+            Poll::Waiting { .. }
+        ));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let sql = match backend {
+            Backend::MySql => {
+                "INSERT INTO workflow_events (workflow_uuid, `key`, value, serialization) VALUES ('target', 'legacy', '1', 'portable_json')"
+            }
+            _ => {
+                "INSERT INTO workflow_events (workflow_uuid, \"key\", value, serialization) VALUES ('target', 'legacy', '1', 'portable_json')"
+            }
+        };
+        sqlx::query(sql)
+            .execute(engine.store().pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            engine
+                .poll_event("target", "legacy", 10, None, Some((&recv, 1, 2)))
+                .await
+                .unwrap(),
+            Poll::Ready(json("null"))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "legacy", 0, None, Some((&recv, 3, 4)))
+                .await
+                .unwrap(),
+            Poll::Ready(json("1"))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "legacy", 0, None, None)
+                .await
+                .unwrap(),
+            Poll::Ready(json("1"))
+        );
+        assert_eq!(
+            engine
+                .poll_event("target", "legacy", 5_000, None, None)
+                .await
+                .unwrap(),
+            Poll::Ready(json("1"))
+        );
+        let expired = engine.store().now_ms().await.unwrap() - 1;
+        assert_eq!(
+            engine
+                .poll_event("target", "legacy", 5_000, Some(expired), None)
+                .await
+                .unwrap(),
+            Poll::Ready(json("null"))
+        );
+    }
+);

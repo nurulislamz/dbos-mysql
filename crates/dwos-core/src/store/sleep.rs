@@ -4,7 +4,7 @@ use super::Store;
 use crate::Error;
 use crate::workflow::{Lease, PORTABLE_JSON, StepRecord, check_step_name};
 
-pub const SLEEP_STEP_NAME: &str = "DBOS.sleep";
+pub(super) const SLEEP_STEP_NAME: &str = "DBOS.sleep";
 
 fn seconds_to_ms(seconds: f64) -> i64 {
     let ms = seconds * 1000.0;
@@ -89,7 +89,18 @@ impl Store {
     }
 }
 
-fn parse_wake_ms(workflow_id: &str, step_id: u32, record: &StepRecord) -> Result<i64, Error> {
+pub(super) fn parse_wake_ms(
+    workflow_id: &str,
+    step_id: u32,
+    record: &StepRecord,
+) -> Result<i64, Error> {
+    if record.error.is_some() || record.child_workflow_id.is_some() {
+        return Err(Error::StepKindMismatch {
+            workflow_id: workflow_id.to_owned(),
+            step_id,
+            expected: "sleep",
+        });
+    }
     let Some(output) = &record.output else {
         return Err(Error::StepKindMismatch {
             workflow_id: workflow_id.to_owned(),

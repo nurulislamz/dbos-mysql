@@ -71,3 +71,15 @@ CREATE TABLE IF NOT EXISTS workflow_timeouts (
     CONSTRAINT fk_workflow_timeouts_workflow
         FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS workflow_event_history (
+    workflow_uuid VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    event_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    revision BIGINT NOT NULL,
+    created_at_epoch_ms BIGINT NOT NULL,
+    value LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    serialization VARCHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    PRIMARY KEY (workflow_uuid, event_key, revision),
+    CONSTRAINT fk_workflow_event_history_workflow
+        FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE
+) ENGINE=InnoDB;

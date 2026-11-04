@@ -66,3 +66,13 @@ CREATE TABLE IF NOT EXISTS workflow_timeouts (
 
 CREATE INDEX IF NOT EXISTS ix_workflow_timeouts_deadline
     ON workflow_timeouts (deadline_epoch_ms);
+
+CREATE TABLE IF NOT EXISTS workflow_event_history (
+    workflow_uuid TEXT NOT NULL REFERENCES workflow_status(workflow_uuid) ON DELETE CASCADE,
+    event_key TEXT NOT NULL,
+    revision BIGINT NOT NULL,
+    created_at_epoch_ms BIGINT NOT NULL,
+    value TEXT NOT NULL,
+    serialization TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, event_key, revision)
+);

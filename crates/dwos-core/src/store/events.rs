@@ -1,6 +1,7 @@
 use sqlx::mysql::MySqlDatabaseError;
 use sqlx::{Any, Row, Transaction};
 
+use super::sleep::{SLEEP_STEP_NAME, parse_wake_ms};
 use super::{Store, check_name};
 use crate::Error;
 use crate::workflow::{Lease, PORTABLE_JSON, StepRecord, check_step_name, new_token};
@@ -11,7 +12,6 @@ pub const SEND_STEP: &str = "DBOS.send";
 pub const RECV_STEP: &str = "DBOS.recv";
 pub const SET_EVENT_STEP: &str = "DBOS.setEvent";
 pub const GET_EVENT_STEP: &str = "DBOS.getEvent";
-pub const SLEEP_STEP: &str = "DBOS.sleep";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredValue {
@@ -73,15 +73,6 @@ fn is_fk_violation(error: &sqlx::Error) -> bool {
             message.contains("FOREIGN KEY") || message.contains("foreign key")
         }
     }
-}
-
-fn parse_deadline(text: &str) -> Result<i64, Error> {
-    let trimmed = text.trim();
-    trimmed.parse::<i64>().map_err(|_| {
-        Error::Corrupt(format!(
-            "timeout step stored a deadline that is not a number: {text}"
-        ))
-    })
 }
 
 fn check_wait_steps(step_id: u32, timeout_step_id: u32) -> Result<(), Error> {
@@ -196,6 +187,7 @@ impl Store {
         Ok(SendOutcome::Sent)
     }
 
+    /// Reads messages recorded no later than the persisted deadline, including after recovery.
     pub async fn poll_recv(
         &self,
         lease: &Lease,
@@ -228,14 +220,14 @@ impl Store {
             tx.commit().await?;
             return Ok(Poll::Ready(saved));
         }
-        let deadline_ms = self
+        let (deadline_ms, _) = self
             .ensure_deadline(&mut tx, lease, timeout_step_id, timeout_ms)
             .await?;
         let now_ms: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
             .fetch_one(&mut *tx)
             .await?;
         if let Some(message) = self
-            .take_message(&mut tx, &lease.workflow_id, topic, step_id)
+            .take_message(&mut tx, &lease.workflow_id, topic, step_id, deadline_ms)
             .await?
         {
             self.insert_step(
@@ -279,6 +271,8 @@ impl Store {
         })
     }
 
+    /// Initial zero-timeout reads observe the latest value once; later polls use arrival history.
+    /// Legacy values without history can only satisfy an initial read observed before its deadline.
     pub async fn poll_event(
         &self,
         target: &str,
@@ -317,21 +311,33 @@ impl Store {
             tx.commit().await?;
             return Ok(Poll::Ready(saved));
         }
-        let deadline_ms = if let Some((lease, _, timeout_step_id)) = caller {
+        let (deadline_ms, initial) = if let Some((lease, _, timeout_step_id)) = caller {
             self.ensure_deadline(&mut tx, lease, timeout_step_id, timeout_ms)
                 .await?
         } else if let Some(deadline_ms) = deadline_ms {
-            deadline_ms
+            (deadline_ms, false)
         } else {
             let now_ms: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
                 .fetch_one(&mut *tx)
                 .await?;
-            now_ms.saturating_add(timeout_ms)
+            (now_ms.saturating_add(timeout_ms), true)
         };
         let now_ms: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
             .fetch_one(&mut *tx)
             .await?;
-        let event = self.read_event(&mut tx, target, key).await?;
+        let event = if initial && timeout_ms == 0 {
+            self.read_event(&mut tx, target, key).await?
+        } else {
+            let event = self
+                .read_event_before(&mut tx, target, key, deadline_ms)
+                .await?;
+            if event.is_none() && initial {
+                self.read_legacy_event_before(&mut tx, target, key, deadline_ms)
+                    .await?
+            } else {
+                event
+            }
+        };
         if event.is_some() || now_ms >= deadline_ms {
             let value = event.unwrap_or(StoredValue {
                 text: JSON_NULL.to_owned(),
@@ -398,6 +404,28 @@ impl Store {
         )))
         .bind(lease.workflow_id.as_str())
         .bind(key)
+        .bind(value)
+        .bind(serialization)
+        .execute(&mut *tx)
+        .await?;
+        let revision: Option<i64> = sqlx::query_scalar(self.sql(
+            "SELECT MAX(revision) FROM workflow_event_history WHERE workflow_uuid = ? AND event_key = ?",
+        ))
+        .bind(lease.workflow_id.as_str())
+        .bind(key)
+        .fetch_one(&mut *tx)
+        .await?;
+        let revision = revision
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("event revision overflow".to_owned()))?;
+        sqlx::query(self.sql(
+            "INSERT INTO workflow_event_history (workflow_uuid, event_key, revision, created_at_epoch_ms, value, serialization) \
+             VALUES (?, ?, ?, {NOW}, ?, ?)",
+        ))
+        .bind(lease.workflow_id.as_str())
+        .bind(key)
+        .bind(revision)
         .bind(value)
         .bind(serialization)
         .execute(&mut *tx)
@@ -553,7 +581,7 @@ impl Store {
         lease: &Lease,
         timeout_step_id: u32,
         timeout_ms: i64,
-    ) -> Result<i64, Error> {
+    ) -> Result<(i64, bool), Error> {
         if let Some((recorded_name, record)) = self
             .read_step(tx, &lease.workflow_id, timeout_step_id)
             .await?
@@ -561,16 +589,13 @@ impl Store {
             check_step_name(
                 &lease.workflow_id,
                 timeout_step_id,
-                SLEEP_STEP,
+                SLEEP_STEP_NAME,
                 recorded_name,
             )?;
-            let text = record.output.ok_or_else(|| {
-                Error::Corrupt(format!(
-                    "workflow {} step {timeout_step_id} has no stored deadline",
-                    lease.workflow_id
-                ))
-            })?;
-            return parse_deadline(&text);
+            return Ok((
+                parse_wake_ms(&lease.workflow_id, timeout_step_id, &record)?,
+                false,
+            ));
         }
         let now_ms: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
             .fetch_one(&mut **tx)
@@ -580,7 +605,7 @@ impl Store {
             tx,
             &lease.workflow_id,
             timeout_step_id,
-            SLEEP_STEP,
+            SLEEP_STEP_NAME,
             &StepRecord {
                 output: Some(deadline_ms.to_string()),
                 ..StepRecord::default()
@@ -588,7 +613,7 @@ impl Store {
             PORTABLE_JSON,
         )
         .await?;
-        Ok(deadline_ms)
+        Ok((deadline_ms, true))
     }
 
     async fn take_message(
@@ -597,15 +622,17 @@ impl Store {
         destination: &str,
         topic: &str,
         step_id: u32,
+        deadline_ms: i64,
     ) -> Result<Option<StoredValue>, Error> {
         let row = sqlx::query(self.sql(&format!(
             "SELECT message_uuid, message, serialization FROM notifications \
-             WHERE destination_uuid = ? AND topic = ? AND consumed = 0 \
+             WHERE destination_uuid = ? AND topic = ? AND consumed = 0 AND created_at_epoch_ms <= ? \
              ORDER BY message_id LIMIT 1 {}",
             self.dialect.lock_row()
         )))
         .bind(destination)
         .bind(topic)
+        .bind(deadline_ms)
         .fetch_optional(&mut **tx)
         .await?;
         let Some(row) = row else {
@@ -624,6 +651,59 @@ impl Store {
             text: row.try_get("message")?,
             serialization: row.try_get("serialization")?,
         }))
+    }
+
+    async fn read_event_before(
+        &self,
+        tx: &mut Transaction<'static, Any>,
+        workflow_id: &str,
+        key: &str,
+        deadline_ms: i64,
+    ) -> Result<Option<StoredValue>, Error> {
+        let row = sqlx::query(self.sql(
+            "SELECT value, serialization FROM workflow_event_history \
+             WHERE workflow_uuid = ? AND event_key = ? AND created_at_epoch_ms <= ? \
+             ORDER BY revision DESC LIMIT 1",
+        ))
+        .bind(workflow_id)
+        .bind(key)
+        .bind(deadline_ms)
+        .fetch_optional(&mut **tx)
+        .await?;
+        row.map(|row| {
+            Ok(StoredValue {
+                text: row.try_get("value")?,
+                serialization: row.try_get("serialization")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn read_legacy_event_before(
+        &self,
+        tx: &mut Transaction<'static, Any>,
+        workflow_id: &str,
+        key: &str,
+        deadline_ms: i64,
+    ) -> Result<Option<StoredValue>, Error> {
+        let row = sqlx::query(self.sql(
+            "SELECT value, serialization FROM workflow_events \
+             WHERE workflow_uuid = ? AND {KEY} = ? AND {NOW} <= ? AND NOT EXISTS \
+             (SELECT 1 FROM workflow_event_history WHERE workflow_event_history.workflow_uuid = workflow_events.workflow_uuid \
+              AND workflow_event_history.event_key = workflow_events.{KEY})",
+        ))
+        .bind(workflow_id)
+        .bind(key)
+        .bind(deadline_ms)
+        .fetch_optional(&mut **tx)
+        .await?;
+        row.map(|row| {
+            Ok(StoredValue {
+                text: row.try_get("value")?,
+                serialization: row.try_get("serialization")?,
+            })
+        })
+        .transpose()
     }
 
     async fn read_event(
