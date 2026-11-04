@@ -659,12 +659,12 @@ mod mysql_only {
             .await
             .unwrap();
         sqlx::raw_sql("BEGIN").execute(&mut blocker).await.unwrap();
-        sqlx::raw_sql("INSERT INTO dbos_steps (workflow_id, step_id, step_name, created_at) VALUES ('a', 1, 'blocker', UTC_TIMESTAMP(6))")
+        sqlx::raw_sql("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('a', 1, 'blocker', 'py_pickle', 0)")
             .execute(&mut blocker)
             .await
             .unwrap();
         for index in 0..200 {
-            sqlx::query("INSERT INTO dbos_steps (workflow_id, step_id, step_name, created_at) VALUES ('weight', ?, 'w', UTC_TIMESTAMP(6))")
+            sqlx::query("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('weight', ?, 'w', 'py_pickle', 0)")
                 .bind(index)
                 .execute(&mut blocker)
                 .await
@@ -676,7 +676,7 @@ mod mysql_only {
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        sqlx::query("SELECT 1 FROM dbos_workflows WHERE workflow_id = 'a' FOR UPDATE")
+        sqlx::query("SELECT 1 FROM workflow_status WHERE workflow_uuid = 'a' FOR UPDATE")
             .fetch_optional(&mut blocker)
             .await
             .unwrap();
@@ -701,7 +701,7 @@ mod mysql_only {
 
         let mut takeover = MySqlConnection::connect(&db.url).await.unwrap();
         sqlx::raw_sql("BEGIN").execute(&mut takeover).await.unwrap();
-        sqlx::query("SELECT 1 FROM dbos_workflows WHERE workflow_id = 'a' FOR UPDATE")
+        sqlx::query("SELECT 1 FROM workflow_status WHERE workflow_uuid = 'a' FOR UPDATE")
             .fetch_one(&mut takeover)
             .await
             .unwrap();
@@ -712,10 +712,12 @@ mod mysql_only {
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        sqlx::query("UPDATE dbos_workflows SET lease_token = 'new-owner' WHERE workflow_id = 'a'")
-            .execute(&mut takeover)
-            .await
-            .unwrap();
+        sqlx::query(
+            "UPDATE workflow_status SET lease_token = 'new-owner' WHERE workflow_uuid = 'a'",
+        )
+        .execute(&mut takeover)
+        .await
+        .unwrap();
         sqlx::raw_sql("COMMIT")
             .execute(&mut takeover)
             .await

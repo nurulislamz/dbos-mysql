@@ -1,10 +1,10 @@
 # dbos-mysql: plan
 
-Durable workflows for Python on MySQL 8.4 and SQLite, with a Rust core and a Python SDK that follows the DBOS API. A workflow's state is stored in the database, so it survives a crash and resumes without repeating finished steps.
+A Rust port of DBOS Transact, whose original implementation is the TypeScript project `dbos-transact-ts`. A workflow's state is stored in MySQL 8.4 or SQLite, so it survives a crash and resumes without repeating finished steps. The Python package is paused. Do not add Python features.
 
-This is an unofficial project and is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence.
+This is an unofficial project and is not affiliated with DBOS, Inc. The Rust port follows the TypeScript. Tests already in the tree were adapted from DBOS under the MIT licence.
 
-Status: planning, no code yet. Plan date: 2026-11-04.
+Status: porting the TypeScript engine to Rust. Plan date: 2026-11-04.
 
 ## 1. What we are building first
 
@@ -70,7 +70,7 @@ The tests still will not run unchanged:
 - `conftest.py` is new, because the upstream one is built around Postgres and SQLite.
 - Tests that read internal tables or call `dbos._sys_db` get rewritten.
 - Recovery tests get adapted, because we use leases where DBOS tests use executor IDs.
-- Tests that rely on pickle behaviour are adapted or dropped.
+- Tests that need a feature not in this version are adapted or dropped. Pickle tests that match this serializer are kept.
 
 `tests/upstream/MANIFEST.md` lists every copied test with its source file, upstream commit, status (`passing`, `adapted`, `rewritten` or `dropped`) and the reason for any change. A test is never dropped without a reason.
 
@@ -122,8 +122,8 @@ We match DBOS unless this table says otherwise.
 | Nested steps | A step called within a step runs as a plain function | Yes |
 | Too many recoveries | Ends as `MAX_RECOVERY_ATTEMPTS_EXCEEDED` | Yes |
 | Crash detection | **Leases with expiry, not executor IDs** | No |
-| Stored format | **JSON through Pydantic, not pickle** | No |
-| Recovered errors | **Built-in exception types come back as themselves, others as `DBOSRecordedError`** | No |
+| Stored format | **`js_superjson` by default, and `portable_json`, as in the TypeScript.** The uncommitted Python pickle code is not the format | Yes |
+| Recovered errors | **An exception comes back as its own type when its constructor accepts the saved arguments. Otherwise it is `DBOSRecordedError`** | No |
 | Sync functions | Supported from the start, because the copied tests mix sync steps into async workflows. Database calls from sync code go through a dedicated thread that never runs user code, so they cannot deadlock | Yes |
 
 ### Guarantees
@@ -263,35 +263,39 @@ Option names and defaults, including `max_recovery_attempts`, are taken from ups
 
 ## 6. Storing state
 
+Table and column names follow DBOS (`workflow_status`, `operation_outputs`, `workflow_uuid`, `function_id`, `function_name`, `inputs`, `serialization`), so logic copied from DBOS reads the same here. Times are whole milliseconds since the epoch, calculated by the database. `claim_after` and `lease_token` have no DBOS equivalent, because crash detection uses leases.
+
 ```sql
-CREATE TABLE dbos_workflows (
-    workflow_id           VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+CREATE TABLE workflow_status (
+    workflow_uuid           VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     name                  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     status                VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    input                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    inputs                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    claim_after           DATETIME(6)  NULL,
+    serialization         VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    claim_after           BIGINT       NULL,
     lease_token           CHAR(36)     CHARACTER SET ascii COLLATE ascii_bin NULL,
     recovery_attempts     INT UNSIGNED NOT NULL DEFAULT 1,
     max_recovery_attempts INT UNSIGNED NOT NULL,
-    created_at            DATETIME(6)  NOT NULL,
-    updated_at            DATETIME(6)  NOT NULL,
-    PRIMARY KEY (workflow_id),
-    KEY ix_dbos_workflows_claim (claim_after)
+    created_at            BIGINT       NOT NULL,
+    updated_at            BIGINT       NOT NULL,
+    PRIMARY KEY (workflow_uuid),
+    KEY ix_workflow_status_claim (claim_after)
 ) ENGINE=InnoDB;
 
-CREATE TABLE dbos_steps (
-    workflow_id       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    step_id           INT UNSIGNED NOT NULL,
-    step_name         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    output            LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    error             LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    child_workflow_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
-    created_at        DATETIME(6)  NOT NULL,
-    PRIMARY KEY (workflow_id, step_id),
-    CONSTRAINT fk_dbos_steps_workflow
-        FOREIGN KEY (workflow_id) REFERENCES dbos_workflows (workflow_id) ON DELETE CASCADE
+CREATE TABLE operation_outputs (
+    workflow_uuid         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    function_id           INT UNSIGNED NOT NULL,
+    function_name         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    child_workflow_id     VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    serialization         VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    completed_at_epoch_ms BIGINT       NOT NULL,
+    PRIMARY KEY (workflow_uuid, function_id),
+    CONSTRAINT fk_operation_outputs_workflow
+        FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 ```
 
@@ -312,12 +316,12 @@ The library does not create tables on its own at first. `DBOS.launch()` checks t
 **Start or attach.** One transaction:
 
 ```sql
-INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after, lease_token,
+INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token,
                             max_recovery_attempts, created_at, updated_at)
-VALUES (?, ?, 'PENDING', ?, UTC_TIMESTAMP(6) + INTERVAL ? SECOND, ?, ?, UTC_TIMESTAMP(6), UTC_TIMESTAMP(6))
-ON DUPLICATE KEY UPDATE workflow_id = workflow_id;
+VALUES (?, ?, 'PENDING', ?, CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED) + ?, ?, ?, CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED), CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED))
+ON DUPLICATE KEY UPDATE workflow_uuid = workflow_uuid;
 
-SELECT name, status, output, error, lease_token FROM dbos_workflows WHERE workflow_id = ?;
+SELECT name, status, output, error, lease_token FROM workflow_status WHERE workflow_uuid = ?;
 ```
 
 | Result of the read | Action |
@@ -331,18 +335,18 @@ SELECT name, status, output, error, lease_token FROM dbos_workflows WHERE workfl
 **Reclaim crashed work.** A short transaction, every few seconds, with jitter:
 
 ```sql
-SELECT workflow_id, name, input, recovery_attempts, max_recovery_attempts
-FROM dbos_workflows
-WHERE claim_after <= UTC_TIMESTAMP(6)
+SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts
+FROM workflow_status
+WHERE claim_after <= CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED)
   AND name IN (?, ?, ?)
 ORDER BY claim_after
 LIMIT ?
 FOR UPDATE SKIP LOCKED;
 
-UPDATE dbos_workflows
+UPDATE workflow_status
 SET lease_token = ?, recovery_attempts = recovery_attempts + 1,
-    claim_after = UTC_TIMESTAMP(6) + INTERVAL ? SECOND, updated_at = UTC_TIMESTAMP(6)
-WHERE workflow_id = ?;
+    claim_after = CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED) + ?, updated_at = CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED)
+WHERE workflow_uuid = ?;
 ```
 
 - `name IN` means a process only takes work it can run, so a rolling deploy cannot burn attempts.
@@ -351,21 +355,21 @@ WHERE workflow_id = ?;
 **Renew the lease.** Every `lease_seconds / 3`:
 
 ```sql
-UPDATE dbos_workflows
-SET claim_after = UTC_TIMESTAMP(6) + INTERVAL ? SECOND, updated_at = UTC_TIMESTAMP(6)
-WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING';
+UPDATE workflow_status
+SET claim_after = CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED) + ?, updated_at = CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED)
+WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING';
 ```
 
 **Save a step.** One transaction, with the row lock fencing stale owners:
 
 ```sql
-SELECT 1 FROM dbos_workflows WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING' FOR UPDATE;
+SELECT 1 FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' FOR UPDATE;
 
-INSERT INTO dbos_steps (workflow_id, step_id, step_name, output, error, child_workflow_id, created_at)
-VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
-ON DUPLICATE KEY UPDATE workflow_id = workflow_id;
+INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, output, error, child_workflow_id, created_at)
+VALUES (?, ?, ?, ?, ?, ?, CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED))
+ON DUPLICATE KEY UPDATE workflow_uuid = workflow_uuid;
 
-SELECT step_name, output, error FROM dbos_steps WHERE workflow_id = ? AND step_id = ?;
+SELECT function_name, output, error FROM operation_outputs WHERE workflow_uuid = ? AND function_id = ?;
 ```
 
 A different token means roll back and report the lost lease. If the step already exists, as upstream treats it, an identical record counts as a retry and a different one raises a nondeterminism error. The Python SDK still decodes what it encoded, so a first run and a replay return the same value.
@@ -373,9 +377,9 @@ A different token means roll back and report the lost lease. If the step already
 **Finish.** Same guard for success and error:
 
 ```sql
-UPDATE dbos_workflows
-SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, updated_at = UTC_TIMESTAMP(6)
-WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING';
+UPDATE workflow_status
+SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, updated_at = CAST(UNIX_TIMESTAMP(NOW(6)) * 1000 AS SIGNED)
+WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING';
 ```
 
 Zero rows means the lease was lost, and the result is discarded.
@@ -444,7 +448,7 @@ SQLite connections always set `journal_mode=WAL`, `synchronous=FULL` and `foreig
 
 ## 8. Security and data
 
-- **No pickle.** Unpickling database contents can run arbitrary code. This is the main reason our stored format differs from upstream's default.
+- **Serialization.** Follow the TypeScript. The default serializer is `js_superjson`. The other built-in is `portable_json`. Python pickle is not used.
 - **Plain-text storage.** Inputs and outputs are stored unencrypted, so do not pass secrets as workflow inputs or step outputs. Pass an ID and fetch the secret inside the step.
 - **Retention.** The tables grow forever until a cleanup exists. `DBOS.delete_workflow`-style cleanup arrives in M7.
 - **SQL.** All values use bound parameters, and table names are fixed in the code.
@@ -459,10 +463,10 @@ Each one must pass before the next starts.
 
 The storage work in M2 happens in two phases:
 
-1. **Phase 1, SQLite (done):** port DBOS's minimal workflow and step logic into Rust, on SQLite. `crates/dbos-mysql-core/src/sqlite.rs` holds it.
+1. **Phase 1, SQLite (done):** the first workflow and step behaviour is in `crates/dbos-mysql-core/src/sqlite.rs`. The goal from here is to port `dbos-transact-ts`, not the Python SDK. `NOTICE` still credits only the copied tests.
 2. **Phase 2, MySQL (done):** `mysql.rs` has the same operations, and the same test suite runs against both.
 
-Phase 1 ports only what the first version needs: start or attach, read status, load and save steps, finish, renew, release, and reclaim. Bindings and the Python SDK come after Phase 2.
+Phase 1 covers only what the first version needs: start or attach, read status, load and save steps, finish, renew, release, and reclaim. Bindings and the Python SDK come after Phase 2.
 
 ### M0: prove the toolchain
 
@@ -611,7 +615,7 @@ Add features one at a time, copying the upstream tests first. The likely order i
 | Rust and Python boundary bugs | High | M0 first, plus boundary tests |
 | Matching DBOS's behaviour costs more than expected | Medium | Adapt or drop tests case by case, with the reason in the manifest |
 | Upstream tests assume Postgres timing or internals | Medium | The manifest shows how much of the suite really carried over |
-| JSON changes results compared with pickle | Medium | Round-trip on first run, so problems show up immediately |
+| Pickle runs code from the tables | High | Anyone who can write these tables can run code in the app. Do not share the database with untrusted writers |
 | Rust adds build and CI cost with little speed gain | Medium | Accepted by decision. Record real numbers at M5 |
 | Changed code breaks replay | Medium | Clear error. Finish old runs before breaking deploys, until versioning exists |
 | The name suggests a DBOS link | Low | "Unofficial" at the top of the README. Reconsider before publishing to PyPI |
@@ -622,25 +626,25 @@ Add features one at a time, copying the upstream tests first. The likely order i
 |---|---|---|
 | Backends | MySQL and SQLite, equal status | Owner's decision |
 | Build order | SQLite in Rust first, then MySQL | Owner's decision |
-| Language | Rust core, Python SDK | Owner's decision |
+| Language | Port the TypeScript to Rust. Python waits | Owner's decision, 2026-11-04 |
 | Shape | In-process extension | No extra service to run |
 | API | Follow DBOS Python | Makes upstream tests portable |
 | Test source | Python repo first, TS for extra scenarios | Python tests match the SDK's language |
 | Crash detection | Leases | No need to track which process owns what |
-| Serialization | JSON through Pydantic | Stored data cannot run code |
+| Serialization | TypeScript formats: `js_superjson` by default, and `portable_json` | Same as `dbos-transact-ts`. Python pickle is not the format |
 | Package | `dbos-mysql`, imported as `dbos_mysql` | Matches the repo. Cannot clash with a real `dbos` install |
 
 ## 12. Open questions
 
 None of these block M0 to M5.
 
-1. **Exception fidelity:** is `DBOSRecordedError` good enough for custom exceptions, or do we need a way to register them?
+1. **Deleting old workflows:** the README says this is needed for 0.1, and M7 is where this plan puts it. Not decided.
 2. **Platforms:** which should 0.1.0 support beyond `linux/amd64`?
 3. **Parallel steps under load:** do step IDs stay stable in every case upstream's tests cover? `test_asyncio_wait*` in Tier 2 will show this.
 
 ## 13. What has been checked
 
-Everything else in this plan is design, and nothing has been run.
+The notes below are from before the engine existed. The store, SDK and tests have since been run.
 
 | Fact | How |
 |---|---|

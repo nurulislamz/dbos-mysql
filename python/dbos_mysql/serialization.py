@@ -1,149 +1,81 @@
 from __future__ import annotations
 
-import builtins
+import base64
 import inspect
-import json
-import typing
+import pickle
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import TypeAdapter
-from pydantic.errors import PydanticUserError
-from pydantic_core import PydanticSerializationError, ValidationError
-
-from dbos_mysql.errors import (
-    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
-    DBOSConflictingWorkflowError,
-    DBOSException,
-    DBOSMaxStepRetriesExceeded,
-    DBOSNonExistentWorkflowError,
-    DBOSRecordedError,
-    DBOSStepNondeterminismError,
-    DBOSUnexpectedStepError,
-    StoreError,
-)
-
-_ANY: TypeAdapter[Any] = TypeAdapter(Any)
-_MISSING = object()
-_OWN_ERRORS: tuple[type[DBOSException], ...] = (
-    DBOSConflictingWorkflowError,
-    DBOSException,
-    DBOSNonExistentWorkflowError,
-    DBOSStepNondeterminismError,
-    DBOSUnexpectedStepError,
-    StoreError,
-)
+from dbos_mysql.errors import DBOSRecordedError
 
 
-def _adapter(hint: Any) -> TypeAdapter[Any]:
-    if hint is _MISSING:
-        return _ANY
-    try:
-        return TypeAdapter(hint)
-    except (PydanticUserError, TypeError, NameError, ValueError):
-        return _ANY
-
-
-def _dumps(adapter: TypeAdapter[Any], value: Any) -> str:
+def _reject_live(value: Any) -> None:
     if inspect.isgenerator(value) or inspect.isasyncgen(value) or inspect.iscoroutine(value):
         raise TypeError(f"A value of type {type(value).__name__} cannot be stored")
-    try:
-        return adapter.dump_json(value, warnings="error").decode()
-    except (PydanticSerializationError, ValueError, TypeError):
-        pass
-    try:
-        return _ANY.dump_json(value).decode()
-    except (PydanticSerializationError, ValueError, TypeError) as error:
-        raise TypeError(f"A value of type {type(value).__name__} cannot be stored as JSON: {error}") from error
 
 
-def _loads(adapter: TypeAdapter[Any], text: str) -> Any:
+def dumps(value: Any) -> str:
+    _reject_live(value)
     try:
-        return adapter.validate_json(text)
-    except ValidationError:
-        return json.loads(text)
+        blob = pickle.dumps(value)
+    except (TypeError, pickle.PicklingError) as error:
+        raise TypeError(f"A value of type {type(value).__name__} cannot be stored: {error}") from error
+    return base64.b64encode(blob).decode("ascii")
+
+
+def loads(text: str) -> Any:
+    return pickle.loads(base64.b64decode(text))  # noqa: S301
+
+
+def _exception_blob(error: BaseException) -> bytes | None:
+    """Return pickle bytes only when loading them rebuilds the exception.
+
+    Loading calls ``__init__`` with the saved arguments, so a constructor that
+    does not accept those arguments fails here and the caller stores a fallback.
+    """
+    try:
+        blob = pickle.dumps(error)
+        pickle.loads(blob)  # noqa: S301
+    except Exception:  # noqa: BLE001
+        return None
+    return blob
 
 
 class Codec:
-    """Stores a function's inputs and output as JSON, typed from its annotations."""
+    """Stores a function's inputs and output as base64-encoded pickle."""
 
     def __init__(self, function: Callable[..., Any]) -> None:
-        self._function = inspect.unwrap(function)
-        self._signature = inspect.signature(self._function)
-        self._adapters: dict[str, TypeAdapter[Any]] | None = None
-
-    def _resolved(self) -> dict[str, TypeAdapter[Any]]:
-        if self._adapters is None:
-            try:
-                hints = typing.get_type_hints(self._function)
-            except Exception:  # noqa: BLE001
-                hints = {}
-            names = [*self._signature.parameters, "return"]
-            self._adapters = {name: _adapter(hints.get(name, _MISSING)) for name in names}
-        return self._adapters
+        self._signature = inspect.signature(inspect.unwrap(function))
 
     def encode_input(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-        adapters = self._resolved()
-        payload: dict[str, Any] = {}
-        for name, value in self._signature.bind(*args, **kwargs).arguments.items():
-            kind = self._signature.parameters[name].kind
-            if kind is inspect.Parameter.VAR_POSITIONAL:
-                payload[name] = [json.loads(_dumps(adapters[name], item)) for item in value]
-            elif kind is inspect.Parameter.VAR_KEYWORD:
-                payload[name] = {key: json.loads(_dumps(adapters[name], item)) for key, item in value.items()}
-            else:
-                payload[name] = json.loads(_dumps(adapters[name], value))
-        return json.dumps(payload)
+        bound = self._signature.bind(*args, **kwargs)
+        return dumps((bound.args, bound.kwargs))
 
     def decode_input(self, text: str) -> tuple[tuple[Any, ...], dict[str, Any]]:
-        adapters = self._resolved()
-        bound = self._signature.bind_partial()
-        for name, value in json.loads(text).items():
-            kind = self._signature.parameters[name].kind
-            if kind is inspect.Parameter.VAR_POSITIONAL:
-                bound.arguments[name] = tuple(_loads(adapters[name], json.dumps(item)) for item in value)
-            elif kind is inspect.Parameter.VAR_KEYWORD:
-                bound.arguments[name] = {key: _loads(adapters[name], json.dumps(item)) for key, item in value.items()}
-            else:
-                bound.arguments[name] = _loads(adapters[name], json.dumps(value))
-        return bound.args, bound.kwargs
+        args, kwargs = loads(text)
+        return tuple(args), dict(kwargs)
 
     def encode_output(self, value: Any) -> str:
-        return _dumps(self._resolved()["return"], value)
+        return dumps(value)
 
     def decode_output(self, text: str) -> Any:
-        return _loads(self._resolved()["return"], text)
+        return loads(text)
 
 
 def encode_exception(error: BaseException) -> str:
-    kind = type(error)
-    try:
-        args = json.loads(_ANY.dump_json(list(error.args)))
-    except (PydanticSerializationError, ValueError, TypeError):
-        args = None
-    payload: dict[str, Any] = {"module": kind.__module__, "type": kind.__qualname__, "message": str(error), "args": args}
-    if isinstance(error, DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
-        payload["workflow_id"] = error.workflow_id
-    if isinstance(error, DBOSMaxStepRetriesExceeded):
-        payload["step_name"] = error.step_name
-        payload["max_retries"] = error.max_retries
-    return json.dumps(payload)
+    blob = _exception_blob(error)
+    if blob is None:
+        blob = _exception_blob(DBOSRecordedError(type(error).__qualname__, str(error)))
+    if blob is None:
+        raise TypeError(f"A value of type {type(error).__name__} cannot be stored")
+    return base64.b64encode(blob).decode("ascii")
 
 
 def decode_exception(text: str) -> Exception:
-    payload = json.loads(text)
-    type_name = payload["type"]
-    if payload["module"] == DBOSMaxStepRetriesExceeded.__module__ and type_name == DBOSMaxStepRetriesExceeded.__qualname__:
-        return DBOSMaxStepRetriesExceeded(payload["step_name"], payload["max_retries"])
-    if payload["module"] == DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded.__module__ and type_name == DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded.__qualname__:
-        return DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(payload["workflow_id"])
-    for own in _OWN_ERRORS:
-        if payload["module"] == own.__module__ and type_name == own.__qualname__:
-            return own(payload["message"])
-    kind = getattr(builtins, type_name, None) if payload["module"] == "builtins" else None
-    if isinstance(kind, type) and issubclass(kind, Exception):
-        try:
-            return kind(*payload["args"]) if payload["args"] is not None else kind(payload["message"])
-        except Exception:  # noqa: BLE001
-            pass
-    return DBOSRecordedError(type_name, payload["message"])
+    try:
+        value = loads(text)
+    except Exception:  # noqa: BLE001
+        return DBOSRecordedError("Exception", "stored error could not be loaded")
+    if isinstance(value, Exception):
+        return value
+    return DBOSRecordedError(type(value).__qualname__, str(value))

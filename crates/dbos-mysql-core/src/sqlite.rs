@@ -5,8 +5,9 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::Error;
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, Started, Status, StepRecord, Workflow,
-    attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name, new_token,
+    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, SERIALIZATION, Started, Status, StepRecord,
+    Workflow, attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name,
+    new_token,
 };
 
 const SCHEMA: &str = include_str!("../schema/sqlite/001_init.sql");
@@ -27,31 +28,31 @@ pub async fn migrate(pool: &SqlitePool) -> Result<(), Error> {
 
 fn workflow_from_row(row: &SqliteRow) -> Result<Workflow, Error> {
     Ok(Workflow {
-        workflow_id: row.try_get("workflow_id")?,
+        workflow_id: row.try_get("workflow_uuid")?,
         name: row.try_get("name")?,
         status: Status::parse(row.try_get("status")?)?,
-        input: row.try_get("input")?,
+        input: row.try_get("inputs")?,
         output: row.try_get("output")?,
         error: row.try_get("error")?,
         recovery_attempts: row.try_get("recovery_attempts")?,
         max_recovery_attempts: row.try_get("max_recovery_attempts")?,
         parent_workflow_id: row.try_get("parent_workflow_id")?,
-        created_at_ms: row.try_get("created_at_ms")?,
-        updated_at_ms: row.try_get("updated_at_ms")?,
-        completed_at_ms: row.try_get("completed_at_ms")?,
+        created_at_ms: row.try_get("created_at")?,
+        updated_at_ms: row.try_get("updated_at")?,
+        completed_at_ms: row.try_get("completed_at")?,
     })
 }
 
-const SELECT_WORKFLOW: &str = "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms, completed_at_ms \
-     FROM dbos_workflows WHERE workflow_id = ?";
+const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at \
+     FROM workflow_status WHERE workflow_uuid = ?";
 
 pub async fn start_workflow(pool: &SqlitePool, new: &NewWorkflow<'_>) -> Result<Started, Error> {
     let token = new_token();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after_ms, lease_token, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms) \
-         VALUES (?, ?, 'PENDING', ?, {NOW_MS} + ?, ?, ?, ?, {NOW_MS}, {NOW_MS}) \
-         ON CONFLICT (workflow_id) DO NOTHING"
+        "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, max_recovery_attempts, parent_workflow_id, serialization, created_at, updated_at) \
+         VALUES (?, ?, 'PENDING', ?, {NOW_MS} + ?, ?, ?, ?, ?, {NOW_MS}, {NOW_MS}) \
+         ON CONFLICT (workflow_uuid) DO NOTHING"
     )))
     .bind(new.workflow_id)
     .bind(new.name)
@@ -60,6 +61,7 @@ pub async fn start_workflow(pool: &SqlitePool, new: &NewWorkflow<'_>) -> Result<
     .bind(&token)
     .bind(new.max_recovery_attempts)
     .bind(new.parent_workflow_id)
+        .bind(SERIALIZATION)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -97,7 +99,7 @@ pub async fn load_step(
     step_name: &str,
 ) -> Result<Option<StepRecord>, Error> {
     let mut conn = pool.acquire().await?;
-    let exists = sqlx::query("SELECT 1 FROM dbos_workflows WHERE workflow_id = ?")
+    let exists = sqlx::query("SELECT 1 FROM workflow_status WHERE workflow_uuid = ?")
         .bind(workflow_id)
         .fetch_optional(&mut *conn)
         .await?;
@@ -117,7 +119,7 @@ async fn read_step(
     step_id: u32,
 ) -> Result<Option<(String, StepRecord)>, Error> {
     let row = sqlx::query(
-        "SELECT step_name, output, error, child_workflow_id FROM dbos_steps WHERE workflow_id = ? AND step_id = ?",
+        "SELECT function_name, output, error, child_workflow_id FROM operation_outputs WHERE workflow_uuid = ? AND function_id = ?",
     )
     .bind(workflow_id)
     .bind(step_id)
@@ -127,7 +129,7 @@ async fn read_step(
         return Ok(None);
     };
     Ok(Some((
-        row.try_get("step_name")?,
+        row.try_get("function_name")?,
         StepRecord {
             output: row.try_get("output")?,
             error: row.try_get("error")?,
@@ -144,7 +146,7 @@ pub async fn save_step(
     record: &StepRecord,
 ) -> Result<(), Error> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let owner = sqlx::query("SELECT 1 FROM dbos_workflows WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'")
+    let owner = sqlx::query("SELECT 1 FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'")
         .bind(&lease.workflow_id)
         .bind(&lease.token)
         .fetch_optional(&mut *tx)
@@ -158,8 +160,8 @@ pub async fn save_step(
     }
 
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO dbos_steps (workflow_id, step_id, step_name, output, error, child_workflow_id, created_at_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, {NOW_MS})"
+        "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, output, error, child_workflow_id, serialization, completed_at_epoch_ms) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, {NOW_MS})"
     )))
     .bind(&lease.workflow_id)
     .bind(step_id)
@@ -167,6 +169,7 @@ pub async fn save_step(
     .bind(&record.output)
     .bind(&record.error)
     .bind(&record.child_workflow_id)
+        .bind(SERIALIZATION)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -183,7 +186,7 @@ pub async fn finish_workflow(
         Outcome::Error(value) => (Status::Error, None, Some(value)),
     };
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE dbos_workflows SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after_ms = NULL, completed_at_ms = {NOW_MS}, updated_at_ms = {NOW_MS} WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
+        "UPDATE workflow_status SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {NOW_MS}, updated_at = {NOW_MS} WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'"
     )))
     .bind(status.as_str())
     .bind(output)
@@ -202,8 +205,8 @@ pub async fn renew_lease(
     duration: Duration,
 ) -> Result<(), Error> {
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE dbos_workflows SET claim_after_ms = {NOW_MS} + ?, updated_at_ms = {NOW_MS} \
-         WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
+        "UPDATE workflow_status SET claim_after = {NOW_MS} + ?, updated_at = {NOW_MS} \
+         WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'"
     )))
     .bind(millis(duration))
     .bind(&lease.workflow_id)
@@ -216,9 +219,9 @@ pub async fn renew_lease(
 
 pub async fn release_lease(pool: &SqlitePool, lease: &Lease) -> Result<(), Error> {
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE dbos_workflows SET lease_token = NULL, claim_after_ms = {NOW_MS}, \
-         recovery_attempts = recovery_attempts - 1, updated_at_ms = {NOW_MS} \
-         WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
+        "UPDATE workflow_status SET lease_token = NULL, claim_after = {NOW_MS}, \
+         recovery_attempts = recovery_attempts - 1, updated_at = {NOW_MS} \
+         WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'"
     )))
     .bind(&lease.workflow_id)
     .bind(&lease.token)
@@ -247,26 +250,26 @@ pub async fn reclaim(
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let mut select = QueryBuilder::<Sqlite>::new(format!(
-        "SELECT workflow_id, name, input, recovery_attempts, max_recovery_attempts FROM dbos_workflows \
-         WHERE status = 'PENDING' AND claim_after_ms <= {NOW_MS} AND name IN ("
+        "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts FROM workflow_status \
+         WHERE status = 'PENDING' AND claim_after <= {NOW_MS} AND name IN ("
     ));
     let mut separated = select.separated(", ");
     for name in names {
         separated.push_bind(name);
     }
-    select.push(") ORDER BY claim_after_ms, workflow_id LIMIT ");
+    select.push(") ORDER BY claim_after, workflow_uuid LIMIT ");
     select.push_bind(limit);
     let rows = select.build().fetch_all(&mut *tx).await?;
 
     let mut claimed = Vec::with_capacity(rows.len());
     for row in rows {
-        let workflow_id: String = row.try_get("workflow_id")?;
+        let workflow_id: String = row.try_get("workflow_uuid")?;
         let attempts: u32 = row.try_get::<u32, _>("recovery_attempts")? + 1;
 
         if attempts_exhausted(attempts, row.try_get("max_recovery_attempts")?) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
-                "UPDATE dbos_workflows SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
-                 lease_token = NULL, claim_after_ms = NULL, completed_at_ms = {NOW_MS}, updated_at_ms = {NOW_MS} WHERE workflow_id = ?"
+                "UPDATE workflow_status SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
+                 lease_token = NULL, claim_after = NULL, completed_at = {NOW_MS}, updated_at = {NOW_MS} WHERE workflow_uuid = ?"
             )))
             .bind(attempts)
             .bind(&workflow_id)
@@ -277,8 +280,8 @@ pub async fn reclaim(
 
         let token = new_token();
         sqlx::query(sqlx::AssertSqlSafe(format!(
-            "UPDATE dbos_workflows SET lease_token = ?, recovery_attempts = ?, claim_after_ms = {NOW_MS} + ?, \
-             updated_at_ms = {NOW_MS} WHERE workflow_id = ?"
+            "UPDATE workflow_status SET lease_token = ?, recovery_attempts = ?, claim_after = {NOW_MS} + ?, \
+             updated_at = {NOW_MS} WHERE workflow_uuid = ?"
         )))
         .bind(&token)
         .bind(attempts)
@@ -289,7 +292,7 @@ pub async fn reclaim(
         claimed.push(Claimed {
             lease: Lease { workflow_id, token },
             name: row.try_get("name")?,
-            input: row.try_get("input")?,
+            input: row.try_get("inputs")?,
             recovery_attempts: attempts,
         });
     }
@@ -299,8 +302,8 @@ pub async fn reclaim(
 
 pub async fn list_workflows(pool: &SqlitePool) -> Result<Vec<Workflow>, Error> {
     let rows = sqlx::query(
-        "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms, completed_at_ms \
-         FROM dbos_workflows ORDER BY created_at_ms, workflow_id",
+        "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at \
+         FROM workflow_status ORDER BY created_at, workflow_uuid",
     )
     .fetch_all(pool)
     .await?;
@@ -309,7 +312,7 @@ pub async fn list_workflows(pool: &SqlitePool) -> Result<Vec<Workflow>, Error> {
 
 pub async fn list_steps(pool: &SqlitePool, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
     let rows = sqlx::query(
-        "SELECT step_id, step_name, output, error, child_workflow_id FROM dbos_steps WHERE workflow_id = ? ORDER BY step_id",
+        "SELECT function_id, function_name, output, error, child_workflow_id FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
     )
     .bind(workflow_id)
     .fetch_all(pool)
@@ -317,8 +320,8 @@ pub async fn list_steps(pool: &SqlitePool, workflow_id: &str) -> Result<Vec<Reco
     rows.iter()
         .map(|row| {
             Ok(RecordedStep {
-                step_id: row.try_get("step_id")?,
-                step_name: row.try_get("step_name")?,
+                step_id: row.try_get("function_id")?,
+                step_name: row.try_get("function_name")?,
                 record: StepRecord {
                     output: row.try_get("output")?,
                     error: row.try_get("error")?,

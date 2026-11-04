@@ -9,7 +9,7 @@ Results come from 3 full runs against SQLite and MySQL 8.4. `pass/fail` in a res
 - **rewritten**: written again in pytest from the upstream scenario.
 - **dropped**: not carried over.
 
-Counts: adapted: 18, dropped: 6, passing: 16, rewritten: 11. Every test that was not dropped passes on both backends.
+Counts: adapted: 19, dropped: 5, passing: 16, rewritten: 11. Every test that was not dropped passes on both backends.
 
 | Test | Source | Commit | Status | SQLite | MySQL | Reason |
 |---|---|---|---|---|---|---|
@@ -63,4 +63,4 @@ Counts: adapted: 18, dropped: 6, passing: 16, rewritten: 11. Every test that was
 | `test_asyncio_wait_all_completed` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. Replaced by `test_parallel_steps_replay_from_recorded_results`. |
 | `test_asyncio_wait_first_exception` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. |
 | `test_asyncio_wait_timeout` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. |
-| `test_error_serialization` | dbos-transact-py `tests/test_failures.py` | 236142b | dropped | not run | not run | Tests upstream's pickle serializer. This project stores JSON and never unpickles. |
+| `test_error_serialization` | dbos-transact-py `tests/test_failures.py` | 236142b | adapted | pass | pass | Keeps the step-retry round trip and the custom exception that cannot be loaded. Queue, auth, and client exceptions are not in this API. A constructor that rejects its saved arguments comes back as `DBOSRecordedError`. |

@@ -1,12 +1,12 @@
 # dbos-mysql
 
-Durable workflows for Python on MySQL 8.4 and SQLite, with a Rust core and an API that follows [DBOS](https://github.com/dbos-inc/dbos-transact-py). Workflow state is stored in the database, so a workflow survives a crash and resumes without repeating finished steps.
+A Rust port of [DBOS Transact](https://github.com/dbos-inc/dbos-transact-ts), the original TypeScript implementation. Workflow state is stored in MySQL 8.4 or SQLite, so a workflow survives a crash and resumes without repeating finished steps. The Python package is paused.
 
 > **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence. It is under active development, and crash recovery has not yet passed load and fault testing. Do not run payment or email steps on it yet.
 
 ## Feature checklist
 
-Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py) at commit `236142b`, from its public API.
+Compared with [`dbos-transact-ts`](https://github.com/dbos-inc/dbos-transact-ts). The checklist below was written against the Python SDK and has not been rechecked against the TypeScript API.
 
 | Mark | Meaning |
 |---|---|
@@ -74,8 +74,8 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 |---|---|---|
 | Core language | Python | Rust, with a Python SDK |
 | Crash detection | Executor IDs and ownership tokens | Leases that expire |
-| Default stored format | Pickle | JSON through Pydantic, so stored data cannot run code |
-| Custom exceptions after replay | Restored as their own type | `DBOSRecordedError`. Built-in types are restored |
+| Default stored format | SuperJSON (`js_superjson`), plus portable JSON | Not ported yet. The working tree still has a paused Python pickle experiment |
+| Custom exceptions after replay | Restored as their own type | Restored when the constructor accepts the saved arguments. Otherwise `DBOSRecordedError` |
 
 ## Guarantees
 
@@ -96,7 +96,7 @@ There is no release yet, so build it from source. You need Rust, [`uv`](https://
 ```sh
 uv venv --python 3.14 .venv
 source .venv/bin/activate
-uv pip install maturin pydantic
+uv pip install maturin
 maturin develop
 ```
 

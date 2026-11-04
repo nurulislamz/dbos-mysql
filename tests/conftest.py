@@ -69,27 +69,23 @@ class Database:
 
     def expire_lease(self, workflow_id: str) -> None:
         """Make a workflow look as if its process crashed, so recovery can take it."""
-        column, past = ("claim_after_ms", 0) if self.backend == "sqlite" else ("claim_after", "2000-01-01 00:00:00")
         self.execute(
-            f"UPDATE dbos_workflows SET status = 'PENDING', output = NULL, error = NULL, lease_token = 'crashed', {column} = %s WHERE workflow_id = %s",
-            past,
+            "UPDATE workflow_status SET status = 'PENDING', output = NULL, error = NULL, lease_token = 'crashed', claim_after = 0 WHERE workflow_uuid = %s",
             workflow_id,
         )
 
     def plant_step(self, workflow_id: str, step_id: int, step_name: str) -> None:
         """Record a step behind the running workflow's back, as another writer would."""
-        column, now = ("created_at_ms", 0) if self.backend == "sqlite" else ("created_at", "2000-01-01 00:00:00")
         self.execute(
-            f"INSERT INTO dbos_steps (workflow_id, step_id, step_name, {column}) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES (%s, %s, %s, 'py_pickle', 0)",
             workflow_id,
             step_id,
             step_name,
-            now,
         )
 
     def take_over(self, workflow_id: str) -> None:
         """Hand the workflow to another owner without touching when its lease expires."""
-        self.execute("UPDATE dbos_workflows SET lease_token = 'another-execution' WHERE workflow_id = %s", workflow_id)
+        self.execute("UPDATE workflow_status SET lease_token = 'another-execution' WHERE workflow_uuid = %s", workflow_id)
 
     def drop(self) -> None:
         if self.backend == "mysql":

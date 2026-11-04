@@ -20,6 +20,10 @@ from dbos_mysql import (
     SetWorkflowID,
     StoreError,
 )
+
+
+class PaymentDeclined(Exception):
+    pass
 from tests.conftest import Database
 from tests.crash_app import register
 
@@ -110,6 +114,35 @@ async def test_losing_the_lease_cancels_an_async_body(fast_recovery: None, datab
     assert await asyncio.wait_for(running, 15) == "owner"
     assert cancelled.is_set()
     assert runs == 2
+
+
+def test_a_caught_custom_exception_is_still_that_type_after_recovery(dbos: DBOS, database: Database) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    @DBOS.step()
+    def charge() -> None:
+        raise PaymentDeclined("card declined")
+
+    @DBOS.workflow()
+    def pay() -> str:
+        try:
+            charge()
+        except PaymentDeclined:
+            path = "caught"
+        else:
+            path = "paid"
+        started.set()
+        assert release.wait(10)
+        return path
+
+    handle = DBOS.start_workflow(pay)
+    assert started.wait(10)
+    database.expire_lease(handle.workflow_id)
+    recovered = DBOS._recover_pending_workflows()
+    release.set()
+    assert [item.get_result() for item in recovered] == ["caught"]
+    assert handle.get_result() == "caught"
 
 
 def test_too_many_recoveries_are_reported(dbos: DBOS, database: Database) -> None:
@@ -317,8 +350,7 @@ def test_destroy_stops_renewing_a_running_sync_workflows_lease(database: Databas
     DBOS.launch()
     handle = DBOS.start_workflow(blocked)
     assert started.wait(10)
-    column = "claim_after_ms" if database.backend == "sqlite" else "claim_after"
-    query = f"SELECT {column} FROM dbos_workflows WHERE workflow_id = %s"
+    query = "SELECT claim_after FROM workflow_status WHERE workflow_uuid = %s"
     DBOS.destroy(destroy_registry=True)
     time.sleep(0.2)
     before = database.execute(query, handle.workflow_id)
@@ -350,7 +382,7 @@ def test_destroy_never_records_a_false_failure(database: Database) -> None:
     release.set()
     with pytest.raises(DBOSException, match="destroyed"):
         handle.get_result()
-    rows = database.execute("SELECT status, error FROM dbos_workflows WHERE workflow_id = %s", handle.workflow_id)
+    rows = database.execute("SELECT status, error FROM workflow_status WHERE workflow_uuid = %s", handle.workflow_id)
     assert rows == [("PENDING", None)]
 
 
@@ -387,3 +419,33 @@ time.sleep(float(sys.argv[1]))
     for delay in ("0", "0.02", "0.1") * 5:
         result = subprocess.run([sys.executable, "-c", program, delay], capture_output=True, text=True, timeout=30, check=False)
         assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_rows_use_millisecond_times_and_record_their_format(dbos: DBOS, database: Database) -> None:
+    @DBOS.step()
+    def step() -> int:
+        return 1
+
+    @DBOS.workflow()
+    def workflow() -> int:
+        return step()
+
+    before = int(time.time() * 1000) - 5000
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() == 1
+    after = int(time.time() * 1000) + 5000
+
+    rows = database.execute(
+        "SELECT serialization, created_at, updated_at, completed_at, claim_after FROM workflow_status WHERE workflow_uuid = %s",
+        handle.workflow_id,
+    )
+    steps = database.execute(
+        "SELECT serialization, completed_at_epoch_ms FROM operation_outputs WHERE workflow_uuid = %s",
+        handle.workflow_id,
+    )
+    serialization, *times, claim_after = rows[0]
+    assert serialization == "py_pickle"
+    assert all(before < moment < after for moment in times)
+    assert claim_after is None
+    assert steps[0][0] == "py_pickle"
+    assert before < steps[0][1] < after

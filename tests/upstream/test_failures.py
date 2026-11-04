@@ -12,11 +12,13 @@ from dbos_mysql import (
     DBOS,
     DBOSConfig,
     DBOSMaxStepRetriesExceeded,
+    DBOSRecordedError,
     DBOSUnexpectedStepError,
     SetWorkflowID,
     WorkflowHandle,
     WorkflowStatusString,
 )
+from dbos_mysql.serialization import decode_exception, encode_exception
 from tests.conftest import Database, retry_until_success
 
 
@@ -24,6 +26,20 @@ from tests.conftest import Database, retry_until_success
 class BadException(Exception):
     def __init__(self, one: int, two: int) -> None:
         super().__init__(f"Message: {one}, {two}")
+
+
+def test_error_serialization() -> None:
+    error = DBOSMaxStepRetriesExceeded("step", 1, [ValueError("no")])
+    loaded = decode_exception(encode_exception(error))
+    assert isinstance(loaded, DBOSMaxStepRetriesExceeded)
+    assert str(loaded) == str(error)
+    assert loaded.step_name == "step"
+    assert isinstance(loaded.errors[0], ValueError)
+
+    recorded = decode_exception(encode_exception(BadException(1, 2)))
+    assert isinstance(recorded, DBOSRecordedError)
+    assert recorded.type_name == "BadException"
+    assert str(recorded) == "Message: 1, 2"
 
 
 def test_dead_letter_queue(dbos: DBOS, database: Database) -> None:
