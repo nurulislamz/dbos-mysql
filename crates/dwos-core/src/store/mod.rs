@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod events;
 mod leases;
+mod queues;
 mod sleep;
 mod steps;
 mod timeouts;

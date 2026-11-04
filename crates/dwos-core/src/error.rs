@@ -8,6 +8,14 @@ pub enum Error {
     Database(#[from] sqlx::Error),
     #[error("Non-existent target workflow ID: {0}")]
     WorkflowNotFound(String),
+    #[error("queue {0} does not exist")]
+    QueueNotFound(String),
+    #[error("queue {queue} has concurrency {recorded}, but {requested} was requested")]
+    QueueConcurrencyConflict {
+        queue: String,
+        recorded: u32,
+        requested: u32,
+    },
     #[error("Workflow {0} is cancelled. Aborting function.")]
     WorkflowCancelled(String),
     #[error("Non-existent `send` destination workflow ID: {0}")]

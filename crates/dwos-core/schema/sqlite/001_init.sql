@@ -76,3 +76,18 @@ CREATE TABLE IF NOT EXISTS workflow_event_history (
     serialization TEXT NOT NULL,
     PRIMARY KEY (workflow_uuid, event_key, revision)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS workflow_queues (
+    name TEXT NOT NULL PRIMARY KEY,
+    concurrency INTEGER NOT NULL CHECK (concurrency > 0 AND concurrency <= 4294967295)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS workflow_queue_entries (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_uuid TEXT NOT NULL UNIQUE REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE,
+    queue_name TEXT NOT NULL REFERENCES workflow_queues (name),
+    start_timeout_ms INTEGER CHECK (start_timeout_ms > 0)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS ix_workflow_queue_entries_fifo
+    ON workflow_queue_entries (queue_name, sequence);

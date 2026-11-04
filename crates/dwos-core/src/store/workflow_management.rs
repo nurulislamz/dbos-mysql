@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use sqlx::Row;
 
-use super::{Store, get_u32, millis, workflow_from_row};
+use super::{Store, workflow_from_row};
 use crate::Error;
-use crate::workflow::{Claimed, Lease, Workflow, WorkflowFilter, attempts_exhausted, new_token};
+use crate::workflow::{Claimed, Workflow, WorkflowFilter, new_token};
 
 const LIST_COLUMNS: &str = "workflow_uuid, name, status, inputs, output, error, recovery_attempts, \
      max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, (SELECT timeout_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_timeout_ms, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms";
@@ -107,7 +107,9 @@ impl Store {
         }
         let select_sql = self.sql(&format!(
             "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms FROM workflow_status \
-             WHERE workflow_uuid = ? AND claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) {}",
+             WHERE workflow_uuid = ? AND claim_after <= {{NOW}} AND status = 'PENDING' AND NOT EXISTS \
+             (SELECT 1 FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
+             AND serialization IN ({}) AND name IN ({}) {}",
             self.readable_formats(),
             vec!["?"; names.len()].join(", "),
             self.dialect.lock_free_rows()
@@ -120,46 +122,11 @@ impl Store {
             tx.commit().await?;
             return Ok(None);
         };
-        if self.cancel_if_expired_on(&mut tx, workflow_id).await? {
-            tx.commit().await?;
-            return Ok(None);
-        }
-        let attempts = get_u32(&row, "recovery_attempts")?.saturating_add(1);
-        if attempts_exhausted(attempts, get_u32(&row, "max_recovery_attempts")?) {
-            sqlx::query(self.sql(
-                "UPDATE workflow_status SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
-                 lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_uuid = ?",
-            ))
-            .bind(i64::from(attempts))
-            .bind(workflow_id)
-            .execute(&mut *tx)
+        let claimed = self
+            .claim_locked_row(&mut tx, &row, request_token, duration)
             .await?;
-            tx.commit().await?;
-            return Ok(None);
-        }
-        sqlx::query(self.sql(
-            "UPDATE workflow_status SET lease_token = ?, recovery_attempts = ?, \
-             claim_after = {NOW} + ?, updated_at = {NOW} WHERE workflow_uuid = ?",
-        ))
-        .bind(request_token)
-        .bind(i64::from(attempts))
-        .bind(millis(duration))
-        .bind(workflow_id)
-        .execute(&mut *tx)
-        .await?;
-        let claimed = Claimed {
-            lease: Lease {
-                workflow_id: workflow_id.to_owned(),
-                token: request_token.to_owned(),
-            },
-            name: row.try_get("name")?,
-            input: row.try_get("inputs")?,
-            recovery_attempts: attempts,
-            serialization: row.try_get("serialization")?,
-            deadline_epoch_ms: row.try_get("workflow_deadline_epoch_ms")?,
-        };
         tx.commit().await?;
-        Ok(Some(claimed))
+        Ok(claimed)
     }
 
     pub async fn list_workflows(&self, filter: &WorkflowFilter) -> Result<Vec<Workflow>, Error> {

@@ -83,3 +83,23 @@ CREATE TABLE IF NOT EXISTS workflow_event_history (
     CONSTRAINT fk_workflow_event_history_workflow
         FOREIGN KEY (workflow_uuid) REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS workflow_queues (
+    name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    concurrency BIGINT NOT NULL CHECK (concurrency > 0 AND concurrency <= 4294967295),
+    PRIMARY KEY (name)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS workflow_queue_entries (
+    sequence BIGINT NOT NULL AUTO_INCREMENT,
+    workflow_uuid VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    queue_name VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    start_timeout_ms BIGINT NULL CHECK (start_timeout_ms > 0),
+    PRIMARY KEY (sequence),
+    UNIQUE KEY uq_workflow_queue_entries_workflow (workflow_uuid),
+    KEY ix_workflow_queue_entries_fifo (queue_name, sequence),
+    CONSTRAINT fk_workflow_queue_entries_workflow FOREIGN KEY (workflow_uuid)
+        REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE,
+    CONSTRAINT fk_workflow_queue_entries_queue FOREIGN KEY (queue_name)
+        REFERENCES workflow_queues (name)
+) ENGINE=InnoDB;
