@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "dbos-mysql"
 version = "0.0.1"
 description = "Unofficial durable workflows for Python on MySQL and SQLite"
-readme = "docs/PLAN.md"
+readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14,<3.15"
 dependencies = ["pydantic>=2.9,<3"]
