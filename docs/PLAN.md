@@ -249,12 +249,12 @@ Option names and defaults, including `max_recovery_attempts`, are taken from ups
 
 ```sql
 CREATE TABLE dbos_workflows (
-    workflow_id           VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    name                  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    workflow_id           VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    name                  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     status                VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    input                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
-    error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
+    input                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     claim_after           DATETIME(6)  NULL,
     lease_token           CHAR(36)     CHARACTER SET ascii COLLATE ascii_bin NULL,
     recovery_attempts     INT UNSIGNED NOT NULL DEFAULT 1,
@@ -266,12 +266,12 @@ CREATE TABLE dbos_workflows (
 ) ENGINE=InnoDB;
 
 CREATE TABLE dbos_steps (
-    workflow_id       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+    workflow_id       VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     step_id           INT UNSIGNED NOT NULL,
-    step_name         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-    output            LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
-    error             LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
-    child_workflow_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,
+    step_name         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    output            LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    error             LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
+    child_workflow_id VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     created_at        DATETIME(6)  NOT NULL,
     PRIMARY KEY (workflow_id, step_id),
     CONSTRAINT fk_dbos_steps_workflow
@@ -282,7 +282,7 @@ CREATE TABLE dbos_steps (
 Why it looks like this:
 
 - **`claim_after`** means "another process may take this after this time". For a `PENDING` row it is the lease expiry, and for a finished row it is `NULL`. Finding crashed work then needs one indexed range. Queues can reuse it later.
-- **Binary collations** stop `Job-1` and `job-1` from colliding on servers with a case-insensitive default.
+- **`utf8mb4_0900_bin` collation** stops `Job-1` and `job-1` from colliding on servers with a case-insensitive default. `utf8mb4_bin` is not enough, because it pads, so `job` and `job ` would collide.
 - **`LONGTEXT`** is needed because `TEXT` stops at 64 KB. The real limit is `max_allowed_packet`, and going over it must give a clear error.
 - **`UTC_TIMESTAMP(6)`** is the only clock, so differences between machines cannot break leases.
 - **Connection settings:** `READ COMMITTED` and `time_zone = '+00:00'`.
@@ -343,7 +343,7 @@ WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING';
 **Save a step.** One transaction, with the row lock fencing stale owners:
 
 ```sql
-SELECT lease_token FROM dbos_workflows WHERE workflow_id = ? FOR SHARE;
+SELECT 1 FROM dbos_workflows WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING' FOR UPDATE;
 
 INSERT INTO dbos_steps (workflow_id, step_id, step_name, output, error, child_workflow_id, created_at)
 VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6))
@@ -397,7 +397,7 @@ Both backends implement the same `Store` operations and pass the same tests. The
 |---|---|---|
 | Upsert | `ON DUPLICATE KEY UPDATE` | `ON CONFLICT DO NOTHING` |
 | Claiming | `FOR UPDATE SKIP LOCKED` | `BEGIN IMMEDIATE`, which serialises writers |
-| Lease fence | `SELECT ... FOR SHARE` | `BEGIN IMMEDIATE` |
+| Lease fence | `SELECT ... FOR UPDATE` | `BEGIN IMMEDIATE` |
 | Clock | `UTC_TIMESTAMP(6)` | `unixepoch('subsec')`, stored as integer milliseconds |
 | Text columns | `LONGTEXT` with binary collation | `TEXT`, whose default collation is binary |
 | Busy errors | Retry 1213 and 1205 | `busy_timeout` of 30 s. No extra retry yet |
@@ -443,8 +443,8 @@ Each one must pass before the next starts.
 
 The storage work in M2 happens in two phases:
 
-1. **Phase 1, SQLite (done):** port DBOS's minimal workflow and step logic into Rust, on SQLite. `crates/dbos-mysql-core/src/sqlite.rs` holds it, and `MySql` returns `NotImplemented` for these operations.
-2. **Phase 2, MySQL:** add `mysql.rs` with the same operations, and run the same test suite against both.
+1. **Phase 1, SQLite (done):** port DBOS's minimal workflow and step logic into Rust, on SQLite. `crates/dbos-mysql-core/src/sqlite.rs` holds it.
+2. **Phase 2, MySQL (done):** `mysql.rs` has the same operations, and the same test suite runs against both.
 
 Phase 1 ports only what the first version needs: start or attach, read status, load and save steps, finish, renew, release, and reclaim. Bindings and the Python SDK come after Phase 2.
 
@@ -630,6 +630,4 @@ Everything else in this plan is design, and nothing has been run.
 
 **Proven at M0:** the crates compile together on 3.14, and cancellation and Rust log forwarding work, on both backends.
 
-**Proven in Phase 1, on SQLite only:** the store's rules, by 30 Rust tests, including a child process aborting mid-transaction. Seven deliberate breaks of the code were each caught by a test.
-
-**To prove in Phase 2:** matched-row reporting from `sqlx` on MySQL.
+**Proven in Phases 1 and 2:** the store's rules, by the same Rust tests on both backends, including a child process aborting mid-transaction and a real InnoDB deadlock. Deliberate breaks of the code were caught by a test. `sqlx` sets `CLIENT_FOUND_ROWS`, so `rows_affected` counts matched rows on MySQL.

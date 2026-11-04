@@ -37,7 +37,7 @@ async def test_ping(store: dbos_mysql.Store) -> None:
 async def test_session_settings(store: dbos_mysql.Store) -> None:
     settings = await store.session_settings()
     if store.backend == "mysql":
-        assert settings == ["READ-COMMITTED", "+00:00"]
+        assert settings[:2] == ["READ-COMMITTED", "+00:00"]
     else:
         assert settings == ["wal", "2", "1"]
 

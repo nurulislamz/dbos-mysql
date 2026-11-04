@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod mysql;
+mod retry;
 mod sqlite;
 mod store;
 mod workflow;

@@ -4,8 +4,6 @@ pub enum Error {
     UnsupportedUrl,
     #[error("invalid database URL")]
     InvalidUrl,
-    #[error("{0} is not implemented for the {1} backend yet")]
-    NotImplemented(&'static str, &'static str),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
     #[error("workflow {0} does not exist")]
@@ -31,6 +29,12 @@ pub enum Error {
     StepNondeterminism { workflow_id: String, step_id: u32 },
     #[error("this process no longer owns workflow {0}")]
     LeaseLost(String),
+    #[error("{field} is longer than the 255 character limit")]
+    NameTooLong { field: &'static str },
+    #[error("value of {size} bytes is over the database limit of {limit} bytes")]
+    ValueTooLarge { size: u64, limit: u64 },
+    #[error("database operation timed out after {0:?}")]
+    Timeout(std::time::Duration),
     #[error("stored data is invalid: {0}")]
     Corrupt(String),
 }

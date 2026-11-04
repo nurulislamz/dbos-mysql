@@ -6,6 +6,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 use crate::Error;
 use crate::workflow::{
     Claimed, Lease, NewWorkflow, Outcome, Started, Status, StepRecord, Workflow,
+    attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name, new_token,
 };
 
 const SCHEMA: &str = include_str!("../schema/sqlite/001_init.sql");
@@ -13,10 +14,6 @@ const NOW_MS: &str = "CAST(unixepoch('subsec') * 1000 AS INTEGER)";
 
 fn millis(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-}
-
-fn new_token() -> String {
-    uuid::Uuid::new_v4().to_string()
 }
 
 pub async fn migrate(pool: &SqlitePool) -> Result<(), Error> {
@@ -76,13 +73,7 @@ pub async fn start_workflow(pool: &SqlitePool, new: &NewWorkflow<'_>) -> Result<
         .fetch_one(&mut *tx)
         .await?;
     let existing = workflow_from_row(&row)?;
-    if existing.name != new.name {
-        return Err(Error::ConflictingWorkflow {
-            workflow_id: new.workflow_id.to_owned(),
-            recorded_name: existing.name,
-            requested_name: new.name.to_owned(),
-        });
-    }
+    check_workflow_name(new, &existing.name)?;
     tx.commit().await?;
     Ok(Started::Existing(existing))
 }
@@ -112,14 +103,7 @@ pub async fn load_step(
     let Some((recorded_name, record)) = read_step(&mut conn, workflow_id, step_id).await? else {
         return Ok(None);
     };
-    if recorded_name != step_name {
-        return Err(Error::UnexpectedStep {
-            workflow_id: workflow_id.to_owned(),
-            step_id,
-            expected_name: step_name.to_owned(),
-            recorded_name,
-        });
-    }
+    check_step_name(workflow_id, step_id, step_name, recorded_name)?;
     Ok(Some(record))
 }
 
@@ -165,15 +149,8 @@ pub async fn save_step(
         return Err(Error::LeaseLost(lease.workflow_id.clone()));
     }
 
-    if let Some((recorded_name, recorded)) = read_step(&mut tx, &lease.workflow_id, step_id).await?
-    {
-        if recorded_name == step_name && &recorded == record {
-            return Ok(());
-        }
-        return Err(Error::StepNondeterminism {
-            workflow_id: lease.workflow_id.clone(),
-            step_id,
-        });
+    if let Some(recorded) = read_step(&mut tx, &lease.workflow_id, step_id).await? {
+        return check_recorded_step(&lease.workflow_id, step_id, step_name, record, &recorded);
     }
 
     sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -282,9 +259,8 @@ pub async fn reclaim(
     for row in rows {
         let workflow_id: String = row.try_get("workflow_id")?;
         let attempts: u32 = row.try_get::<u32, _>("recovery_attempts")? + 1;
-        let max_attempts: u32 = row.try_get("max_recovery_attempts")?;
 
-        if attempts > max_attempts.saturating_add(1) {
+        if attempts_exhausted(attempts, row.try_get("max_recovery_attempts")?) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE dbos_workflows SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
                  lease_token = NULL, claim_after_ms = NULL, updated_at_ms = {NOW_MS} WHERE workflow_id = ?"

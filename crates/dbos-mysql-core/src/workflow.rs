@@ -86,3 +86,55 @@ pub enum Outcome {
     Success(String),
     Error(String),
 }
+
+pub(crate) fn new_token() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+pub(crate) fn attempts_exhausted(attempts: u32, max_attempts: u32) -> bool {
+    attempts > max_attempts.saturating_add(1)
+}
+
+pub(crate) fn check_workflow_name(new: &NewWorkflow<'_>, recorded_name: &str) -> Result<(), Error> {
+    if recorded_name == new.name {
+        return Ok(());
+    }
+    Err(Error::ConflictingWorkflow {
+        workflow_id: new.workflow_id.to_owned(),
+        recorded_name: recorded_name.to_owned(),
+        requested_name: new.name.to_owned(),
+    })
+}
+
+pub(crate) fn check_step_name(
+    workflow_id: &str,
+    step_id: u32,
+    expected: &str,
+    recorded_name: String,
+) -> Result<(), Error> {
+    if recorded_name == expected {
+        return Ok(());
+    }
+    Err(Error::UnexpectedStep {
+        workflow_id: workflow_id.to_owned(),
+        step_id,
+        expected_name: expected.to_owned(),
+        recorded_name,
+    })
+}
+
+pub(crate) fn check_recorded_step(
+    workflow_id: &str,
+    step_id: u32,
+    step_name: &str,
+    record: &StepRecord,
+    recorded: &(String, StepRecord),
+) -> Result<(), Error> {
+    if recorded.0 == step_name && &recorded.1 == record {
+        return Ok(());
+    }
+    Err(Error::StepNondeterminism {
+        workflow_id: workflow_id.to_owned(),
+        step_id,
+    })
+}
