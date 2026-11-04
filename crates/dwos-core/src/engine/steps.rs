@@ -77,6 +77,9 @@ impl StepPolicy {
         if !self.retries_allowed || failed_attempt >= self.max_attempts {
             return None;
         }
+        if self.interval_seconds == 0.0 {
+            return Some(Duration::ZERO);
+        }
         let exponent = i32::try_from(failed_attempt.saturating_sub(1)).unwrap_or(i32::MAX);
         let seconds = self.interval_seconds * self.backoff_rate.powi(exponent);
         Some(Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX))
@@ -163,5 +166,17 @@ impl Engine {
         self.store
             .save_step(&run.lease, step_id, name, &record)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_retry_interval_stays_zero_when_backoff_overflows() {
+        let policy = StepPolicy::new(true, 0.0, 10, 1.0e300).unwrap();
+        assert_eq!(policy.retry_delay(3), Some(Duration::ZERO));
+        assert_eq!(policy.retry_delay(10), None);
     }
 }
