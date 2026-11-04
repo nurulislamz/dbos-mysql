@@ -18,6 +18,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from rust_dwos import _native
 from rust_dwos.errors import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSException,
     DBOSMaxStepRetriesExceeded,
@@ -29,7 +30,6 @@ logger = logging.getLogger("dbos")
 
 _ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
 _PLAIN_CODEC = Codec(lambda: None)
-_UNLIMITED_RECOVERY_ATTEMPTS = 2**32 - 1
 
 
 class DBOSConfig(TypedDict):
@@ -49,6 +49,7 @@ class WorkflowStatusString(Enum):
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
     MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
+    CANCELLED = "CANCELLED"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class _Workflow:
     function: Callable[..., Any]
     codec: Codec
     is_async: bool
-    max_recovery_attempts: int
+    max_recovery_attempts: int | None
 
 
 _current_run: contextvars.ContextVar[_native.Run | None] = contextvars.ContextVar("dbos_run", default=None)
@@ -297,8 +298,7 @@ class DBOS(metaclass=_DBOSMeta):
     def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS) -> Callable[..., Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             is_async = inspect.iscoroutinefunction(function)
-            attempts = _UNLIMITED_RECOVERY_ATTEMPTS if max_recovery_attempts is None else max_recovery_attempts
-            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, attempts)
+            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts)
             _register(info)
 
             @functools.wraps(function)
@@ -342,32 +342,33 @@ class DBOS(metaclass=_DBOSMeta):
             is_async = inspect.iscoroutinefunction(function)
 
             def failure(errors: list[Exception]) -> Exception:
-                if not policy.retries_allowed:
+                if not policy.wraps_failures:
                     return errors[-1]
                 return DBOSMaxStepRetriesExceeded(step_name, policy.max_attempts, errors)
 
             @functools.wraps(function)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run = _current_run.get()
-                if run is None or _current_step.get() is not None:
+                if run is None:
                     return function(*args, **kwargs)
                 instance = _running()
-                step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name)
+                step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name, _current_step.get() is not None)
+                if step_id is None:
+                    return function(*args, **kwargs)
                 if replay is not None:
                     return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
-                attempt = 1
+                attempts = policy.attempts()
                 while True:
-                    reset = _current_step.set(StepStatus(step_id, *policy.status(attempt)))
+                    reset = _current_step.set(StepStatus(step_id, *attempts.status()))
                     try:
                         value = function(*args, **kwargs)
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
-                        delay = policy.retry_delay(attempt)
+                        delay = attempts.failed()
                         if delay is None:
                             break
                         time.sleep(delay)
-                        attempt += 1
                         continue
                     finally:
                         _current_step.reset(reset)
@@ -377,25 +378,26 @@ class DBOS(metaclass=_DBOSMeta):
             @functools.wraps(function)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run = _current_run.get()
-                if run is None or _current_step.get() is not None:
+                if run is None:
                     return await function(*args, **kwargs)
                 instance = _running()
-                step_id, replay = await instance._engine.begin_step(run, step_name)
+                step_id, replay = await instance._engine.begin_step(run, step_name, _current_step.get() is not None)
+                if step_id is None:
+                    return await function(*args, **kwargs)
                 if replay is not None:
                     return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
-                attempt = 1
+                attempts = policy.attempts()
                 while True:
-                    reset = _current_step.set(StepStatus(step_id, *policy.status(attempt)))
+                    reset = _current_step.set(StepStatus(step_id, *attempts.status()))
                     try:
                         value = await function(*args, **kwargs)
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
-                        delay = policy.retry_delay(attempt)
+                        delay = attempts.failed()
                         if delay is None:
                             break
                         await asyncio.sleep(delay)
-                        attempt += 1
                         continue
                     finally:
                         _current_step.reset(reset)
@@ -551,7 +553,7 @@ class DBOS(metaclass=_DBOSMeta):
         except asyncio.CancelledError:
             body.cancel()
             await asyncio.gather(body, return_exceptions=True)
-            await self._engine.release(run)
+            await self._engine.conclude(run)
             raise
         finally:
             self._stop_keeper(active)
@@ -563,14 +565,14 @@ class DBOS(metaclass=_DBOSMeta):
             await asyncio.gather(body, return_exceptions=True)
             return _decode_result(await self._engine.await_result(run.workflow_id), info)
         if body.cancelled():
-            await self._engine.release(run)
+            await self._engine.conclude(run)
             raise asyncio.CancelledError
         error = body.exception()
         if error is None:
             return await self._finish_success(info, run, body.result())
         if isinstance(error, Exception):
             return await self._finish_error(info, run, error)
-        await self._engine.release(run)
+        await self._engine.conclude(run)
         raise error
 
     def _run_sync(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
@@ -584,7 +586,7 @@ class DBOS(metaclass=_DBOSMeta):
             return self._state.run(self._finish_error(info, run, error))
         except BaseException:
             self._stop_keeper(active)
-            self._blocking(self._engine.release, run)
+            self._blocking(self._engine.conclude, run)
             raise
         self._stop_keeper(active)
         return self._state.run(self._finish_success(info, run, value))
@@ -594,13 +596,13 @@ class DBOS(metaclass=_DBOSMeta):
             text = info.codec.encode_output(value, run.serialization)
         except TypeError as error:
             return await self._finish_error(info, run, error)
-        superseded = await self._engine.finish_success(run, text)
+        superseded = await self._engine.conclude(run, output=text)
         if superseded is not None:
             return _decode_result(superseded, info)
         return info.codec.decode_output(text, run.serialization)
 
     async def _finish_error(self, info: _Workflow, run: _native.Run, error: BaseException) -> Any:
-        superseded = await self._engine.finish_error(run, encode_exception(error, run.serialization))
+        superseded = await self._engine.conclude(run, error=encode_exception(error, run.serialization))
         if superseded is not None:
             return _decode_result(superseded, info)
         raise error
@@ -671,6 +673,8 @@ def _replay_step(replay: _native.StepReplay, codec: Codec, serialization: str) -
 def _decode_result(result: _native.WorkflowResult, info: _Workflow | None = None) -> Any:
     if result.kind == "max_recovery_attempts":
         raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(result.workflow_id)
+    if result.kind == "cancelled":
+        raise DBOSAwaitedWorkflowCancelledError(result.workflow_id)
     if result.kind == "error":
         raise decode_exception(result.value, result.serialization)
     return _codec_for(result.name, info).decode_output(result.value, result.serialization)
@@ -690,7 +694,7 @@ def _status_of(row: _native.WorkflowRow) -> WorkflowStatus:
         output=_codec_for(row.name).decode_output(row.output, row.serialization) if row.output is not None else None,
         error=decode_exception(row.error, row.serialization) if row.error is not None else None,
         recovery_attempts=row.recovery_attempts,
-        max_recovery_attempts=None if row.max_recovery_attempts == _UNLIMITED_RECOVERY_ATTEMPTS else row.max_recovery_attempts,
+        max_recovery_attempts=row.max_recovery_attempts,
         parent_workflow_id=row.parent_workflow_id,
         created_at=row.created_at_ms,
         updated_at=row.updated_at_ms,

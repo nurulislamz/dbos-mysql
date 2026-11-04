@@ -4,10 +4,15 @@ use std::time::Duration;
 
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
+    Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
     StepRecord, Workflow, new_token,
 };
 use crate::{Error, Store};
+
+mod recovery;
+mod steps;
+
+pub use steps::{StepAttempts, StepDecision, StepPolicy};
 
 const POLL_MIN: Duration = Duration::from_millis(10);
 const POLL_MAX: Duration = Duration::from_secs(1);
@@ -68,8 +73,8 @@ impl Run {
         self.last_step_id.fetch_add(1, Ordering::SeqCst) + 1
     }
 
-    /// A child started inside a step belongs to that step's result, so it takes no step ID.
-    pub fn child_step_id(&self, in_step: bool) -> Option<u32> {
+    /// Work done inside a step belongs to that step's result, so it takes no step ID.
+    pub fn step_id_unless_in_step(&self, in_step: bool) -> Option<u32> {
         (!in_step).then(|| self.next_step_id())
     }
 }
@@ -94,6 +99,7 @@ pub enum FinalOutcome {
     Success(String),
     Error(String),
     MaxRecoveryAttemptsExceeded(u32),
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,80 +118,16 @@ pub enum Begun {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum StepDecision {
-    Run,
-    ReplayOutput(String),
-    ReplayError(String),
+pub enum Ended {
+    Success(String),
+    Error(String),
+    Interrupted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Finished {
     Accepted,
     Superseded(WorkflowResult),
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct StepPolicy {
-    retries_allowed: bool,
-    interval_seconds: f64,
-    max_attempts: u32,
-    backoff_rate: f64,
-}
-
-impl StepPolicy {
-    pub fn new(
-        retries_allowed: bool,
-        interval_seconds: f64,
-        max_attempts: u32,
-        backoff_rate: f64,
-    ) -> Result<Self, Error> {
-        if !interval_seconds.is_finite() || interval_seconds < 0.0 {
-            return Err(Error::InvalidConfig(
-                "interval_seconds must be zero or more".to_owned(),
-            ));
-        }
-        if !backoff_rate.is_finite() || backoff_rate < 0.0 {
-            return Err(Error::InvalidConfig(
-                "backoff_rate must be zero or more".to_owned(),
-            ));
-        }
-        if max_attempts == 0 {
-            return Err(Error::InvalidConfig(
-                "max_attempts must be at least 1".to_owned(),
-            ));
-        }
-        Ok(Self {
-            retries_allowed,
-            interval_seconds,
-            max_attempts,
-            backoff_rate,
-        })
-    }
-
-    pub fn retries_allowed(&self) -> bool {
-        self.retries_allowed
-    }
-
-    pub fn max_attempts(&self) -> u32 {
-        self.max_attempts
-    }
-
-    pub fn status(&self, attempt: u32) -> (Option<u32>, Option<u32>) {
-        if self.retries_allowed {
-            (Some(attempt.saturating_sub(1)), Some(self.max_attempts))
-        } else {
-            (None, None)
-        }
-    }
-
-    pub fn retry_delay(&self, failed_attempt: u32) -> Option<Duration> {
-        if !self.retries_allowed || failed_attempt >= self.max_attempts {
-            return None;
-        }
-        let exponent = i32::try_from(failed_attempt.saturating_sub(1)).unwrap_or(i32::MAX);
-        let seconds = self.interval_seconds * self.backoff_rate.powi(exponent);
-        Some(Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX))
-    }
 }
 
 #[derive(Debug)]
@@ -232,6 +174,7 @@ fn final_result(workflow: &Workflow) -> Result<Option<WorkflowResult>, Error> {
         Status::MaxRecoveryAttemptsExceeded => {
             FinalOutcome::MaxRecoveryAttemptsExceeded(workflow.max_recovery_attempts)
         }
+        Status::Cancelled => FinalOutcome::Cancelled,
     };
     Ok(Some(WorkflowResult {
         workflow_id: workflow.workflow_id.clone(),
@@ -239,11 +182,6 @@ fn final_result(workflow: &Workflow) -> Result<Option<WorkflowResult>, Error> {
         outcome,
         serialization: workflow.serialization.clone(),
     }))
-}
-
-fn jittered(interval: Duration) -> Duration {
-    let random = f64::from(uuid::Uuid::new_v4().as_bytes()[0]) / 255.0;
-    interval.mul_f64(0.5 + random)
 }
 
 #[derive(Clone, Debug)]
@@ -362,65 +300,16 @@ impl Engine {
         Ok(child_id)
     }
 
-    pub async fn check_step(
-        &self,
-        run: &Run,
-        step_id: u32,
-        name: &str,
-    ) -> Result<StepDecision, Error> {
-        let Some(saved) = self
-            .store
-            .load_step(run.workflow_id(), step_id, name)
-            .await?
-        else {
-            return Ok(StepDecision::Run);
-        };
-        if let Some(error) = saved.error {
-            return Ok(StepDecision::ReplayError(error));
+    /// What happens when a workflow's function stops, however it stopped.
+    pub async fn conclude(&self, run: &Run, ended: Ended) -> Result<Finished, Error> {
+        match ended {
+            Ended::Success(output) => self.finish(run, Outcome::Success(output)).await,
+            Ended::Error(error) => self.finish(run, Outcome::Error(error)).await,
+            Ended::Interrupted => {
+                self.release(run).await?;
+                Ok(Finished::Accepted)
+            }
         }
-        saved
-            .output
-            .map(StepDecision::ReplayOutput)
-            .ok_or_else(|| Error::StepKindMismatch {
-                workflow_id: run.workflow_id().to_owned(),
-                step_id,
-                expected: "step",
-            })
-    }
-
-    pub async fn save_step_output(
-        &self,
-        run: &Run,
-        step_id: u32,
-        name: &str,
-        output: String,
-    ) -> Result<(), Error> {
-        let record = StepRecord {
-            output: Some(output),
-            ..StepRecord::default()
-        };
-        self.store
-            .save_step(&run.lease, step_id, name, &record)
-            .await
-    }
-
-    pub async fn save_step_error(
-        &self,
-        run: &Run,
-        step_id: u32,
-        name: &str,
-        error: String,
-    ) -> Result<(), Error> {
-        if self.is_closing() {
-            return Err(Error::ShuttingDown);
-        }
-        let record = StepRecord {
-            error: Some(error),
-            ..StepRecord::default()
-        };
-        self.store
-            .save_step(&run.lease, step_id, name, &record)
-            .await
     }
 
     pub async fn finish(&self, run: &Run, outcome: Outcome) -> Result<Finished, Error> {
@@ -489,34 +378,6 @@ impl Engine {
     pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
         self.store.list_steps(workflow_id).await
     }
-
-    pub async fn recover_now(&self, names: &[String]) -> Result<Vec<Claimed>, Error> {
-        self.store
-            .reclaim(
-                names,
-                self.config.max_concurrent_recoveries,
-                self.config.lease,
-            )
-            .await
-    }
-
-    pub async fn recovery_tick(&self, names: &[String]) -> Vec<Claimed> {
-        tokio::time::sleep(jittered(self.config.recovery_interval)).await;
-        let free = usize::try_from(self.config.max_concurrent_recoveries)
-            .unwrap_or(usize::MAX)
-            .saturating_sub(self.active_runs());
-        let limit = u32::try_from(free).unwrap_or(u32::MAX);
-        if limit == 0 {
-            return Vec::new();
-        }
-        match self.store.reclaim(names, limit, self.config.lease).await {
-            Ok(claims) => claims,
-            Err(error) => {
-                log::error!("workflow recovery failed, and will be tried again: {error}");
-                Vec::new()
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -562,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn a_child_takes_a_step_id_only_outside_a_step() {
+    fn a_step_id_is_only_taken_outside_a_step() {
         let run = Run::new(
             Lease {
                 workflow_id: "w".to_owned(),
@@ -570,9 +431,9 @@ mod tests {
             },
             PORTABLE_JSON.to_owned(),
         );
-        assert_eq!(run.child_step_id(false), Some(1));
-        assert_eq!(run.child_step_id(true), None);
-        assert_eq!(run.child_step_id(false), Some(2));
+        assert_eq!(run.step_id_unless_in_step(false), Some(1));
+        assert_eq!(run.step_id_unless_in_step(true), None);
+        assert_eq!(run.step_id_unless_in_step(false), Some(2));
     }
 
     #[test]

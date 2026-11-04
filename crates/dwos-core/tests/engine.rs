@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dwos_core::{
-    Begin, Begun, Engine, EngineConfig, Error, FinalOutcome, Finished, Outcome, ParentStep, Run,
-    StepDecision, StepRecord,
+    Begin, Begun, Ended, Engine, EngineConfig, Error, FinalOutcome, Finished, Outcome, ParentStep,
+    Run, Status, StepDecision, StepPolicy, StepRecord, recovery_limit, recovery_limit_of,
 };
 
 #[macro_use]
@@ -461,4 +461,61 @@ all_dbs!(migrations_can_be_turned_off, backend, {
         engine.get_status("a").await,
         Err(Error::Database(_))
     ));
+});
+
+#[test]
+fn step_attempts_retry_until_the_limit_then_give_up() {
+    let mut attempts = StepPolicy::new(true, 1.0, 3, 2.0).unwrap().attempts();
+    assert_eq!(attempts.status(), (Some(0), Some(3)));
+    assert_eq!(attempts.failed(), Some(Duration::from_secs(1)));
+    assert_eq!(attempts.status(), (Some(1), Some(3)));
+    assert_eq!(attempts.failed(), Some(Duration::from_secs(2)));
+    assert_eq!(attempts.status(), (Some(2), Some(3)));
+    assert_eq!(attempts.failed(), None);
+}
+
+#[test]
+fn only_a_retrying_step_wraps_its_failures() {
+    let retrying = StepPolicy::new(true, 1.0, 3, 2.0).unwrap();
+    let single = StepPolicy::new(false, 1.0, 3, 2.0).unwrap();
+    assert!(retrying.wraps_failures());
+    assert!(!single.wraps_failures());
+    assert_eq!(single.attempts().failed(), None);
+}
+
+#[test]
+fn an_unlimited_recovery_limit_round_trips() {
+    assert_eq!(recovery_limit_of(recovery_limit(None)), None);
+    assert_eq!(recovery_limit_of(recovery_limit(Some(5))), Some(5));
+}
+
+all_dbs!(an_interrupted_workflow_is_released_for_recovery, backend, {
+    let db = TestDb::create(backend).await;
+    let engine = Engine::connect(&db.url, expired()).await.unwrap();
+    let run = begin_run(&engine, "a").await;
+    assert_eq!(
+        engine.conclude(&run, Ended::Interrupted).await.unwrap(),
+        Finished::Accepted
+    );
+    let state = engine.get_status("a").await.unwrap();
+    assert_eq!(state.status, Status::Pending);
+    assert_eq!(
+        state.recovery_attempts, 0,
+        "an interruption uses no attempt"
+    );
+    assert_eq!(engine.recover_now(&names()).await.unwrap().len(), 1);
+});
+
+all_dbs!(an_ended_workflow_stores_its_outcome, backend, {
+    let db = TestDb::create(backend).await;
+    let engine = Engine::connect(&db.url, config()).await.unwrap();
+    let run = begin_run(&engine, "a").await;
+    engine
+        .conclude(&run, Ended::Success("1".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("a").await.unwrap().status,
+        Status::Success
+    );
 });

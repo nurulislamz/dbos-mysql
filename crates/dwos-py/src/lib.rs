@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dwos_core::{
-    ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Engine, EngineConfig, Error,
-    FinalOutcome, Finished, Outcome, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, Run,
-    StepDecision, StepPolicy, Workflow, WorkflowResult, pickle_from_serializer,
+    ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Ended, Engine, EngineConfig,
+    Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, Run,
+    StepAttempts, StepDecision, StepPolicy, Workflow, WorkflowResult, pickle_from_serializer,
+    recovery_limit, recovery_limit_of,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -64,7 +65,7 @@ struct PyWorkflow {
     output: Option<String>,
     error: Option<String>,
     recovery_attempts: u32,
-    max_recovery_attempts: u32,
+    max_recovery_attempts: Option<u32>,
     parent_workflow_id: Option<String>,
     created_at_ms: i64,
     updated_at_ms: i64,
@@ -82,7 +83,7 @@ impl From<Workflow> for PyWorkflow {
             output: row.output,
             error: row.error,
             recovery_attempts: row.recovery_attempts,
-            max_recovery_attempts: row.max_recovery_attempts,
+            max_recovery_attempts: recovery_limit_of(row.max_recovery_attempts),
             parent_workflow_id: row.parent_workflow_id,
             created_at_ms: row.created_at_ms,
             updated_at_ms: row.updated_at_ms,
@@ -133,6 +134,7 @@ impl From<WorkflowResult> for PyResult_ {
             FinalOutcome::MaxRecoveryAttemptsExceeded(max) => {
                 ("max_recovery_attempts", None, Some(max))
             }
+            FinalOutcome::Cancelled => ("cancelled", None, None),
         };
         Self {
             workflow_id: result.workflow_id,
@@ -232,8 +234,8 @@ impl PyStepPolicy {
     }
 
     #[getter]
-    fn retries_allowed(&self) -> bool {
-        self.0.retries_allowed()
+    fn wraps_failures(&self) -> bool {
+        self.0.wraps_failures()
     }
 
     #[getter]
@@ -241,14 +243,22 @@ impl PyStepPolicy {
         self.0.max_attempts()
     }
 
-    fn status(&self, attempt: u32) -> (Option<u32>, Option<u32>) {
-        self.0.status(attempt)
+    fn attempts(&self) -> PyStepAttempts {
+        PyStepAttempts(self.0.attempts())
+    }
+}
+
+#[pyclass(name = "StepAttempts")]
+struct PyStepAttempts(StepAttempts);
+
+#[pymethods]
+impl PyStepAttempts {
+    fn status(&self) -> (Option<u32>, Option<u32>) {
+        self.0.status()
     }
 
-    fn retry_delay(&self, failed_attempt: u32) -> Option<f64> {
-        self.0
-            .retry_delay(failed_attempt)
-            .map(|delay| delay.as_secs_f64())
+    fn failed(&mut self) -> Option<f64> {
+        self.0.failed().map(|delay| delay.as_secs_f64())
     }
 }
 
@@ -311,7 +321,7 @@ impl PyEngine {
         py: Python<'py>,
         name: String,
         input: String,
-        max_recovery_attempts: u32,
+        max_recovery_attempts: Option<u32>,
         workflow_id: Option<String>,
         parent: Option<PyRef<'py, PyRun>>,
         in_step: bool,
@@ -319,7 +329,9 @@ impl PyEngine {
         let engine = self.0.clone();
         let parent = parent.map(|run| run.0.clone());
         // Taken at the call, not in the future, so concurrent calls keep their call order.
-        let parent_step_id = parent.as_ref().and_then(|run| run.child_step_id(in_step));
+        let parent_step_id = parent
+            .as_ref()
+            .and_then(|run| run.step_id_unless_in_step(in_step));
         future_into_py(py, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
@@ -329,7 +341,7 @@ impl PyEngine {
                 .begin(Begin {
                     name: &name,
                     input: &input,
-                    max_recovery_attempts,
+                    max_recovery_attempts: recovery_limit(max_recovery_attempts),
                     workflow_id: workflow_id.as_deref(),
                     parent: parent_step,
                 })
@@ -362,11 +374,15 @@ impl PyEngine {
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         name: String,
+        in_step: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
         // Taken at the call, not in the future, so concurrent calls keep their call order.
-        let step_id = run.next_step_id();
+        let step_id = run.step_id_unless_in_step(in_step);
         future_into_py(py, async move {
+            let Some(step_id) = step_id else {
+                return Ok((None, None));
+            };
             let decision = engine
                 .check_step(&run, step_id, &name)
                 .await
@@ -382,7 +398,7 @@ impl PyEngine {
                     error: Some(error),
                 }),
             };
-            Ok((step_id, replay))
+            Ok((Some(step_id), replay))
         })
     }
 
@@ -420,41 +436,29 @@ impl PyEngine {
         })
     }
 
-    fn finish_success<'py>(
+    #[pyo3(signature = (run, *, output=None, error=None))]
+    fn conclude<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
-        output: String,
+        output: Option<String>,
+        error: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
+        let ended = match (output, error) {
+            (Some(output), None) => Ended::Success(output),
+            (None, Some(error)) => Ended::Error(error),
+            (None, None) => Ended::Interrupted,
+            (Some(_), Some(_)) => {
+                return Err(to_py(Error::InvalidConfig(
+                    "a workflow cannot end with both an output and an error".to_owned(),
+                )));
+            }
+        };
         future_into_py(py, async move {
-            let finished = engine
-                .finish(&run, Outcome::Success(output))
-                .await
-                .map_err(to_py)?;
+            let finished = engine.conclude(&run, ended).await.map_err(to_py)?;
             Ok(finished_to_py(finished))
         })
-    }
-
-    fn finish_error<'py>(
-        &self,
-        py: Python<'py>,
-        run: PyRef<'py, PyRun>,
-        error: String,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let (engine, run) = (self.0.clone(), run.0.clone());
-        future_into_py(py, async move {
-            let finished = engine
-                .finish(&run, Outcome::Error(error))
-                .await
-                .map_err(to_py)?;
-            Ok(finished_to_py(finished))
-        })
-    }
-
-    fn release<'py>(&self, py: Python<'py>, run: PyRef<'py, PyRun>) -> PyResult<Bound<'py, PyAny>> {
-        let (engine, run) = (self.0.clone(), run.0.clone());
-        future_into_py(py, async move { engine.release(&run).await.map_err(to_py) })
     }
 
     fn keep_lease(&self, run: PyRef<'_, PyRun>) -> PyActiveRun {
@@ -541,6 +545,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyClaim>()?;
     m.add_class::<PyActiveRun>()?;
     m.add_class::<PyStepPolicy>()?;
+    m.add_class::<PyStepAttempts>()?;
     m.add(
         "DEFAULT_MAX_RECOVERY_ATTEMPTS",
         DEFAULT_MAX_RECOVERY_ATTEMPTS,

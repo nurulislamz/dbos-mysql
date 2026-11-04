@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS workflow_status (
     workflow_uuid         TEXT PRIMARY KEY,
     name                  TEXT NOT NULL,
-    status                TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCESS', 'ERROR', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')),
+    status                TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCESS', 'ERROR', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', 'CANCELLED')),
     inputs                TEXT NOT NULL,
     parent_workflow_id    TEXT,
     output                TEXT,

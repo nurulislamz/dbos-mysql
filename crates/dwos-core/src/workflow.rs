@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::Error;
 
 pub const DEFAULT_MAX_RECOVERY_ATTEMPTS: u32 = 100;
+const UNLIMITED_RECOVERY_ATTEMPTS: u32 = u32::MAX;
 pub const PORTABLE_JSON: &str = "portable_json";
 pub const PY_PICKLE: &str = "py_pickle";
 
@@ -12,6 +13,7 @@ pub enum Status {
     Success,
     Error,
     MaxRecoveryAttemptsExceeded,
+    Cancelled,
 }
 
 impl Status {
@@ -21,6 +23,7 @@ impl Status {
             Self::Success => "SUCCESS",
             Self::Error => "ERROR",
             Self::MaxRecoveryAttemptsExceeded => "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
+            Self::Cancelled => "CANCELLED",
         }
     }
 
@@ -30,6 +33,7 @@ impl Status {
             "SUCCESS" => Ok(Self::Success),
             "ERROR" => Ok(Self::Error),
             "MAX_RECOVERY_ATTEMPTS_EXCEEDED" => Ok(Self::MaxRecoveryAttemptsExceeded),
+            "CANCELLED" => Ok(Self::Cancelled),
             other => Err(Error::Corrupt(format!("unknown workflow status {other}"))),
         }
     }
@@ -103,6 +107,15 @@ pub struct RecordedStep {
 pub enum Outcome {
     Success(String),
     Error(String),
+}
+
+/// The limit to store: `None` means no limit.
+pub fn recovery_limit(limit: Option<u32>) -> u32 {
+    limit.unwrap_or(UNLIMITED_RECOVERY_ATTEMPTS)
+}
+
+pub fn recovery_limit_of(stored: u32) -> Option<u32> {
+    (stored != UNLIMITED_RECOVERY_ATTEMPTS).then_some(stored)
 }
 
 pub fn pickle_from_serializer(name: &str) -> Result<bool, Error> {

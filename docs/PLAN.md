@@ -34,6 +34,40 @@ your process
 
 Python calls Rust. Rust never calls Python. Python asks what to run, runs it, and hands back the result.
 
+## What goes where
+
+**Python holds only what needs the Python interpreter. If an SDK in another language would have to rewrite it, it belongs in Rust.**
+
+Two checks apply the rule:
+
+1. Would a TypeScript SDK need the same logic? If yes, it goes in Rust.
+2. Can the rule be tested in Rust without Python? If it can only be tested from Python, it is in the wrong place.
+
+| Python keeps | Why it needs Python |
+|---|---|
+| `DBOS` class, decorators, handles | They are the Python API |
+| Calling the function and catching its exceptions | Only Python can run it |
+| Current workflow and step (`contextvars`) | They follow Python's async tasks |
+| Converting values and errors to stored text | It works on Python objects and type hints |
+| `asyncio` tasks, threads and the actual sleep call | They belong to Python's event loop |
+| Mapping workflow names to functions | Those are Python functions |
+
+Rust holds SQL, step IDs, replay, leases, recovery, retry limits and delays, recovery limits, stored statuses and formats, and what happens when a workflow ends.
+
+`tests/test_boundary.py` fails if `python/rust_dwos/` imports a database driver, contains SQL, or calls something `_native.pyi` does not declare. It cannot catch every misplaced decision, so reviews check the rule too.
+
+## Where a new feature goes
+
+Each feature gets its own files, so features can be built in parallel without conflicts:
+
+| Part | File |
+|---|---|
+| SQL | `crates/dwos-core/src/store/<feature>.rs`, as an `impl Store` block |
+| Decisions | `crates/dwos-core/src/engine/<feature>.rs`, as an `impl Engine` block |
+| Tables | `schema/<database>/001_init.sql`, in all 3 files. Add new tables at the end, with `IF NOT EXISTS`. Nothing is released, so there is no migration runner yet |
+| Python API | `python/rust_dwos/<feature>.py`, as a class that `DBOS` inherits from |
+| Bindings | `crates/dwos-py/src/<feature>.rs`, as its own `#[pymethods] impl PyEngine` block |
+
 ## Reuse
 
 We do not fork `dbos-transact-rust`. It is Postgres only, its storage trait has 70 methods, and its engine runs Rust workflows. We reuse DBOS's table names, statuses, replay rules and tests. Code copied from it needs a `NOTICE` entry.

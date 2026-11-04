@@ -10,6 +10,7 @@ from rust_dwos.dbos import (
     WorkflowStatusString,
 )
 from rust_dwos.errors import (
+    DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,
@@ -24,6 +25,7 @@ from rust_dwos.errors import (
 
 __all__ = [
     "DBOS",
+    "DBOSAwaitedWorkflowCancelledError",
     "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
     "DBOSConfig",
     "DBOSConflictingWorkflowError",

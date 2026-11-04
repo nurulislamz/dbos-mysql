@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS workflow_status (
     PRIMARY KEY (workflow_uuid),
     KEY ix_workflow_status_claim (claim_after),
     CONSTRAINT ck_workflow_status_status
-        CHECK (status IN ('PENDING', 'SUCCESS', 'ERROR', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED'))
+        CHECK (status IN ('PENDING', 'SUCCESS', 'ERROR', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', 'CANCELLED'))
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS operation_outputs (

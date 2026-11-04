@@ -233,7 +233,7 @@ function workflowRow(row) {
     el("td", { class: "id" }, el("a", { href: workflowHref(row.workflow_id), "data-key": `workflow:${row.workflow_id}` }, row.workflow_id)),
     el("td", { class: "state" }, chip(row.status)),
     el("td", { class: "name", "data-label": "Name" }, row.name),
-    el("td", { class: "num", "data-label": "Attempts" }, `${row.recovery_attempts} of ${row.max_recovery_attempts}`),
+    el("td", { class: "num", "data-label": "Attempts" }, `${row.recovery_attempts} of ${row.max_recovery_attempts ?? "unlimited"}`),
     el("td", { class: "when", "data-label": "Created" }, when(row.created_at_ms)),
     el("td", { class: "when", "data-label": "Updated" }, when(row.updated_at_ms)),
   );
@@ -308,7 +308,7 @@ function renderDetail(workflow, steps, problem) {
     el("p", { class: "alert", role: "alert" }, problem || ""),
     el("dl", { class: "facts" },
       fact("Name", workflow.name),
-      fact("Attempts", `${workflow.recovery_attempts} of ${workflow.max_recovery_attempts}`),
+      fact("Attempts", `${workflow.recovery_attempts} of ${workflow.max_recovery_attempts ?? "unlimited"}`),
       fact("Parent workflow", workflow.parent_workflow_id === null
         ? "—"
         : el("a", { href: workflowHref(workflow.parent_workflow_id), "data-key": "parent" }, workflow.parent_workflow_id)),

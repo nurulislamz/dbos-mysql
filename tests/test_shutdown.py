@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, SetWorkflowID
+from rust_dwos import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSException, SetWorkflowID
 from tests.conftest import Database
 
 _PROGRAM = """
@@ -232,3 +232,15 @@ def test_thread_executors_stopping_at_exit_is_not_stored_as_an_error(database: D
     subprocess.run([sys.executable, "-c", _EXITING_APP, database.url, workflow_id], check=True, timeout=30)
     rows = database.execute("SELECT status, error FROM workflow_status WHERE workflow_uuid = %s", workflow_id)
     assert rows[0][0] == "PENDING", rows[0][1]
+
+
+def test_a_cancelled_workflow_raises_when_awaited(dbos: DBOS, database: Database) -> None:
+    @DBOS.workflow()
+    def workflow() -> int:
+        return 1
+
+    handle = DBOS.start_workflow(workflow)
+    assert handle.get_result() == 1
+    database.execute("UPDATE workflow_status SET status = 'CANCELLED' WHERE workflow_uuid = %s", handle.workflow_id)
+    with pytest.raises(DBOSAwaitedWorkflowCancelledError):
+        DBOS.retrieve_workflow(handle.workflow_id).get_result()

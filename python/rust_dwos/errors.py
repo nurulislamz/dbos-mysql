@@ -46,6 +46,15 @@ class MaxRecoveryAttemptsExceededError(DBOSException):
         return (self.__class__, (self.workflow_id, self.max_retries))
 
 
+class DBOSAwaitedWorkflowCancelledError(DBOSException):
+    def __init__(self, workflow_id: str) -> None:
+        self.workflow_id = workflow_id
+        super().__init__(f"Awaited workflow {workflow_id} was cancelled")
+
+    def __reduce__(self) -> tuple[type[DBOSAwaitedWorkflowCancelledError], tuple[str]]:
+        return (self.__class__, (self.workflow_id,))
+
+
 class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
     def __init__(self, workflow_id: str) -> None:
         self.workflow_id = workflow_id
@@ -83,6 +92,7 @@ for _kind in _MESSAGE_EXCEPTIONS:
 
 
 __all__ = [
+    "DBOSAwaitedWorkflowCancelledError",
     "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
     "DBOSConflictingWorkflowError",
     "DBOSException",
