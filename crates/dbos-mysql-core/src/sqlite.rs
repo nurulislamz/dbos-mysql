@@ -5,7 +5,7 @@ use sqlx::{QueryBuilder, Row, Sqlite, SqliteConnection};
 
 use crate::Error;
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, Started, Status, StepRecord, Workflow,
+    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, Started, Status, StepRecord, Workflow,
     attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name, new_token,
 };
 
@@ -292,4 +292,36 @@ pub async fn reclaim(
     }
     tx.commit().await?;
     Ok(claimed)
+}
+
+pub async fn list_workflows(pool: &SqlitePool) -> Result<Vec<Workflow>, Error> {
+    let rows = sqlx::query(
+        "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+         FROM dbos_workflows ORDER BY created_at_ms, workflow_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(workflow_from_row).collect()
+}
+
+pub async fn list_steps(pool: &SqlitePool, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
+    let rows = sqlx::query(
+        "SELECT step_id, step_name, output, error, child_workflow_id FROM dbos_steps WHERE workflow_id = ? ORDER BY step_id",
+    )
+    .bind(workflow_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(RecordedStep {
+                step_id: row.try_get("step_id")?,
+                step_name: row.try_get("step_name")?,
+                record: StepRecord {
+                    output: row.try_get("output")?,
+                    error: row.try_get("error")?,
+                    child_workflow_id: row.try_get("child_workflow_id")?,
+                },
+            })
+        })
+        .collect()
 }

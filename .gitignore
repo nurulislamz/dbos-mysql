@@ -5,3 +5,4 @@ __pycache__
 *.sqlite*
 dist
 .pytest_cache
+.worktrees

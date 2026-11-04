@@ -9,7 +9,7 @@ use sqlx::{ConnectOptions, Connection, Executor, MySql, MySqlConnection, QueryBu
 use crate::Error;
 use crate::retry::with_retry;
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, Started, Status, StepRecord, Workflow,
+    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, Started, Status, StepRecord, Workflow,
     attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name, new_token,
 };
 
@@ -155,6 +155,44 @@ impl MySqlStore {
                 .fetch_optional(&self.pool)
                 .await?;
             row.as_ref().map(workflow_from_row).transpose()
+        })
+        .await
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
+        with_retry(&self.retries, || async {
+            let rows = sqlx::query(
+                "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+                 FROM dbos_workflows ORDER BY created_at, workflow_id",
+            )
+            .fetch_all(&self.pool)
+            .await?;
+            rows.iter().map(workflow_from_row).collect()
+        })
+        .await
+    }
+
+    pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
+        with_retry(&self.retries, || async {
+            let rows = sqlx::query(
+                "SELECT step_id, step_name, output, error, child_workflow_id FROM dbos_steps WHERE workflow_id = ? ORDER BY step_id",
+            )
+            .bind(workflow_id)
+            .fetch_all(&self.pool)
+            .await?;
+            rows.iter()
+                .map(|row| {
+                    Ok(RecordedStep {
+                        step_id: row.try_get("step_id")?,
+                        step_name: row.try_get("step_name")?,
+                        record: StepRecord {
+                            output: row.try_get("output")?,
+                            error: row.try_get("error")?,
+                            child_workflow_id: row.try_get("child_workflow_id")?,
+                        },
+                    })
+                })
+                .collect()
         })
         .await
     }

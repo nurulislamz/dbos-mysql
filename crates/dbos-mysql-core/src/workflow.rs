@@ -82,6 +82,13 @@ pub struct StepRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordedStep {
+    pub step_id: u32,
+    pub step_name: String,
+    pub record: StepRecord,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Outcome {
     Success(String),
     Error(String),

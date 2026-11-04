@@ -1,3 +1,45 @@
 from dbos_mysql._native import Store, StoreError, connect
+from dbos_mysql.dbos import (
+    DBOS,
+    DBOSConfig,
+    SetWorkflowID,
+    StepStatus,
+    WorkflowHandle,
+    WorkflowHandleAsync,
+    WorkflowStatus,
+    WorkflowStatusString,
+)
+from dbos_mysql.errors import (
+    DBOSConflictingWorkflowError,
+    DBOSException,
+    DBOSLeaseLostError,
+    DBOSMaxStepRetriesExceeded,
+    DBOSNonExistentWorkflowError,
+    DBOSRecordedError,
+    DBOSStepNondeterminismError,
+    DBOSUnexpectedStepError,
+    MaxRecoveryAttemptsExceededError,
+)
 
-__all__ = ["Store", "StoreError", "connect"]
+__all__ = [
+    "DBOS",
+    "DBOSConfig",
+    "DBOSConflictingWorkflowError",
+    "DBOSException",
+    "DBOSLeaseLostError",
+    "DBOSMaxStepRetriesExceeded",
+    "DBOSNonExistentWorkflowError",
+    "DBOSRecordedError",
+    "DBOSStepNondeterminismError",
+    "DBOSUnexpectedStepError",
+    "MaxRecoveryAttemptsExceededError",
+    "SetWorkflowID",
+    "StepStatus",
+    "Store",
+    "StoreError",
+    "WorkflowHandle",
+    "WorkflowHandleAsync",
+    "WorkflowStatus",
+    "WorkflowStatusString",
+    "connect",
+]

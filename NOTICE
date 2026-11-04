@@ -1,2 +1,5 @@
 dbos-mysql
 Unofficial project, not affiliated with DBOS, Inc.
+
+tests/upstream contains tests adapted from dbos-transact-py and dbos-transact-ts,
+Copyright (c) DBOS, Inc., used under the MIT License. See tests/upstream/LICENSE-DBOS.

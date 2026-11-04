@@ -6,8 +6,11 @@ use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 
+use crate::lease::LeaseKeeper;
 use crate::mysql::MySqlStore;
-use crate::workflow::{Claimed, Lease, NewWorkflow, Outcome, Started, StepRecord, Workflow};
+use crate::workflow::{
+    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, Started, StepRecord, Workflow,
+};
 use crate::{Error, sqlite};
 
 const MAX_NAME_CHARS: usize = 255;
@@ -146,6 +149,28 @@ impl Store {
             Self::MySql(store) => store.reclaim(names, limit, duration).await,
             Self::Sqlite(pool) => sqlite::reclaim(pool, names, limit, duration).await,
         }
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
+        match self {
+            Self::MySql(store) => store.list_workflows().await,
+            Self::Sqlite(pool) => sqlite::list_workflows(pool).await,
+        }
+    }
+
+    pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
+        match self {
+            Self::MySql(store) => store.list_steps(workflow_id).await,
+            Self::Sqlite(pool) => sqlite::list_steps(pool, workflow_id).await,
+        }
+    }
+
+    pub fn keep_lease(&self, lease: Lease, duration: Duration, max_run: Duration) -> LeaseKeeper {
+        let store = self.clone();
+        LeaseKeeper::spawn(duration, max_run, move || {
+            let (store, lease) = (store.clone(), lease.clone());
+            async move { store.renew_lease(&lease, duration).await }
+        })
     }
 
     pub async fn ping(&self) -> Result<i64, Error> {
