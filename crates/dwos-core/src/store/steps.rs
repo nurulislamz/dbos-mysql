@@ -1,4 +1,4 @@
-use sqlx::{AnyConnection, Row};
+use sqlx::{Any, AnyConnection, Row, Transaction};
 
 use super::{Store, check_name, get_u32, record_from_row};
 use crate::Error;
@@ -7,6 +7,38 @@ use crate::workflow::{
 };
 
 impl Store {
+    pub(super) async fn owned_transaction(
+        &self,
+        lease: &Lease,
+    ) -> Result<(Transaction<'static, Any>, String), Error> {
+        let mut tx = self.begin().await?;
+        let row = sqlx::query(self.sql(&format!(
+            "SELECT status, lease_token, serialization FROM workflow_status WHERE workflow_uuid = ? {}",
+            self.dialect.lock_row(),
+        )))
+        .bind(lease.workflow_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| Error::WorkflowNotFound(lease.workflow_id.clone()))?;
+        if self
+            .cancel_if_expired_on(&mut tx, &lease.workflow_id)
+            .await?
+        {
+            tx.commit().await?;
+            return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
+        }
+        let status: String = row.try_get("status")?;
+        if Status::parse(&status)? == Status::Cancelled {
+            return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
+        }
+        let token: Option<String> = row.try_get("lease_token")?;
+        if status != "PENDING" || token.as_deref() != Some(lease.token.as_str()) {
+            return Err(Error::LeaseLost(lease.workflow_id.clone()));
+        }
+        let serialization = row.try_get("serialization")?;
+        Ok((tx, serialization))
+    }
+
     pub async fn load_step_owned(
         &self,
         lease: &Lease,
@@ -14,23 +46,7 @@ impl Store {
         step_name: &str,
     ) -> Result<Option<StepRecord>, Error> {
         self.attempt(|| async {
-            let mut tx = self.begin().await?;
-            let row = sqlx::query(self.sql(&format!(
-                "SELECT status, lease_token FROM workflow_status WHERE workflow_uuid = ? {}",
-                self.dialect.lock_row()
-            )))
-            .bind(lease.workflow_id.as_str())
-            .fetch_optional(&mut *tx)
-            .await?
-            .ok_or_else(|| Error::WorkflowNotFound(lease.workflow_id.clone()))?;
-            let status: String = row.try_get("status")?;
-            if Status::parse(&status)? == Status::Cancelled {
-                return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
-            }
-            let token: Option<String> = row.try_get("lease_token")?;
-            if status != "PENDING" || token.as_deref() != Some(lease.token.as_str()) {
-                return Err(Error::LeaseLost(lease.workflow_id.clone()));
-            }
+            let (mut tx, _) = self.owned_transaction(lease).await?;
             let saved = self.read_step(&mut tx, &lease.workflow_id, step_id).await?;
             let saved = saved
                 .map(|(name, record)| -> Result<StepRecord, Error> {
@@ -116,19 +132,7 @@ impl Store {
         step_name: &str,
         record: &StepRecord,
     ) -> Result<(), Error> {
-        let mut tx = self.begin().await?;
-        let owner = sqlx::query(self.sql(&format!(
-            "SELECT serialization FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' {}",
-            self.dialect.lock_row()
-        )))
-        .bind(lease.workflow_id.as_str())
-        .bind(lease.token.as_str())
-        .fetch_optional(&mut *tx)
-        .await?;
-        let Some(owner) = owner else {
-            return Err(Error::LeaseLost(lease.workflow_id.clone()));
-        };
-        let serialization: String = owner.try_get("serialization")?;
+        let (mut tx, serialization) = self.owned_transaction(lease).await?;
         if let Some(recorded) = self.read_step(&mut tx, &lease.workflow_id, step_id).await? {
             return check_recorded_step(&lease.workflow_id, step_id, step_name, record, &recorded);
         }

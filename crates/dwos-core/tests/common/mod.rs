@@ -174,12 +174,14 @@ pub fn workflow<'a>(id: &'a str, lease: Duration) -> NewWorkflow<'a> {
         lease,
         parent_workflow_id: None,
         serialization: PORTABLE_JSON,
+        timeout_ms: None,
+        deadline_epoch_ms: None,
     }
 }
 
 pub async fn start(store: &Store, new: &NewWorkflow<'_>) -> Lease {
     match store.start_workflow(new).await.unwrap() {
-        Started::Owned(lease) => lease,
+        Started::Owned(lease, _) => lease,
         Started::Existing(existing) => panic!("expected a new workflow, got {existing:?}"),
     }
 }

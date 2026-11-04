@@ -80,7 +80,7 @@ impl Store {
     ) -> Result<Vec<Claimed>, Error> {
         let mut tx = self.begin().await?;
         let select_sql = self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization FROM workflow_status \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms, {{NOW}} AS now_ms FROM workflow_status \
              WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) \
              ORDER BY claim_after, workflow_uuid LIMIT ? {}",
             self.readable_formats(),
@@ -96,6 +96,18 @@ impl Store {
         let mut claimed = Vec::with_capacity(rows.len());
         for row in rows {
             let workflow_id: String = row.try_get("workflow_uuid")?;
+            let deadline_epoch_ms: Option<i64> = row.try_get("workflow_deadline_epoch_ms")?;
+            let now_ms: i64 = row.try_get("now_ms")?;
+            if deadline_epoch_ms.is_some_and(|deadline| deadline <= now_ms) {
+                sqlx::query(self.sql(
+                    "UPDATE workflow_status SET status = 'CANCELLED', lease_token = NULL, claim_after = NULL, \
+                     completed_at = {NOW}, updated_at = {NOW} WHERE workflow_uuid = ? AND status = 'PENDING'",
+                ))
+                .bind(workflow_id.as_str())
+                .execute(&mut *tx)
+                .await?;
+                continue;
+            }
             let attempts = get_u32(&row, "recovery_attempts")? + 1;
             if attempts_exhausted(attempts, get_u32(&row, "max_recovery_attempts")?) {
                 sqlx::query(self.sql(
@@ -125,6 +137,7 @@ impl Store {
                 input: row.try_get("inputs")?,
                 recovery_attempts: attempts,
                 serialization: row.try_get("serialization")?,
+                deadline_epoch_ms,
             });
         }
         tx.commit().await?;

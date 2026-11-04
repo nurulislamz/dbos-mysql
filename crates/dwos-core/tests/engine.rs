@@ -29,6 +29,8 @@ fn begin<'a>(id: Option<&'a str>) -> Begin<'a> {
         max_recovery_attempts: 100,
         workflow_id: id,
         parent: None,
+        timeout_ms: None,
+        ignore_propagated_deadline: false,
     }
 }
 
@@ -332,7 +334,7 @@ all_dbs!(
         let engine = engine(&db, expired()).await;
         let stale = begin_run(&engine, "a").await;
         let claim = engine.recover_now(&names()).await.unwrap().remove(0);
-        let owner = Run::new(claim.lease, claim.serialization);
+        let owner = Run::new(claim.lease, claim.serialization, claim.deadline_epoch_ms);
 
         let late = engine.clone();
         let finishing = tokio::spawn(async move {
@@ -551,7 +553,10 @@ all_dbs!(read_only_engine_can_list_an_existing_database, backend, {
     )
     .await
     .unwrap();
-    let rows = reader.list_workflows().await.unwrap();
+    let rows = reader
+        .list_workflows(&dwos_core::WorkflowFilter::default())
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].workflow_id, "a");
 });

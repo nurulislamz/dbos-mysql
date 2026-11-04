@@ -28,6 +28,8 @@ fn begin<'a>(id: Option<&'a str>) -> Begin<'a> {
         max_recovery_attempts: 100,
         workflow_id: id,
         parent: None,
+        timeout_ms: None,
+        ignore_propagated_deadline: false,
     }
 }
 
@@ -119,7 +121,11 @@ all_dbs!(resume_makes_a_cancelled_workflow_claimable, backend, {
     assert_eq!(row.status, Status::Pending);
     assert_eq!(row.recovery_attempts, 1);
     assert!(row.completed_at_ms.is_none());
-    let run = Run::new(claimed.lease, claimed.serialization);
+    let run = Run::new(
+        claimed.lease,
+        claimed.serialization,
+        claimed.deadline_epoch_ms,
+    );
     assert_eq!(
         engine.check_step(&run, 1, "step").await.unwrap(),
         StepDecision::Run
@@ -468,7 +474,11 @@ all_dbs!(
             .unwrap();
         engine.release(&old).await.unwrap();
         let claimed = engine.recover_now(&names()).await.unwrap().pop().unwrap();
-        let current = Run::new(claimed.lease, claimed.serialization);
+        let current = Run::new(
+            claimed.lease,
+            claimed.serialization,
+            claimed.deadline_epoch_ms,
+        );
         for (step, name) in [(1, "one"), (2, "two")] {
             assert!(matches!(
                 engine.check_step(&old, step, name).await,

@@ -28,6 +28,7 @@ fn unreadable_warning_due(last_ms: u64, now: u64, interval_ms: u64) -> bool {
 
 impl Engine {
     pub async fn recover_now(&self, names: &[String]) -> Result<Vec<Claimed>, Error> {
+        self.store.cancel_expired().await?;
         self.store
             .reclaim(
                 names,
@@ -40,6 +41,9 @@ impl Engine {
     pub async fn recovery_tick(&self, names: &[String]) -> Vec<Claimed> {
         tokio::time::sleep(jittered(self.config.recovery_interval)).await;
         self.warn_unreadable_pickled().await;
+        if let Err(error) = self.store.cancel_expired().await {
+            log::error!("cancelling timed-out workflows failed, and will be tried again: {error}");
+        }
         let free = usize::try_from(self.config.max_concurrent_recoveries)
             .unwrap_or(usize::MAX)
             .saturating_sub(self.active_runs());

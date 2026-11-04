@@ -11,7 +11,9 @@ use crate::{Error, Store};
 
 mod events;
 mod recovery;
+mod sleep;
 mod steps;
+mod timeouts;
 mod workflow_management;
 
 pub use crate::store::{EventRow, MessageRow, Poll, SendOutcome, StoredValue};
@@ -50,14 +52,16 @@ pub struct Run {
     lease: Lease,
     last_step_id: AtomicU32,
     serialization: String,
+    deadline_epoch_ms: Option<i64>,
 }
 
 impl Run {
-    pub fn new(lease: Lease, serialization: String) -> Self {
+    pub fn new(lease: Lease, serialization: String, deadline_epoch_ms: Option<i64>) -> Self {
         Self {
             lease,
             last_step_id: AtomicU32::new(0),
             serialization,
+            deadline_epoch_ms,
         }
     }
 
@@ -72,6 +76,10 @@ impl Run {
     /// A workflow's values all use the format it started with, even after a config change.
     pub fn serialization(&self) -> &str {
         &self.serialization
+    }
+
+    pub fn deadline_epoch_ms(&self) -> Option<i64> {
+        self.deadline_epoch_ms
     }
 
     pub fn next_step_id(&self) -> u32 {
@@ -97,6 +105,8 @@ pub struct Begin<'a> {
     pub max_recovery_attempts: u32,
     pub workflow_id: Option<&'a str>,
     pub parent: Option<ParentStep<'a>>,
+    pub timeout_ms: Option<i64>,
+    pub ignore_propagated_deadline: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -258,6 +268,7 @@ impl Engine {
                 .filter(|id| !id.is_empty())
                 .map_or_else(new_token, str::to_owned),
         };
+        let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
         let new = NewWorkflow {
             workflow_id: &workflow_id,
             name: begin.name,
@@ -266,11 +277,15 @@ impl Engine {
             lease: self.config.lease,
             parent_workflow_id: begin.parent.map(|parent| parent.run.workflow_id()),
             serialization: self.serialization(),
+            timeout_ms,
+            deadline_epoch_ms,
         };
         match self.store.start_workflow(&new).await? {
-            Started::Owned(lease) => {
-                Ok(Begun::Run(Run::new(lease, self.serialization().to_owned())))
-            }
+            Started::Owned(lease, deadline_epoch_ms) => Ok(Begun::Run(Run::new(
+                lease,
+                self.serialization().to_owned(),
+                deadline_epoch_ms,
+            ))),
             Started::Existing(existing) => Ok(match final_result(&existing)? {
                 Some(result) => Begun::Stored(result),
                 None => Begun::Attach(workflow_id),
@@ -330,7 +345,7 @@ impl Engine {
         }
         match self.store.finish_workflow(&run.lease, &outcome).await {
             Ok(()) => Ok(Finished::Accepted),
-            Err(Error::LeaseLost(_)) => {
+            Err(Error::LeaseLost(_) | Error::WorkflowCancelled(_)) => {
                 log::warn!(
                     "workflow {} finished after losing its lease, so its result was discarded",
                     run.workflow_id()
@@ -376,6 +391,9 @@ impl Engine {
     }
 
     pub async fn get_status(&self, workflow_id: &str) -> Result<Workflow, Error> {
+        if !self.config.read_only {
+            self.store.cancel_if_expired(workflow_id).await?;
+        }
         self.store
             .get_workflow(workflow_id)
             .await?
@@ -441,6 +459,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             PORTABLE_JSON.to_owned(),
+            None,
         );
         assert_eq!(run.step_id_unless_in_step(false), Some(1));
         assert_eq!(run.step_id_unless_in_step(true), None);
@@ -455,6 +474,7 @@ mod tests {
                 token: "t".to_owned(),
             },
             PORTABLE_JSON.to_owned(),
+            None,
         ));
         assert_eq!(run.next_step_id(), 1);
         let threads: Vec<_> = (0..8)

@@ -8,6 +8,11 @@ use crate::workflow::{
 
 impl Store {
     pub async fn start_workflow(&self, new: &NewWorkflow<'_>) -> Result<Started, Error> {
+        if new.timeout_ms.is_some_and(|timeout| timeout <= 0) {
+            return Err(Error::InvalidConfig(
+                "workflow timeout must be positive".to_owned(),
+            ));
+        }
         check_name("workflow ID", new.workflow_id)?;
         check_name("workflow name", new.name)?;
         self.check_size(&[Some(new.input)])?;
@@ -44,11 +49,39 @@ impl Store {
             .await?;
         let owner: Option<String> = row.try_get("lease_token")?;
         if owner.as_deref() == Some(token) {
+            let created_at_ms: i64 = row.try_get("created_at")?;
+            let deadline = match new.timeout_ms {
+                Some(timeout) => Some(created_at_ms.checked_add(timeout).ok_or_else(|| {
+                    Error::InvalidConfig("workflow timeout is too large".to_owned())
+                })?),
+                None => new.deadline_epoch_ms,
+            };
+            if let Some(deadline) = deadline {
+                sqlx::query(self.sql(&format!(
+                    "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) \
+                     VALUES (?, ?, ?) {}",
+                    self.dialect.insert_if_absent(),
+                )))
+                .bind(new.workflow_id)
+                .bind(new.timeout_ms)
+                .bind(deadline)
+                .execute(&mut *tx)
+                .await?;
+            }
+            let deadline_epoch_ms: Option<i64> = sqlx::query_scalar(
+                self.sql("SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_uuid = ?"),
+            )
+            .bind(new.workflow_id)
+            .fetch_optional(&mut *tx)
+            .await?;
             tx.commit().await?;
-            return Ok(Started::Owned(Lease {
-                workflow_id: new.workflow_id.to_owned(),
-                token: token.to_owned(),
-            }));
+            return Ok(Started::Owned(
+                Lease {
+                    workflow_id: new.workflow_id.to_owned(),
+                    token: token.to_owned(),
+                },
+                deadline_epoch_ms,
+            ));
         }
         let existing = workflow_from_row(&row)?;
         check_workflow_name(new, &existing.name)?;
@@ -73,10 +106,14 @@ impl Store {
             Outcome::Error(value) => (Status::Error, None, Some(value.as_str())),
         };
         self.check_size(&[output, error])?;
+        if self.cancel_if_expired(&lease.workflow_id).await? {
+            return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
+        }
         let changed = self
             .attempt(|| async {
                 let result = sqlx::query(self.sql(
-                    "UPDATE workflow_status SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'",
+                    "UPDATE workflow_status SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' AND NOT EXISTS \
+                     (SELECT 1 FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid AND deadline_epoch_ms <= {NOW})",
                 ))
                 .bind(status.as_str())
                 .bind(output)
@@ -88,6 +125,9 @@ impl Store {
                 Ok(result.rows_affected())
             })
             .await?;
+        if changed == 0 && self.cancel_if_expired(&lease.workflow_id).await? {
+            return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
+        }
         require_owner(changed, lease)
     }
 }

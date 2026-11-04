@@ -146,16 +146,19 @@ impl Store {
         message_uuid: &str,
         from: SendFrom<'_>,
     ) -> Result<SendOutcome, Error> {
-        let mut tx = self.begin().await?;
-        if let SendFrom::Workflow { lease, step_id } = from {
-            self.lock_owner(&mut tx, lease).await?;
-            if let Some(outcome) = self
+        let mut tx = match from {
+            SendFrom::Outside => self.begin().await?,
+            SendFrom::Step(lease) | SendFrom::Workflow { lease, .. } => {
+                self.owned_transaction(lease).await?.0
+            }
+        };
+        if let SendFrom::Workflow { lease, step_id } = from
+            && let Some(outcome) = self
                 .replay_send(&mut tx, &lease.workflow_id, step_id, SEND_STEP)
                 .await?
-            {
-                tx.commit().await?;
-                return Ok(outcome);
-            }
+        {
+            tx.commit().await?;
+            return Ok(outcome);
         }
         let inserted = sqlx::query(self.sql(&format!(
             "INSERT INTO notifications (destination_uuid, topic, message, created_at_epoch_ms, message_uuid, serialization, consumed) \
@@ -187,10 +190,7 @@ impl Store {
                 )
                 .await?;
             }
-            SendFrom::Step(lease) => {
-                self.lock_owner(&mut tx, lease).await?;
-            }
-            SendFrom::Outside => {}
+            SendFrom::Step(_) | SendFrom::Outside => {}
         }
         tx.commit().await?;
         Ok(SendOutcome::Sent)
@@ -220,8 +220,7 @@ impl Store {
         topic: &str,
         timeout_ms: i64,
     ) -> Result<Poll, Error> {
-        let mut tx = self.begin().await?;
-        self.lock_owner(&mut tx, lease).await?;
+        let (mut tx, _) = self.owned_transaction(lease).await?;
         if let Some(saved) = self
             .replay_value(&mut tx, &lease.workflow_id, step_id, RECV_STEP)
             .await?
@@ -306,16 +305,17 @@ impl Store {
         deadline_ms: Option<i64>,
         caller: Option<(&Lease, u32, u32)>,
     ) -> Result<Poll, Error> {
-        let mut tx = self.begin().await?;
-        if let Some((lease, step_id, _)) = caller {
-            self.lock_owner(&mut tx, lease).await?;
-            if let Some(saved) = self
+        let mut tx = match caller {
+            Some((lease, _, _)) => self.owned_transaction(lease).await?.0,
+            None => self.begin().await?,
+        };
+        if let Some((lease, step_id, _)) = caller
+            && let Some(saved) = self
                 .replay_value(&mut tx, &lease.workflow_id, step_id, GET_EVENT_STEP)
                 .await?
-            {
-                tx.commit().await?;
-                return Ok(Poll::Ready(saved));
-            }
+        {
+            tx.commit().await?;
+            return Ok(Poll::Ready(saved));
         }
         let deadline_ms = if let Some((lease, _, timeout_step_id)) = caller {
             self.ensure_deadline(&mut tx, lease, timeout_step_id, timeout_ms)
@@ -383,8 +383,7 @@ impl Store {
         value: &str,
         serialization: &str,
     ) -> Result<SendOutcome, Error> {
-        let mut tx = self.begin().await?;
-        self.lock_owner(&mut tx, lease).await?;
+        let (mut tx, _) = self.owned_transaction(lease).await?;
         if let Some(step_id) = step_id
             && let Some(outcome) = self
                 .replay_send(&mut tx, &lease.workflow_id, step_id, SET_EVENT_STEP)
@@ -473,25 +472,6 @@ impl Store {
                 .collect()
         })
         .await
-    }
-
-    async fn lock_owner(
-        &self,
-        tx: &mut Transaction<'static, Any>,
-        lease: &Lease,
-    ) -> Result<String, Error> {
-        let owner = sqlx::query(self.sql(&format!(
-            "SELECT serialization FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' {}",
-            self.dialect.lock_row()
-        )))
-        .bind(lease.workflow_id.as_str())
-        .bind(lease.token.as_str())
-        .fetch_optional(&mut **tx)
-        .await?;
-        let Some(owner) = owner else {
-            return Err(Error::LeaseLost(lease.workflow_id.clone()));
-        };
-        Ok(owner.try_get("serialization")?)
     }
 
     async fn replay_send(

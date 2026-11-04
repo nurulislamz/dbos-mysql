@@ -12,7 +12,9 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod events;
 mod leases;
+mod sleep;
 mod steps;
+mod timeouts;
 mod workflow_management;
 mod workflows;
 
@@ -27,7 +29,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(40);
 const POSTGRES_MIGRATION_LOCK: &str =
     "SELECT 1 FROM (SELECT pg_advisory_xact_lock(7240319)) AS locked";
-const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, lease_token \
+const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, lease_token, (SELECT timeout_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_timeout_ms, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms \
      FROM workflow_status WHERE workflow_uuid = ?";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +188,8 @@ fn workflow_from_row(row: &AnyRow) -> Result<Workflow, Error> {
         updated_at_ms: row.try_get("updated_at")?,
         completed_at_ms: row.try_get("completed_at")?,
         serialization: row.try_get("serialization")?,
+        timeout_ms: row.try_get("workflow_timeout_ms")?,
+        deadline_epoch_ms: row.try_get("workflow_deadline_epoch_ms")?,
     })
 }
 

@@ -7,7 +7,7 @@ use crate::Error;
 use crate::workflow::{Claimed, Lease, Workflow, WorkflowFilter, attempts_exhausted, new_token};
 
 const LIST_COLUMNS: &str = "workflow_uuid, name, status, inputs, output, error, recovery_attempts, \
-     max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization";
+     max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, (SELECT timeout_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_timeout_ms, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms";
 
 fn like_prefix(prefix: &str) -> String {
     let escaped = prefix
@@ -42,23 +42,27 @@ impl Store {
 
     pub async fn resume_workflow(&self, workflow_id: &str) -> Result<(), Error> {
         self.attempt(|| async {
-            let exists = sqlx::query(self.sql(
-                "SELECT 1 FROM workflow_status WHERE workflow_uuid = ?",
-            ))
+            let mut tx = self.begin().await?;
+            let row = sqlx::query(self.sql(&format!(
+                "SELECT status FROM workflow_status WHERE workflow_uuid = ? {}",
+                self.dialect.lock_row(),
+            )))
             .bind(workflow_id)
-            .fetch_optional(&self.pool)
-            .await?;
-            if exists.is_none() {
-                return Err(Error::WorkflowNotFound(workflow_id.to_owned()));
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| Error::WorkflowNotFound(workflow_id.to_owned()))?;
+            let status: String = row.try_get("status")?;
+            if status == "CANCELLED" || status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED" {
+                sqlx::query(self.sql(
+                    "UPDATE workflow_status SET status = 'PENDING', lease_token = NULL, claim_after = {NOW}, \
+                     recovery_attempts = 0, completed_at = NULL, updated_at = {NOW} WHERE workflow_uuid = ?",
+                ))
+                .bind(workflow_id)
+                .execute(&mut *tx)
+                .await?;
             }
-            sqlx::query(self.sql(
-                "UPDATE workflow_status SET status = 'PENDING', lease_token = NULL, claim_after = {NOW}, \
-                 recovery_attempts = 0, completed_at = NULL, updated_at = {NOW} \
-                 WHERE workflow_uuid = ? AND status IN ('CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')",
-            ))
-            .bind(workflow_id)
-            .execute(&self.pool)
-            .await?;
+            self.cancel_if_expired_on(&mut tx, workflow_id).await?;
+            tx.commit().await?;
             Ok(())
         })
         .await
@@ -86,7 +90,7 @@ impl Store {
     ) -> Result<Option<Claimed>, Error> {
         let mut tx = self.begin().await?;
         let select_sql = self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization FROM workflow_status \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms FROM workflow_status \
              WHERE workflow_uuid = ? AND claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) {}",
             self.readable_formats(),
             vec!["?"; names.len()].join(", "),
@@ -100,6 +104,10 @@ impl Store {
             tx.commit().await?;
             return Ok(None);
         };
+        if self.cancel_if_expired_on(&mut tx, workflow_id).await? {
+            tx.commit().await?;
+            return Ok(None);
+        }
         let attempts = get_u32(&row, "recovery_attempts")? + 1;
         if attempts_exhausted(attempts, get_u32(&row, "max_recovery_attempts")?) {
             sqlx::query(self.sql(
@@ -133,6 +141,7 @@ impl Store {
             input: row.try_get("inputs")?,
             recovery_attempts: attempts,
             serialization: row.try_get("serialization")?,
+            deadline_epoch_ms: row.try_get("workflow_deadline_epoch_ms")?,
         };
         tx.commit().await?;
         Ok(Some(claimed))

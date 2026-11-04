@@ -394,7 +394,13 @@ all_dbs!(nul_in_ids_and_names_is_rejected, backend, {
         ),
         "{error:?}"
     );
-    assert!(store.list_workflows().await.unwrap().is_empty());
+    assert!(
+        store
+            .list_workflows(&dwos_core::WorkflowFilter::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let lease = start(&store, &workflow("a", LONG)).await;
     let error = store
@@ -457,7 +463,7 @@ all_dbs!(concurrent_starts_of_one_id_have_one_owner, backend, {
             let store = db.open().await;
             matches!(
                 store.start_workflow(&workflow("a", LONG)).await.unwrap(),
-                Started::Owned(_)
+                Started::Owned(_, _)
             )
         }));
     }
@@ -1204,11 +1210,21 @@ all_dbs!(read_only_connection_lists_without_writing, backend, {
     let writer = db.open().await;
     start(&writer, &workflow("a", LONG)).await;
     let reader = Store::connect_read_only(&db.url).await.unwrap();
-    let rows = reader.list_workflows().await.unwrap();
+    let rows = reader
+        .list_workflows(&dwos_core::WorkflowFilter::default())
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].workflow_id, "a");
     start(&writer, &workflow("b", LONG)).await;
-    assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
+    assert_eq!(
+        reader
+            .list_workflows(&dwos_core::WorkflowFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     if matches!(backend, Backend::Sqlite) {
         let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
             .fetch_one(writer.pool())
@@ -1221,7 +1237,14 @@ all_dbs!(read_only_connection_lists_without_writing, backend, {
         .await
         .unwrap_err();
     assert!(matches!(error, Error::Database(_)), "{error:?}");
-    assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
+    assert_eq!(
+        reader
+            .list_workflows(&dwos_core::WorkflowFilter::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 });
 
 all_dbs!(an_unknown_format_is_never_claimed, backend, {

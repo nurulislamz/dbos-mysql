@@ -48,6 +48,8 @@ pub struct NewWorkflow<'a> {
     pub lease: Duration,
     pub parent_workflow_id: Option<&'a str>,
     pub serialization: &'a str,
+    pub timeout_ms: Option<i64>,
+    pub deadline_epoch_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,11 +73,13 @@ pub struct Workflow {
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
     pub serialization: String,
+    pub timeout_ms: Option<i64>,
+    pub deadline_epoch_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Started {
-    Owned(Lease),
+    Owned(Lease, Option<i64>),
     Existing(Workflow),
 }
 
@@ -86,6 +90,7 @@ pub struct Claimed {
     pub input: String,
     pub recovery_attempts: u32,
     pub serialization: String,
+    pub deadline_epoch_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
