@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod leases;
 mod steps;
+mod workflow_management;
 mod workflows;
 
 const MAX_NAME_CHARS: usize = 255;

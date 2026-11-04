@@ -112,7 +112,7 @@ impl Engine {
     ) -> Result<StepDecision, Error> {
         let Some(saved) = self
             .store
-            .load_step(run.workflow_id(), step_id, name)
+            .load_step_owned(&run.lease, step_id, name)
             .await?
         else {
             return Ok(StepDecision::Run);

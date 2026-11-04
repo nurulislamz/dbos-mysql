@@ -2,9 +2,48 @@ use sqlx::{AnyConnection, Row};
 
 use super::{Store, check_name, get_u32, record_from_row};
 use crate::Error;
-use crate::workflow::{Lease, RecordedStep, StepRecord, check_recorded_step, check_step_name};
+use crate::workflow::{
+    Lease, RecordedStep, Status, StepRecord, check_recorded_step, check_step_name,
+};
 
 impl Store {
+    pub async fn load_step_owned(
+        &self,
+        lease: &Lease,
+        step_id: u32,
+        step_name: &str,
+    ) -> Result<Option<StepRecord>, Error> {
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            let row = sqlx::query(self.sql(&format!(
+                "SELECT status, lease_token FROM workflow_status WHERE workflow_uuid = ? {}",
+                self.dialect.lock_row()
+            )))
+            .bind(lease.workflow_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| Error::WorkflowNotFound(lease.workflow_id.clone()))?;
+            let status: String = row.try_get("status")?;
+            if Status::parse(&status)? == Status::Cancelled {
+                return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
+            }
+            let token: Option<String> = row.try_get("lease_token")?;
+            if status != "PENDING" || token.as_deref() != Some(lease.token.as_str()) {
+                return Err(Error::LeaseLost(lease.workflow_id.clone()));
+            }
+            let saved = self.read_step(&mut tx, &lease.workflow_id, step_id).await?;
+            let saved = saved
+                .map(|(name, record)| -> Result<StepRecord, Error> {
+                    check_step_name(&lease.workflow_id, step_id, step_name, name)?;
+                    Ok(record)
+                })
+                .transpose()?;
+            tx.commit().await?;
+            Ok(saved)
+        })
+        .await
+    }
+
     pub async fn load_step(
         &self,
         workflow_id: &str,

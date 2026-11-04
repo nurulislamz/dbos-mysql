@@ -90,17 +90,4 @@ impl Store {
             .await?;
         require_owner(changed, lease)
     }
-
-    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
-        self.attempt(|| async {
-            let rows = sqlx::query(
-                "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization \
-                 FROM workflow_status ORDER BY created_at, workflow_uuid",
-            )
-            .fetch_all(&self.pool)
-            .await?;
-            rows.iter().map(workflow_from_row).collect()
-        })
-        .await
-    }
 }

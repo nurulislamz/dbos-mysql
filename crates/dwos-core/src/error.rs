@@ -8,6 +8,8 @@ pub enum Error {
     Database(#[from] sqlx::Error),
     #[error("Non-existent target workflow ID: {0}")]
     WorkflowNotFound(String),
+    #[error("Workflow {0} is cancelled. Aborting function.")]
+    WorkflowCancelled(String),
     #[error(
         "workflow {workflow_id} already exists with function {recorded_name}, but {requested_name} was requested"
     )]

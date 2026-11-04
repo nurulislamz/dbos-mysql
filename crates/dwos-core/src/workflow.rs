@@ -109,6 +109,24 @@ pub enum Outcome {
     Error(String),
 }
 
+/// Filters for `list_workflows`. Queue, fork, auth and app-version fields are not stored.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WorkflowFilter {
+    pub workflow_ids: Option<Vec<String>>,
+    pub statuses: Option<Vec<Status>>,
+    pub names: Option<Vec<String>>,
+    pub parent_workflow_ids: Option<Vec<String>>,
+    pub workflow_id_prefixes: Option<Vec<String>>,
+    pub start_time_ms: Option<i64>,
+    pub end_time_ms: Option<i64>,
+    pub completed_after_ms: Option<i64>,
+    pub completed_before_ms: Option<i64>,
+    pub has_parent: Option<bool>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub sort_desc: bool,
+}
+
 /// The limit to store: `None` means no limit.
 pub fn recovery_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(UNLIMITED_RECOVERY_ATTEMPTS)

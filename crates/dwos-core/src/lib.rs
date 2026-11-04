@@ -16,6 +16,6 @@ pub use lease::{LeaseKeeper, LeaseLoss};
 pub use store::Store;
 pub use workflow::{
     Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE,
-    RecordedStep, Started, Status, StepRecord, Workflow, pickle_from_serializer, recovery_limit,
-    recovery_limit_of,
+    RecordedStep, Started, Status, StepRecord, Workflow, WorkflowFilter, pickle_from_serializer,
+    recovery_limit, recovery_limit_of,
 };

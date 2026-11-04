@@ -5,12 +5,13 @@ use std::time::Duration;
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
     Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
-    StepRecord, Workflow, new_token,
+    StepRecord, Workflow, WorkflowFilter, new_token,
 };
 use crate::{Error, Store};
 
 mod recovery;
 mod steps;
+mod workflow_management;
 
 pub use steps::{StepAttempts, StepDecision, StepPolicy};
 
@@ -284,7 +285,7 @@ impl Engine {
         let parent_id = parent.run.workflow_id();
         if let Some(saved) = self
             .store
-            .load_step(parent_id, parent.step_id, name)
+            .load_step_owned(&parent.run.lease, parent.step_id, name)
             .await?
         {
             return saved
@@ -379,8 +380,8 @@ impl Engine {
             .ok_or_else(|| Error::WorkflowNotFound(workflow_id.to_owned()))
     }
 
-    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
-        self.store.list_workflows().await
+    pub async fn list_workflows(&self, filter: &WorkflowFilter) -> Result<Vec<Workflow>, Error> {
+        self.store.list_workflows(filter).await
     }
 
     pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
