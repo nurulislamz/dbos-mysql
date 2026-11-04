@@ -8,7 +8,7 @@ from tests.chaos.harness import ALL_FAULTS, ChaosConfig, run_chaos
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the crash test gate")
-    parser.add_argument("--backend", choices=["sqlite", "mysql"], required=True)
+    parser.add_argument("--backend", choices=["sqlite", "mysql", "postgres"], required=True)
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--seed", type=int, default=None, help="Run one seed, to reproduce a failure")
     parser.add_argument("--workflows", type=int, default=1000)

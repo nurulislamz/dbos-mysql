@@ -12,10 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pymysql
 
 REPO = Path(__file__).resolve().parents[2]
 MYSQL_PORT = int(os.environ.get("DBOS_CHAOS_DB_PORT", "13308"))
+POSTGRES_PORT = int(os.environ.get("DBOS_CHAOS_PG_PORT", "13310"))
 MYSQL_PASSWORD = "dbos-test-root"
 COMPOSE_PROJECT = "rust-dwos-chaos"
 ALL_FAULTS = ("kill", "pause", "term", "crash_window", "db_restart")
@@ -58,6 +60,16 @@ class _Target:
                 connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INTEGER, pid INTEGER, started_at_ms INTEGER)")
                 connection.execute("CREATE TABLE answers (workflow_id TEXT, answer TEXT)")
             return
+        if self.backend == "postgres":
+            self.url = f"postgres://postgres:{MYSQL_PASSWORD}@127.0.0.1:{POSTGRES_PORT}/{self._name}"
+            self.ledger = f"127.0.0.1:{POSTGRES_PORT}:postgres:{MYSQL_PASSWORD}:{self._name}"
+            with self._postgres() as connection:
+                connection.execute(f"CREATE DATABASE {self._name}")
+            with self._postgres(self._name) as connection:
+                connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INT, pid INT, started_at_ms BIGINT)")
+                connection.execute("CREATE INDEX ON ledger (workflow_id, step_id)")
+                connection.execute("CREATE TABLE answers (workflow_id TEXT, answer TEXT)")
+            return
         self.url = f"mysql://root:{MYSQL_PASSWORD}@127.0.0.1:{MYSQL_PORT}/{self._name}"
         self.ledger = f"127.0.0.1:{MYSQL_PORT}:root:{MYSQL_PASSWORD}:{self._name}"
         with self._admin() as connection, connection.cursor() as cursor:
@@ -65,6 +77,9 @@ class _Target:
             cursor.execute(f"USE {self._name}")
             cursor.execute("CREATE TABLE ledger (workflow_id VARCHAR(255), step_id INT, pid INT, started_at_ms BIGINT, KEY (workflow_id, step_id))")
             cursor.execute("CREATE TABLE answers (workflow_id VARCHAR(255), answer LONGTEXT)")
+
+    def _postgres(self, database: str = "postgres") -> psycopg.Connection:
+        return psycopg.connect(host="127.0.0.1", port=POSTGRES_PORT, user="postgres", password=MYSQL_PASSWORD, dbname=database, autocommit=True, connect_timeout=5)
 
     def _admin(self) -> pymysql.Connection:
         return pymysql.connect(host="127.0.0.1", port=MYSQL_PORT, user="root", password=MYSQL_PASSWORD, autocommit=True, connect_timeout=5)
@@ -75,6 +90,9 @@ class _Target:
             code = "import json, sqlite3, sys; print(json.dumps(sqlite3.connect(sys.argv[1], timeout=30).execute(sys.argv[2]).fetchall()))"
             output = subprocess.run([sys.executable, "-c", code, path, sql], capture_output=True, text=True, check=True).stdout
             return [tuple(row) for row in json.loads(output)]
+        if self.backend == "postgres":
+            with self._postgres(self._name) as connection:
+                return list(connection.execute(sql).fetchall())
         with self._admin() as connection, connection.cursor() as cursor:
             cursor.execute(f"USE {self._name}")
             cursor.execute(sql)
@@ -83,6 +101,10 @@ class _Target:
     def open_transactions(self) -> int:
         if self.backend == "sqlite":
             return 0
+        if self.backend == "postgres":
+            with self._postgres() as connection:
+                row = connection.execute("SELECT COUNT(*) FROM pg_stat_activity WHERE datname = %s AND xact_start IS NOT NULL", (self._name,)).fetchone()
+                return row[0]
         with self._admin() as connection, connection.cursor() as cursor:
             cursor.execute(
                 "SELECT COUNT(*) FROM information_schema.innodb_trx t "
@@ -95,11 +117,14 @@ class _Target:
         if self.backend == "mysql":
             with self._admin() as connection, connection.cursor() as cursor:
                 cursor.execute(f"DROP DATABASE IF EXISTS {self._name}")
+        elif self.backend == "postgres":
+            with self._postgres() as connection:
+                connection.execute(f"DROP DATABASE IF EXISTS {self._name} WITH (FORCE)")
 
 
-def _restart_database() -> None:
-    environment = {**os.environ, "DBOS_TEST_DB_PORT": str(MYSQL_PORT)}
-    subprocess.run(["docker", "compose", "-p", COMPOSE_PROJECT, "-f", str(REPO / "compose.yml"), "restart", "mysql"], check=True, capture_output=True, env=environment, timeout=120)
+def _restart_database(service: str) -> None:
+    environment = {**os.environ, "DBOS_TEST_DB_PORT": str(MYSQL_PORT), "DBOS_TEST_PG_PORT": str(POSTGRES_PORT)}
+    subprocess.run(["docker", "compose", "-p", COMPOSE_PROJECT, "-f", str(REPO / "compose.yml"), "restart", service], check=True, capture_output=True, env=environment, timeout=120)
 
 
 class _Workers:
@@ -141,9 +166,9 @@ class _Workers:
 
 def _inject(fault: str, workers: _Workers, config: ChaosConfig, rng: random.Random) -> bool:
     if fault == "db_restart":
-        if config.backend != "mysql":
+        if config.backend == "sqlite":
             return False
-        _restart_database()
+        _restart_database(config.backend)
         return True
     alive = [index for index, process in workers.processes.items() if process.poll() is None]
     if not alive:
@@ -230,7 +255,7 @@ def run_chaos(config: ChaosConfig) -> ChaosResult:
     with tempfile.TemporaryDirectory(prefix="dbos-chaos-") as directory:
         target = _Target(config, Path(directory))
         workers = _Workers(config, target, Path(directory) / "workers.log", rng)
-        injectable = [fault for fault in config.faults if fault != "crash_window" and (fault != "db_restart" or config.backend == "mysql")]
+        injectable = [fault for fault in config.faults if fault != "crash_window" and (fault != "db_restart" or config.backend != "sqlite")]
         passed = False
         try:
             for index in range(config.workers):

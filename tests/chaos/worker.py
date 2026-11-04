@@ -8,6 +8,7 @@ import sys
 import time
 from typing import Any
 
+import psycopg
 import pymysql
 
 from rust_dwos import DBOS, DBOSConfig, DBOSException, SetWorkflowID
@@ -22,8 +23,10 @@ STEPS = 3
 random.seed(os.getpid())
 
 
-def _mysql_ledger() -> pymysql.Connection:
+def _ledger() -> pymysql.Connection | psycopg.Connection:
     host, port, user, password, database = LEDGER.split(":")
+    if URL.startswith("postgres"):
+        return psycopg.connect(host=host, port=int(port), user=user, password=password, dbname=database, autocommit=True, connect_timeout=5)
     return pymysql.connect(host=host, port=int(port), user=user, password=password, database=database, autocommit=True, connect_timeout=5)
 
 
@@ -31,14 +34,14 @@ def _write_answer(workflow_id: str, answer: dict[str, Any]) -> None:
     text = json.dumps(answer)
     while True:
         try:
-            if URL.startswith("mysql"):
-                with _mysql_ledger() as connection, connection.cursor() as cursor:
+            if not URL.startswith("sqlite"):
+                with _ledger() as connection, connection.cursor() as cursor:
                     cursor.execute("INSERT INTO answers (workflow_id, answer) VALUES (%s, %s)", (workflow_id, text))
             else:
                 with sqlite3.connect(LEDGER, timeout=30) as connection:
                     connection.execute("INSERT INTO answers (workflow_id, answer) VALUES (?, ?)", (workflow_id, text))
             return
-        except (pymysql.Error, sqlite3.Error):
+        except (pymysql.Error, psycopg.Error, sqlite3.Error):
             time.sleep(0.2)
 
 
@@ -46,13 +49,10 @@ def _write_ledger(workflow_id: str, step_id: int) -> None:
     pid = os.getpid()
     while True:
         try:
-            if URL.startswith("mysql"):
-                with _mysql_ledger() as connection, connection.cursor() as cursor:
-                    cursor.execute(
-                        "INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms) "
-                        "VALUES (%s, %s, %s, CAST(UNIX_TIMESTAMP(UTC_TIMESTAMP(6)) * 1000 AS SIGNED))",
-                        (workflow_id, step_id, pid),
-                    )
+            if not URL.startswith("sqlite"):
+                now = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT" if URL.startswith("postgres") else "CAST(UNIX_TIMESTAMP(UTC_TIMESTAMP(6)) * 1000 AS SIGNED)"
+                with _ledger() as connection, connection.cursor() as cursor:
+                    cursor.execute(f"INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms) VALUES (%s, %s, %s, {now})", (workflow_id, step_id, pid))  # noqa: S608
             else:
                 with sqlite3.connect(LEDGER, timeout=30) as connection:
                     connection.execute(
@@ -60,7 +60,7 @@ def _write_ledger(workflow_id: str, step_id: int) -> None:
                         (workflow_id, step_id, pid, int(time.time() * 1000)),
                     )
             return
-        except (pymysql.Error, sqlite3.Error):
+        except (pymysql.Error, psycopg.Error, sqlite3.Error):
             time.sleep(0.2)
 
 

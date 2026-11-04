@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pymysql
 import pytest
 
@@ -16,10 +17,15 @@ from rust_dwos import DBOS, DBOSConfig
 
 MYSQL_PORT = int(os.environ.get("DBOS_TEST_DB_PORT", "13307"))
 MYSQL_PASSWORD = "dbos-test-root"
+POSTGRES_PORT = int(os.environ.get("DBOS_TEST_PG_PORT", "13309"))
 
 
 def _mysql_connection(database: str | None = None) -> pymysql.Connection:
     return pymysql.connect(host="127.0.0.1", port=MYSQL_PORT, user="root", password=MYSQL_PASSWORD, database=database, autocommit=True)
+
+
+def _postgres_connection(database: str = "postgres") -> psycopg.Connection:
+    return psycopg.connect(host="127.0.0.1", port=POSTGRES_PORT, user="postgres", password=MYSQL_PASSWORD, dbname=database, autocommit=True)
 
 
 _SQLITE_SCRIPT = """
@@ -49,21 +55,30 @@ class Database:
     def __init__(self, backend: str, tmp_path: Path) -> None:
         self.backend = backend
         self._path = tmp_path / "test.sqlite"
-        self._mysql_name = f"dbos_t_{uuid.uuid4().hex}"
+        self._name = f"dbos_t_{uuid.uuid4().hex}"
         if backend == "mysql":
             with _mysql_connection() as connection, connection.cursor() as cursor:
-                cursor.execute(f"CREATE DATABASE {self._mysql_name}")
+                cursor.execute(f"CREATE DATABASE {self._name}")
+        elif backend == "postgres":
+            with _postgres_connection() as connection:
+                connection.execute(f"CREATE DATABASE {self._name}")
 
     @property
     def url(self) -> str:
         if self.backend == "sqlite":
             return f"sqlite://{self._path}"
-        return f"mysql://root:{MYSQL_PASSWORD}@127.0.0.1:{MYSQL_PORT}/{self._mysql_name}"
+        if self.backend == "postgres":
+            return f"postgres://postgres:{MYSQL_PASSWORD}@127.0.0.1:{POSTGRES_PORT}/{self._name}"
+        return f"mysql://root:{MYSQL_PASSWORD}@127.0.0.1:{MYSQL_PORT}/{self._name}"
 
     def execute(self, sql: str, *params: Any) -> list[tuple[Any, ...]]:
         if self.backend == "sqlite":
             return _sqlite_in_subprocess(self._path, sql.replace("%s", "?"), params)
-        with _mysql_connection(self._mysql_name) as connection, connection.cursor() as cursor:
+        if self.backend == "postgres":
+            with _postgres_connection(self._name) as connection, connection.cursor() as cursor:
+                cursor.execute(sql, params or None)
+                return list(cursor.fetchall()) if cursor.description else []
+        with _mysql_connection(self._name) as connection, connection.cursor() as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
 
@@ -90,10 +105,13 @@ class Database:
     def drop(self) -> None:
         if self.backend == "mysql":
             with _mysql_connection() as connection, connection.cursor() as cursor:
-                cursor.execute(f"DROP DATABASE IF EXISTS {self._mysql_name}")
+                cursor.execute(f"DROP DATABASE IF EXISTS {self._name}")
+        elif self.backend == "postgres":
+            with _postgres_connection() as connection:
+                connection.execute(f"DROP DATABASE IF EXISTS {self._name} WITH (FORCE)")
 
 
-@pytest.fixture(params=["sqlite", "mysql"])
+@pytest.fixture(params=["sqlite", "mysql", "postgres"])
 def database(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Database]:
     db = Database(request.param, tmp_path)
     yield db
