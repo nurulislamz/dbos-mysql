@@ -39,6 +39,20 @@ The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRES
 
 A step that charges a card or sends email still needs an idempotency key at that service. `DBOS.workflow_id` and `DBOS.step_id` give a stable key.
 
+## What can be stored
+
+Values are stored as JSON, not pickle, so a database row can never run code. Annotate your functions to keep rich types, for example `-> Order` or `tuple[int, str]`.
+
+| Value | Result |
+|---|---|
+| `NaN`, `Infinity`, non-UTF-8 `bytes`, arbitrary class instances | `TypeError`, nothing is stored |
+| `tuple` or `set` with no annotation | Comes back as `list` |
+| `datetime`, `UUID`, `Decimal`, `bytes` with no annotation | Comes back as `str` |
+| Dataclass or Pydantic model with no annotation | Comes back as `dict` |
+| Non-string dict keys with no annotation | Come back as strings |
+| Exception attributes that are not JSON, and `__cause__` | Dropped |
+| Exception whose class is not loaded in the process | Comes back as `DBOSRecordedError` |
+
 ## Try it
 
 There is no release yet. You need Rust, [uv](https://docs.astral.sh/uv/), and Python 3.14. The install name is `rust-dwos`, the import is `rust_dwos`, and the class is `DBOS`.
