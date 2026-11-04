@@ -77,7 +77,7 @@ class Database:
     def plant_step(self, workflow_id: str, step_id: int, step_name: str) -> None:
         """Record a step behind the running workflow's back, as another writer would."""
         self.execute(
-            "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES (%s, %s, %s, 'py_pickle', 0)",
+            "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES (%s, %s, %s, 'portable_json', 0)",
             workflow_id,
             step_id,
             step_name,

@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::Error;
 
 pub const DEFAULT_MAX_RECOVERY_ATTEMPTS: u32 = 100;
-pub const SERIALIZATION: &str = "py_pickle";
+pub const SERIALIZATION: &str = "portable_json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {

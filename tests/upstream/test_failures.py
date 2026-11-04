@@ -36,10 +36,17 @@ def test_error_serialization() -> None:
     assert loaded.step_name == "step"
     assert isinstance(loaded.errors[0], ValueError)
 
-    recorded = decode_exception(encode_exception(BadException(1, 2)))
+    custom = decode_exception(encode_exception(BadException(1, 2)))
+    assert isinstance(custom, BadException)
+    assert str(custom) == "Message: 1, 2"
+
+    class NotLoadable(Exception):
+        pass
+
+    recorded = decode_exception(encode_exception(NotLoadable("gone")))
     assert isinstance(recorded, DBOSRecordedError)
-    assert recorded.type_name == "BadException"
-    assert str(recorded) == "Message: 1, 2"
+    assert recorded.type_name.endswith("NotLoadable")
+    assert str(recorded) == "gone"
 
 
 def test_dead_letter_queue(dbos: DBOS, database: Database) -> None:

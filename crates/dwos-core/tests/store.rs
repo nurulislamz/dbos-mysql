@@ -659,12 +659,12 @@ mod mysql_only {
             .await
             .unwrap();
         sqlx::raw_sql("BEGIN").execute(&mut blocker).await.unwrap();
-        sqlx::raw_sql("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('a', 1, 'blocker', 'py_pickle', 0)")
+        sqlx::raw_sql("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('a', 1, 'blocker', 'portable_json', 0)")
             .execute(&mut blocker)
             .await
             .unwrap();
         for index in 0..200 {
-            sqlx::query("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('weight', ?, 'w', 'py_pickle', 0)")
+            sqlx::query("INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, serialization, completed_at_epoch_ms) VALUES ('weight', ?, 'w', 'portable_json', 0)")
                 .bind(index)
                 .execute(&mut blocker)
                 .await

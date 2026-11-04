@@ -1,7 +1,5 @@
-import base64
 import json
 import os
-import pickle
 import random
 import signal
 import sqlite3
@@ -194,8 +192,8 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
         elif status != "SUCCESS":
             violations.append(f"{workflow_id} ended as {status}")
             continue
-        expected = [_unpickle(saved[(workflow_id, step_id)][0]) for step_id in range(1, STEPS + 1) if (workflow_id, step_id) in saved]
-        stored = _unpickle(output)
+        expected = [json.loads(saved[(workflow_id, step_id)][0]) for step_id in range(1, STEPS + 1) if (workflow_id, step_id) in saved]
+        stored = json.loads(output)
         if status == "SUCCESS" and stored["steps"] != expected:
             violations.append(f"{workflow_id} returned {stored}, but its saved steps are {expected}")
         for answer in answers.get(workflow_id, []):
@@ -206,7 +204,7 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
             if row is None:
                 violations.append(f"{workflow_id} has no saved step {step_id}")
                 continue
-            if not _unpickle(row[0]).startswith(f"{workflow_id}:{step_id}:"):
+            if not json.loads(row[0]).startswith(f"{workflow_id}:{step_id}:"):
                 violations.append(f"{workflow_id} step {step_id} saved {row[0]}")
             runs = executions.get((workflow_id, step_id), [])
             if not runs:
@@ -223,10 +221,6 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
     open_transactions = target.open_transactions()
     if open_transactions:
         violations.append(f"{open_transactions} transactions left open")
-
-
-def _unpickle(text: str) -> Any:
-    return pickle.loads(base64.b64decode(text))  # noqa: S301
 
 
 def run_chaos(config: ChaosConfig) -> ChaosResult:
