@@ -18,74 +18,6 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::workflow::PORTABLE_JSON;
-
-    #[tokio::test]
-    async fn committed_claim_retry_preserves_fifo_and_attempts() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::connect(&format!(
-            "sqlite://{}",
-            directory.path().join("test.sqlite").display()
-        ))
-        .await
-        .unwrap();
-        store.migrate().await.unwrap();
-        store
-            .ensure_queue("q", NonZeroU32::new(2).unwrap())
-            .await
-            .unwrap();
-        for id in ["z", "a"] {
-            store
-                .enqueue_workflow(
-                    "q",
-                    &NewWorkflow {
-                        workflow_id: id,
-                        name: "wf",
-                        input: "{}",
-                        max_recovery_attempts: 0,
-                        lease: Duration::ZERO,
-                        parent_workflow_id: None,
-                        serialization: PORTABLE_JSON,
-                        timeout_ms: None,
-                        deadline_epoch_ms: None,
-                    },
-                )
-                .await
-                .unwrap();
-        }
-        let request = new_token();
-        let names = vec!["wf".to_owned()];
-        let duration = Duration::from_secs(60);
-        let committed = store
-            .claim_queue_once("q", &names, 2, duration, &request, false)
-            .await
-            .unwrap();
-        let replayed = store
-            .claim_queue_once("q", &names, 2, duration, &request, true)
-            .await
-            .unwrap();
-        assert_eq!(
-            committed
-                .iter()
-                .map(|claim| claim.lease.workflow_id.as_str())
-                .collect::<Vec<_>>(),
-            ["z", "a"]
-        );
-        assert_eq!(replayed, committed);
-        assert!(replayed.iter().all(|claim| claim.recovery_attempts == 1));
-        assert!(
-            store
-                .claim_queue("q", &names, 2, duration)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-}
-
 impl Store {
     pub async fn ensure_queue(&self, name: &str, concurrency: NonZeroU32) -> Result<(), Error> {
         check_queue_name(name)?;
@@ -342,5 +274,73 @@ impl Store {
         }
         tx.commit().await?;
         Ok(claimed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::PORTABLE_JSON;
+
+    #[tokio::test]
+    async fn committed_claim_retry_preserves_fifo_and_attempts() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::connect(&format!(
+            "sqlite://{}",
+            directory.path().join("test.sqlite").display()
+        ))
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        store
+            .ensure_queue("q", NonZeroU32::new(2).unwrap())
+            .await
+            .unwrap();
+        for id in ["z", "a"] {
+            store
+                .enqueue_workflow(
+                    "q",
+                    &NewWorkflow {
+                        workflow_id: id,
+                        name: "wf",
+                        input: "{}",
+                        max_recovery_attempts: 0,
+                        lease: Duration::ZERO,
+                        parent_workflow_id: None,
+                        serialization: PORTABLE_JSON,
+                        timeout_ms: None,
+                        deadline_epoch_ms: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let request = new_token();
+        let names = vec!["wf".to_owned()];
+        let duration = Duration::from_secs(60);
+        let committed = store
+            .claim_queue_once("q", &names, 2, duration, &request, false)
+            .await
+            .unwrap();
+        let replayed = store
+            .claim_queue_once("q", &names, 2, duration, &request, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            committed
+                .iter()
+                .map(|claim| claim.lease.workflow_id.as_str())
+                .collect::<Vec<_>>(),
+            ["z", "a"]
+        );
+        assert_eq!(replayed, committed);
+        assert!(replayed.iter().all(|claim| claim.recovery_attempts == 1));
+        assert!(
+            store
+                .claim_queue("q", &names, 2, duration)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
