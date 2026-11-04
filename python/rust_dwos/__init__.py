@@ -1,4 +1,4 @@
-from rust_dwos._native import Store, StoreError, connect
+from rust_dwos._native import StoreError
 from rust_dwos.dbos import (
     DBOS,
     DBOSConfig,
@@ -37,11 +37,9 @@ __all__ = [
     "MaxRecoveryAttemptsExceededError",
     "SetWorkflowID",
     "StepStatus",
-    "Store",
     "StoreError",
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowStatus",
     "WorkflowStatusString",
-    "connect",
 ]

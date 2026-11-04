@@ -9,8 +9,8 @@ CREATE TABLE IF NOT EXISTS workflow_status (
     serialization         VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     claim_after           BIGINT       NULL,
     lease_token           CHAR(36)     CHARACTER SET ascii COLLATE ascii_bin NULL,
-    recovery_attempts     INT UNSIGNED NOT NULL DEFAULT 1,
-    max_recovery_attempts INT UNSIGNED NOT NULL,
+    recovery_attempts     BIGINT       NOT NULL DEFAULT 1,
+    max_recovery_attempts BIGINT       NOT NULL,
     created_at            BIGINT       NOT NULL,
     updated_at            BIGINT       NOT NULL,
     completed_at          BIGINT       NULL,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS workflow_status (
 
 CREATE TABLE IF NOT EXISTS operation_outputs (
     workflow_uuid         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
-    function_id           INT UNSIGNED NOT NULL,
+    function_id           BIGINT       NOT NULL,
     function_name         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,

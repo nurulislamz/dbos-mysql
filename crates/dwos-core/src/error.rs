@@ -1,6 +1,6 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("unsupported database URL scheme, expected mysql:// or sqlite://")]
+    #[error("unsupported database URL scheme, expected postgres://, mysql:// or sqlite://")]
     UnsupportedUrl,
     #[error("invalid database URL")]
     InvalidUrl,

@@ -4,7 +4,7 @@ use std::time::Duration;
 use dwos_core::{
     ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Engine, EngineConfig, Error,
     FinalOutcome, Finished, Outcome, ParentStep, RecordedStep, Run, StepDecision, StepPolicy,
-    Store, Workflow, WorkflowResult,
+    Workflow, WorkflowResult,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -488,70 +488,6 @@ impl PyEngine {
     }
 }
 
-#[pyclass(name = "Store", frozen)]
-struct PyStore(Store);
-
-#[pymethods]
-impl PyStore {
-    #[getter]
-    fn backend(&self) -> &'static str {
-        self.0.backend()
-    }
-
-    fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(py, async move { store.ping().await.map_err(to_py) })
-    }
-
-    fn session_settings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(
-            py,
-            async move { store.session_settings().await.map_err(to_py) },
-        )
-    }
-
-    fn spike_reset<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(py, async move { store.spike_reset().await.map_err(to_py) })
-    }
-
-    fn spike_hold_transaction<'py>(
-        &self,
-        py: Python<'py>,
-        seconds: f64,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(py, async move {
-            store.spike_hold_transaction(seconds).await.map_err(to_py)
-        })
-    }
-
-    fn spike_rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(py, async move { store.spike_rows().await.map_err(to_py) })
-    }
-
-    fn spike_open_transactions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let store = self.0.clone();
-        future_into_py(py, async move {
-            store.spike_open_transactions().await.map_err(to_py)
-        })
-    }
-
-    fn connections_in_use(&self) -> u32 {
-        self.0.connections_in_use()
-    }
-}
-
-#[pyfunction]
-fn connect(py: Python<'_>, url: String) -> PyResult<Bound<'_, PyAny>> {
-    future_into_py(py, async move {
-        let store = Store::connect(&url).await.map_err(to_py)?;
-        Ok(PyStore(store))
-    })
-}
-
 #[pyfunction]
 fn silence_logs() {
     log::set_max_level(log::LevelFilter::Off);
@@ -563,10 +499,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::Logger::new(py, pyo3_log::Caching::Loggers)?
         .install()
         .ok();
-    m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(silence_logs, m)?)?;
     m.add_class::<PyEngine>()?;
-    m.add_class::<PyStore>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyStep>()?;
