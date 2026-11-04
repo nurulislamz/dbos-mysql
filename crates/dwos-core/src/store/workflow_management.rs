@@ -78,8 +78,14 @@ impl Store {
         if names.is_empty() {
             return Ok(None);
         }
-        self.attempt(|| self.claim_one_once(workflow_id, names, duration))
-            .await
+        let request_token = new_token();
+        let mut retry = false;
+        self.attempt(|| {
+            let replay = retry;
+            retry = true;
+            self.claim_one_once(workflow_id, names, duration, &request_token, replay)
+        })
+        .await
     }
 
     async fn claim_one_once(
@@ -87,8 +93,18 @@ impl Store {
         workflow_id: &str,
         names: &[String],
         duration: Duration,
+        request_token: &str,
+        retry: bool,
     ) -> Result<Option<Claimed>, Error> {
         let mut tx = self.begin().await?;
+        if retry
+            && let Some(claimed) = self
+                .replay_claim_request(&mut tx, request_token, duration)
+                .await?
+        {
+            tx.commit().await?;
+            return Ok(claimed.into_iter().next());
+        }
         let select_sql = self.sql(&format!(
             "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms FROM workflow_status \
              WHERE workflow_uuid = ? AND claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) {}",
@@ -108,7 +124,7 @@ impl Store {
             tx.commit().await?;
             return Ok(None);
         }
-        let attempts = get_u32(&row, "recovery_attempts")? + 1;
+        let attempts = get_u32(&row, "recovery_attempts")?.saturating_add(1);
         if attempts_exhausted(attempts, get_u32(&row, "max_recovery_attempts")?) {
             sqlx::query(self.sql(
                 "UPDATE workflow_status SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
@@ -121,12 +137,11 @@ impl Store {
             tx.commit().await?;
             return Ok(None);
         }
-        let token = new_token();
         sqlx::query(self.sql(
             "UPDATE workflow_status SET lease_token = ?, recovery_attempts = ?, \
              claim_after = {NOW} + ?, updated_at = {NOW} WHERE workflow_uuid = ?",
         ))
-        .bind(token.as_str())
+        .bind(request_token)
         .bind(i64::from(attempts))
         .bind(millis(duration))
         .bind(workflow_id)
@@ -135,7 +150,7 @@ impl Store {
         let claimed = Claimed {
             lease: Lease {
                 workflow_id: workflow_id.to_owned(),
-                token,
+                token: request_token.to_owned(),
             },
             name: row.try_get("name")?,
             input: row.try_get("inputs")?,
@@ -256,5 +271,61 @@ impl Store {
 
         let rows = query.fetch_all(&self.pool).await?;
         rows.iter().map(workflow_from_row).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::{NewWorkflow, PORTABLE_JSON};
+
+    #[tokio::test]
+    async fn direct_claim_retries_a_committed_request_without_spending_attempts() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::connect(&format!(
+            "sqlite://{}",
+            directory.path().join("test.sqlite").display()
+        ))
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        store
+            .start_workflow(&NewWorkflow {
+                workflow_id: "a",
+                name: "wf",
+                input: "{}",
+                max_recovery_attempts: 1,
+                lease: Duration::ZERO,
+                parent_workflow_id: None,
+                serialization: PORTABLE_JSON,
+                timeout_ms: None,
+                deadline_epoch_ms: None,
+            })
+            .await
+            .unwrap();
+        let names = vec!["wf".to_owned()];
+        let request = new_token();
+        let duration = Duration::from_secs(60);
+        let committed = store
+            .claim_one_once("a", &names, duration, &request, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let replayed = store
+            .claim_one_once("a", &names, duration, &request, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replayed, committed);
+        assert_eq!(replayed.recovery_attempts, 2);
+        assert_eq!(
+            store
+                .get_workflow("a")
+                .await
+                .unwrap()
+                .unwrap()
+                .recovery_attempts,
+            2
+        );
     }
 }

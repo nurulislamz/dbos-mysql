@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sqlx::Row;
+use sqlx::{Any, Row, Transaction};
 
 use super::{Store, get_u32, millis, require_owner};
 use crate::Error;
@@ -68,8 +68,14 @@ impl Store {
         if names.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        self.attempt(|| self.reclaim_once(names, limit, duration))
-            .await
+        let request_token = new_token();
+        let mut retry = false;
+        self.attempt(|| {
+            let replay = retry;
+            retry = true;
+            self.reclaim_once(names, limit, duration, &request_token, replay)
+        })
+        .await
     }
 
     async fn reclaim_once(
@@ -77,8 +83,18 @@ impl Store {
         names: &[String],
         limit: u32,
         duration: Duration,
+        request_token: &str,
+        retry: bool,
     ) -> Result<Vec<Claimed>, Error> {
         let mut tx = self.begin().await?;
+        if retry
+            && let Some(claimed) = self
+                .replay_claim_request(&mut tx, request_token, duration)
+                .await?
+        {
+            tx.commit().await?;
+            return Ok(claimed);
+        }
         let select_sql = self.sql(&format!(
             "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms, {{NOW}} AS now_ms FROM workflow_status \
              WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) \
@@ -108,7 +124,7 @@ impl Store {
                 .await?;
                 continue;
             }
-            let attempts = get_u32(&row, "recovery_attempts")? + 1;
+            let attempts = get_u32(&row, "recovery_attempts")?.saturating_add(1);
             if attempts_exhausted(attempts, get_u32(&row, "max_recovery_attempts")?) {
                 sqlx::query(self.sql(
                     "UPDATE workflow_status SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
@@ -120,19 +136,21 @@ impl Store {
                 .await?;
                 continue;
             }
-            let token = new_token();
             sqlx::query(self.sql(
                 "UPDATE workflow_status SET lease_token = ?, recovery_attempts = ?, \
                  claim_after = {NOW} + ?, updated_at = {NOW} WHERE workflow_uuid = ?",
             ))
-            .bind(token.as_str())
+            .bind(request_token)
             .bind(i64::from(attempts))
             .bind(millis(duration))
             .bind(workflow_id.as_str())
             .execute(&mut *tx)
             .await?;
             claimed.push(Claimed {
-                lease: Lease { workflow_id, token },
+                lease: Lease {
+                    workflow_id,
+                    token: request_token.to_owned(),
+                },
                 name: row.try_get("name")?,
                 input: row.try_get("inputs")?,
                 recovery_attempts: attempts,
@@ -144,11 +162,153 @@ impl Store {
         Ok(claimed)
     }
 
+    pub(super) async fn replay_claim_request(
+        &self,
+        tx: &mut Transaction<'static, Any>,
+        request_token: &str,
+        duration: Duration,
+    ) -> Result<Option<Vec<Claimed>>, Error> {
+        let rows = sqlx::query(self.sql(&format!(
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, serialization, \
+             (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms \
+             FROM workflow_status WHERE lease_token = ? AND status = 'PENDING' ORDER BY workflow_uuid {}",
+            self.dialect.lock_row(),
+        )))
+        .bind(request_token)
+        .fetch_all(&mut **tx)
+        .await?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let mut claimed = Vec::with_capacity(rows.len());
+        for row in rows {
+            let workflow_id: String = row.try_get("workflow_uuid")?;
+            if self.cancel_if_expired_on(tx, &workflow_id).await? {
+                continue;
+            }
+            sqlx::query(self.sql(
+                "UPDATE workflow_status SET claim_after = {NOW} + ?, updated_at = {NOW} \
+                 WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'",
+            ))
+            .bind(millis(duration))
+            .bind(workflow_id.as_str())
+            .bind(request_token)
+            .execute(&mut **tx)
+            .await?;
+            claimed.push(Claimed {
+                lease: Lease {
+                    workflow_id,
+                    token: request_token.to_owned(),
+                },
+                name: row.try_get("name")?,
+                input: row.try_get("inputs")?,
+                recovery_attempts: get_u32(&row, "recovery_attempts")?,
+                serialization: row.try_get("serialization")?,
+                deadline_epoch_ms: row.try_get("workflow_deadline_epoch_ms")?,
+            });
+        }
+        Ok(Some(claimed))
+    }
+
     pub fn keep_lease(&self, lease: Lease, duration: Duration, max_run: Duration) -> LeaseKeeper {
         let store = self.clone();
         LeaseKeeper::spawn(duration, max_run, move || {
             let (store, lease) = (store.clone(), lease.clone());
             async move { store.renew_lease(&lease, duration).await }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workflow::{NewWorkflow, PORTABLE_JSON, Status};
+
+    async fn pending(store: &Store, id: &str) {
+        store
+            .start_workflow(&NewWorkflow {
+                workflow_id: id,
+                name: "wf",
+                input: "{}",
+                max_recovery_attempts: 1,
+                lease: Duration::ZERO,
+                parent_workflow_id: None,
+                serialization: PORTABLE_JSON,
+                timeout_ms: None,
+                deadline_epoch_ms: None,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reclaim_retries_a_committed_request_without_spending_attempts() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::connect(&format!(
+            "sqlite://{}",
+            directory.path().join("test.sqlite").display()
+        ))
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        for id in ["a", "b"] {
+            pending(&store, id).await;
+        }
+        let names = vec!["wf".to_owned()];
+        let request = new_token();
+        let duration = Duration::from_secs(60);
+        let committed = store
+            .reclaim_once(&names, 2, duration, &request, false)
+            .await
+            .unwrap();
+        assert_eq!(committed.len(), 2);
+        // The caller lost the commit acknowledgement and retries the same request.
+        let replayed = store
+            .reclaim_once(&names, 2, duration, &request, true)
+            .await
+            .unwrap();
+        assert_eq!(replayed, committed);
+        for id in ["a", "b"] {
+            let row = store.get_workflow(id).await.unwrap().unwrap();
+            assert_eq!(row.recovery_attempts, 2);
+            assert_eq!(row.status, Status::Pending);
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_does_not_resurrect_replaced_request_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::connect(&format!(
+            "sqlite://{}",
+            directory.path().join("test.sqlite").display()
+        ))
+        .await
+        .unwrap();
+        store.migrate().await.unwrap();
+        pending(&store, "a").await;
+        let names = vec!["wf".to_owned()];
+        let request = new_token();
+        let committed = store
+            .reclaim_once(&names, 1, Duration::ZERO, &request, false)
+            .await
+            .unwrap();
+        store.release_lease(&committed[0].lease).await.unwrap();
+        let current = store
+            .reclaim(&names, 1, Duration::from_secs(60))
+            .await
+            .unwrap();
+        assert_eq!(current.len(), 1);
+        assert_ne!(current[0].lease.token, request);
+        assert!(
+            store
+                .reclaim_once(&names, 1, Duration::from_secs(60), &request, true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        store
+            .renew_lease(&current[0].lease, Duration::from_secs(60))
+            .await
+            .unwrap();
     }
 }
