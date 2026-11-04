@@ -51,8 +51,9 @@ impl LeaseKeeper {
                     notify.send_replace(Some(LeaseLoss::MaxRunExceeded));
                     return;
                 }
+                let requested_at = Instant::now();
                 match timeout_at(last_renewed + usable, renew()).await {
-                    Ok(Ok(())) => last_renewed = Instant::now(),
+                    Ok(Ok(())) => last_renewed = requested_at,
                     Ok(Err(Error::LeaseLost(_))) => {
                         notify.send_replace(Some(LeaseLoss::TakenOver));
                         return;
@@ -174,6 +175,36 @@ mod tests {
     async fn a_hung_renewal_loses_the_lease() {
         let keeper = LeaseKeeper::spawn(LEASE, LONG, std::future::pending);
         assert_eq!(lost(&keeper).await, LeaseLoss::Unrenewable);
+    }
+
+    #[tokio::test]
+    async fn a_slow_ack_does_not_extend_the_renewed_lease() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let second_request = Arc::new(tokio::sync::Notify::new());
+        let entered = second_request.clone();
+        let lease = Duration::from_millis(1200);
+        let keeper = LeaseKeeper::spawn(lease, LONG, move || {
+            let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+            let entered = entered.clone();
+            async move {
+                if first {
+                    sleep(Duration::from_millis(450)).await;
+                    Ok(())
+                } else {
+                    entered.notify_one();
+                    std::future::pending().await
+                }
+            }
+        });
+        tokio::time::timeout(WAIT, second_request.notified())
+            .await
+            .expect("a second renewal should start");
+        assert_eq!(
+            tokio::time::timeout(lease / 3, keeper.lost())
+                .await
+                .expect("the lease lifetime starts before its acknowledgement"),
+            LeaseLoss::Unrenewable
+        );
     }
 
     #[tokio::test]
