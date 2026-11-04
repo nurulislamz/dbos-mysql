@@ -32,3 +32,28 @@ CREATE TABLE IF NOT EXISTS operation_outputs (
     PRIMARY KEY (workflow_uuid, function_id),
     CHECK (output IS NULL OR error IS NULL)
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    message_id               BIGSERIAL PRIMARY KEY,
+    destination_uuid         TEXT NOT NULL REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE,
+    topic                    TEXT NOT NULL,
+    message                  TEXT NOT NULL,
+    created_at_epoch_ms      BIGINT NOT NULL,
+    message_uuid             TEXT NOT NULL,
+    serialization            TEXT NOT NULL,
+    consumed                 BIGINT NOT NULL DEFAULT 0,
+    consumed_by_function_id  BIGINT,
+    CHECK (consumed IN (0, 1)),
+    UNIQUE (destination_uuid, message_uuid)
+);
+
+CREATE INDEX IF NOT EXISTS ix_notifications_pending
+    ON notifications (destination_uuid, topic, consumed, message_id);
+
+CREATE TABLE IF NOT EXISTS workflow_events (
+    workflow_uuid  TEXT NOT NULL REFERENCES workflow_status (workflow_uuid) ON DELETE CASCADE,
+    "key"          TEXT NOT NULL,
+    value          TEXT NOT NULL,
+    serialization  TEXT NOT NULL,
+    PRIMARY KEY (workflow_uuid, "key")
+);

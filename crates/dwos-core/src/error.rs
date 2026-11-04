@@ -10,6 +10,8 @@ pub enum Error {
     WorkflowNotFound(String),
     #[error("Workflow {0} is cancelled. Aborting function.")]
     WorkflowCancelled(String),
+    #[error("Non-existent `send` destination workflow ID: {0}")]
+    SendDestinationNotFound(String),
     #[error(
         "workflow {workflow_id} already exists with function {recorded_name}, but {requested_name} was requested"
     )]

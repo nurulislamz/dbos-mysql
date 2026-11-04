@@ -71,7 +71,7 @@ impl Store {
         .await
     }
 
-    async fn read_step(
+    pub(super) async fn read_step(
         &self,
         conn: &mut AnyConnection,
         workflow_id: &str,

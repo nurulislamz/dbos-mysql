@@ -10,10 +10,13 @@ use crate::Error;
 use crate::retry::with_retry;
 use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workflow};
 
+mod events;
 mod leases;
 mod steps;
 mod workflow_management;
 mod workflows;
+
+pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
 
 const MAX_NAME_CHARS: usize = 255;
 const POOL_SIZE: u32 = 10;
@@ -118,6 +121,33 @@ impl Dialect {
         match self {
             Self::Postgres | Self::MySql => "FOR UPDATE SKIP LOCKED",
             Self::Sqlite => "",
+        }
+    }
+
+    fn quote_key(self) -> &'static str {
+        match self {
+            Self::MySql => "`key`",
+            Self::Postgres | Self::Sqlite => "\"key\"",
+        }
+    }
+
+    fn insert_message_if_absent(self) -> &'static str {
+        match self {
+            Self::Postgres | Self::Sqlite => {
+                "ON CONFLICT (destination_uuid, message_uuid) DO NOTHING"
+            }
+            Self::MySql => "ON DUPLICATE KEY UPDATE message_uuid = message_uuid",
+        }
+    }
+
+    fn upsert_event(self) -> &'static str {
+        match self {
+            Self::MySql => {
+                "AS incoming ON DUPLICATE KEY UPDATE value = incoming.value, serialization = incoming.serialization"
+            }
+            Self::Postgres | Self::Sqlite => {
+                "ON CONFLICT (workflow_uuid, {KEY}) DO UPDATE SET value = excluded.value, serialization = excluded.serialization"
+            }
         }
     }
 }
@@ -316,9 +346,11 @@ impl Store {
         &self.pool
     }
 
-    /// Turns shared SQL into this database's SQL: fills in `{NOW}`, and `?` becomes `$n` on Postgres.
+    /// Turns shared SQL into this database's SQL: fills in `{NOW}` and `{KEY}`, and `?` becomes `$n` on Postgres.
     fn sql(&self, text: &str) -> AssertSqlSafe<String> {
-        let text = text.replace("{NOW}", self.dialect.now_ms());
+        let text = text
+            .replace("{NOW}", self.dialect.now_ms())
+            .replace("{KEY}", self.dialect.quote_key());
         if self.dialect != Dialect::Postgres {
             return AssertSqlSafe(text);
         }

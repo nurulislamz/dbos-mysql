@@ -9,10 +9,12 @@ use crate::workflow::{
 };
 use crate::{Error, Store};
 
+mod events;
 mod recovery;
 mod steps;
 mod workflow_management;
 
+pub use crate::store::{EventRow, MessageRow, Poll, SendOutcome, StoredValue};
 pub use steps::{StepAttempts, StepDecision, StepPolicy};
 
 const POLL_MIN: Duration = Duration::from_millis(10);

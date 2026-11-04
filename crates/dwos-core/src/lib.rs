@@ -8,8 +8,9 @@ mod store;
 mod workflow;
 
 pub use engine::{
-    ActiveRun, Begin, Begun, Ended, Engine, EngineConfig, FinalOutcome, Finished, ParentStep, Run,
-    StepAttempts, StepDecision, StepPolicy, WorkflowResult,
+    ActiveRun, Begin, Begun, Ended, Engine, EngineConfig, EventRow, FinalOutcome, Finished,
+    MessageRow, ParentStep, Poll, Run, SendOutcome, StepAttempts, StepDecision, StepPolicy,
+    StoredValue, WorkflowResult,
 };
 pub use error::Error;
 pub use lease::{LeaseKeeper, LeaseLoss};
