@@ -261,6 +261,8 @@ class DBOS(metaclass=_DBOSMeta):
     def destroy(cls, *, destroy_registry: bool = False) -> None:
         global _instance
         instance = _instance
+        if instance is not None and instance._engine is not None:
+            instance._engine.close()
         _instance = None
         if destroy_registry:
             _registry.clear()
@@ -343,8 +345,7 @@ class DBOS(metaclass=_DBOSMeta):
                 if run is None or _current_step.get() is not None:
                     return function(*args, **kwargs)
                 instance = _running()
-                step_id = run.next_step_id()
-                replay = instance._blocking(instance._engine.check_step, run, step_id, step_name)
+                step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name)
                 if replay is not None:
                     return _replay_step(replay, codec)
                 errors: list[Exception] = []
@@ -372,8 +373,7 @@ class DBOS(metaclass=_DBOSMeta):
                 if run is None or _current_step.get() is not None:
                     return await function(*args, **kwargs)
                 instance = _running()
-                step_id = run.next_step_id()
-                replay = await instance._engine.check_step(run, step_id, step_name)
+                step_id, replay = await instance._engine.begin_step(run, step_name)
                 if replay is not None:
                     return _replay_step(replay, codec)
                 errors: list[Exception] = []
@@ -558,9 +558,12 @@ class DBOS(metaclass=_DBOSMeta):
             await self._engine.release(run)
             raise asyncio.CancelledError
         error = body.exception()
-        if error is not None:
+        if error is None:
+            return await self._finish_success(info, run, body.result())
+        if isinstance(error, Exception):
             return await self._finish_error(info, run, error)
-        return await self._finish_success(info, run, body.result())
+        await self._engine.release(run)
+        raise error
 
     def _run_sync(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         active = self._keep_lease(run)
@@ -631,10 +634,8 @@ atexit.register(_at_exit)
 
 
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
-    parent = _current_run.get()
-    step_id = parent.next_step_id() if parent is not None and _current_step.get() is None else None
     text = info.codec.encode_input(args, kwargs)
-    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), parent, step_id)
+    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None)
 
 
 def _info_of(function: Callable[..., Any]) -> _Workflow:

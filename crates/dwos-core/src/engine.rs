@@ -58,6 +58,11 @@ impl Run {
     pub fn next_step_id(&self) -> u32 {
         self.last_step_id.fetch_add(1, Ordering::SeqCst) + 1
     }
+
+    /// A child started inside a step belongs to that step's result, so it takes no step ID.
+    pub fn child_step_id(&self, in_step: bool) -> Option<u32> {
+        (!in_step).then(|| self.next_step_id())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -235,6 +240,7 @@ pub struct Engine {
     store: Store,
     config: EngineConfig,
     active: Arc<AtomicUsize>,
+    closing: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -247,7 +253,17 @@ impl Engine {
             store,
             config,
             active: Arc::new(AtomicUsize::new(0)),
+            closing: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// After this, a failure may just be the shutdown, so failures are no longer stored as final.
+    pub fn close(&self) {
+        self.closing.store(true, Ordering::SeqCst);
+    }
+
+    fn is_closing(&self) -> bool {
+        self.closing.load(Ordering::SeqCst)
     }
 
     pub fn store(&self) -> &Store {
@@ -368,6 +384,9 @@ impl Engine {
         name: &str,
         error: String,
     ) -> Result<(), Error> {
+        if self.is_closing() {
+            return Err(Error::ShuttingDown);
+        }
         let record = StepRecord {
             error: Some(error),
             ..StepRecord::default()
@@ -378,6 +397,10 @@ impl Engine {
     }
 
     pub async fn finish(&self, run: &Run, outcome: Outcome) -> Result<Finished, Error> {
+        if matches!(outcome, Outcome::Error(_)) && self.is_closing() {
+            self.release(run).await?;
+            return Err(Error::ShuttingDown);
+        }
         match self.store.finish_workflow(&run.lease, &outcome).await {
             Ok(()) => Ok(Finished::Accepted),
             Err(Error::LeaseLost(_)) => {
@@ -509,6 +532,17 @@ mod tests {
         assert!(StepPolicy::new(true, f64::NAN, 3, 2.0).is_err());
         assert!(StepPolicy::new(true, 1.0, 3, -2.0).is_err());
         assert!(StepPolicy::new(true, 1.0, 0, 2.0).is_err());
+    }
+
+    #[test]
+    fn a_child_takes_a_step_id_only_outside_a_step() {
+        let run = Run::new(Lease {
+            workflow_id: "w".to_owned(),
+            token: "t".to_owned(),
+        });
+        assert_eq!(run.child_step_id(false), Some(1));
+        assert_eq!(run.child_step_id(true), None);
+        assert_eq!(run.child_step_id(false), Some(2));
     }
 
     #[test]
