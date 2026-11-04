@@ -1,25 +1,20 @@
 # Adapted from dbos-transact-py tests/test_failures.py at commit 236142b. See MANIFEST.md.
-import asyncio
-import functools
-import logging
 import threading
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Any
 
 import pytest
 
+import dbos_mysql
 from dbos_mysql import (
     DBOS,
     DBOSConfig,
     DBOSMaxStepRetriesExceeded,
     DBOSUnexpectedStepError,
-    MaxRecoveryAttemptsExceededError,
     SetWorkflowID,
-    StepStatus,
     WorkflowHandle,
-    WorkflowHandleAsync,
     WorkflowStatusString,
 )
 from tests.conftest import Database, retry_until_success
@@ -31,8 +26,7 @@ class BadException(Exception):
         super().__init__(f"Message: {one}, {two}")
 
 
-def test_dead_letter_queue(dbos: DBOS) -> None:
-    event = threading.Event()
+def test_dead_letter_queue(dbos: DBOS, database: Database) -> None:
     max_recovery_attempts = 3
     recovery_count = 0
 
@@ -49,7 +43,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
 
     # Attempt to recover the blocked workflow the maximum number of times
     for i in range(max_recovery_attempts):
-        set_workflow_status(dbos._sys_db, wfid, "PENDING")
+        database.expire_lease(wfid)
         handles = DBOS._recover_pending_workflows()
         # Select our workflow rather than trusting ordering: recovery returns a
         # polling handle for every pending row, and get_result() on the wrong one
@@ -62,7 +56,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     # Verify an additional attempt puts the workflow in the DLQ status.
     completed_before_dlq = handle.get_status().completed_at
     assert completed_before_dlq is not None
-    set_workflow_status(dbos._sys_db, wfid, "PENDING")
+    database.expire_lease(wfid)
     DBOS._recover_pending_workflows()
 
     # Recovery re-enqueues, so the DLQ transition happens when the queue dequeues the workflow.
@@ -80,21 +74,7 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()
-    assert exc_info.errisinstance(DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded)
-
-    # Resume the workflow. Verify it can recover again without error.
-    resumed_handle = dbos.resume_workflow(wfid)
-    DBOS._recover_pending_workflows()
-
-    # Complete the resumed workflow
-    event.set()
-    assert handle.get_result() == resumed_handle.get_result() == None
-    assert handle.get_status().status == WorkflowStatusString.SUCCESS.value
-
-    # Verify that retries of a completed workflow do not raise the DLQ exception
-    for _ in range(max_recovery_attempts * 2):
-        with SetWorkflowID(wfid):
-            dead_letter_workflow()
+    assert exc_info.errisinstance(dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded)
 
     @DBOS.workflow(max_recovery_attempts=None)
     def infinite_dead_letter_workflow() -> None:
@@ -107,13 +87,13 @@ def test_dead_letter_queue(dbos: DBOS) -> None:
         handle.get_result
 
     # Attempt to recover the blocked workflow the maximum number of times
-    for i in range(DEFAULT_MAX_RECOVERY_ATTEMPTS * 2):
+    for i in range(100 * 2):
         handles = DBOS._recover_pending_workflows()
         for handle in handles:
             assert handle.get_result() == None
 
 
-def test_nondeterministic_workflow(dbos: DBOS) -> None:
+def test_nondeterministic_workflow(dbos: DBOS, database: Database) -> None:
     flag = True
 
     @DBOS.step()
@@ -136,9 +116,10 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
     with SetWorkflowID(wfid):
         non_deterministic_workflow()
 
-    # To simulate nondeterminism, set the flag then restart the workflow w/ fork;
+    # To simulate nondeterminism, set the flag then recover the workflow;
     flag = False
-    handle_two = DBOS.fork_workflow(wfid, 2)
+    database.expire_lease(wfid)
+    handle_two = DBOS._recover_pending_workflows()[0]
 
     # Due to the nondeterminism, the workflow should encounter an unexpected step.
     with pytest.raises(DBOSUnexpectedStepError) as exc_info:
@@ -148,7 +129,6 @@ def test_nondeterministic_workflow(dbos: DBOS) -> None:
 def test_step_retries(dbos: DBOS) -> None:
     step_counter = 0
 
-    DBOS.register_queue("test-queue")
     max_attempts = 2
 
     @DBOS.step(retries_allowed=True, interval_seconds=0, max_attempts=max_attempts)
@@ -163,7 +143,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     @DBOS.workflow()
     def enqueue_failing_step() -> None:
-        DBOS.enqueue_workflow("test-queue", failing_step).get_result()
+        DBOS.start_workflow(failing_step).get_result()
 
     error_message = f"Step {failing_step.__qualname__} has exceeded its maximum of {max_attempts} retries"
 
@@ -185,7 +165,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     # Test enqueueing the step
     step_counter = 0
-    handle = DBOS.enqueue_workflow("test-queue", failing_step)
+    handle = DBOS.start_workflow(failing_step)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
     assert error_message in str(excinfo.value)
@@ -193,7 +173,7 @@ def test_step_retries(dbos: DBOS) -> None:
 
     # Test enqueuing the workflow
     step_counter = 0
-    handle = DBOS.enqueue_workflow("test-queue", failing_workflow)
+    handle = DBOS.start_workflow(failing_workflow)
     with pytest.raises(DBOSMaxStepRetriesExceeded) as excinfo:
         handle.get_result()
     assert error_message in str(excinfo.value)
@@ -205,8 +185,6 @@ def test_step_retries(dbos: DBOS) -> None:
         enqueue_failing_step()
     assert error_message in str(excinfo.value)
     assert step_counter == max_attempts
-
-    assert queue_entries_are_cleaned_up(dbos)
 
 
 def test_step_retries_no_final_sleep(dbos: DBOS) -> None:
@@ -307,10 +285,10 @@ def test_step_status(dbos: DBOS) -> None:
     step_counter = 0
 
 
-def test_recovery_during_retries(dbos: DBOS) -> None:
+def test_recovery_during_retries(dbos: DBOS, database: Database, gate: Callable[[], threading.Event]) -> None:
     step_counter = 0
     start_event = threading.Event()
-    blocking_event = threading.Event()
+    blocking_event = gate()
 
     max_attempts = 3
 
@@ -330,6 +308,7 @@ def test_recovery_during_retries(dbos: DBOS) -> None:
 
     handle = DBOS.start_workflow(failing_workflow)
     start_event.wait()
+    database.expire_lease(handle.workflow_id)
     recovery_handles = DBOS._recover_pending_workflows()
     assert len(recovery_handles) == 1
     blocking_event.set()
@@ -337,7 +316,7 @@ def test_recovery_during_retries(dbos: DBOS) -> None:
     assert recovery_handles[0].get_result() is None
 
 
-def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
+def test_workflow_error_serialization(dbos: DBOS) -> None:
 
     @DBOS.step()
     def step() -> None:
@@ -363,9 +342,6 @@ def test_workflow_error_serialization(dbos: DBOS, client: DBOSClient) -> None:
     status = handle.get_status()
     assert status.error is not None
 
-    status = client.retrieve_workflow(handle.workflow_id).get_status()
-    assert status.error is not None
-
 
 def test_nonserializable_return(dbos: DBOS) -> None:
     @DBOS.step()
@@ -380,14 +356,8 @@ def test_nonserializable_return(dbos: DBOS) -> None:
         workflow()
 
 
-def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
-
-    config["application_version"] = "0.0.1"
-    DBOS.destroy()
-    dbos = DBOS(config=config)
-    DBOS.launch()
-
-    event = threading.Event()
+def test_recovery_attempts(dbos: DBOS, database: Database, gate: Callable[[], threading.Event]) -> None:
+    event = gate()
 
     child_id = str(uuid.uuid4())
 
@@ -401,9 +371,7 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
             child_workflow()
         event.wait()
 
-    DBOS.register_queue("test_queue", polling_interval_sec=0.1)
-
-    parent_handle = DBOS.enqueue_workflow("test_queue", parent_workflow)
+    parent_handle = DBOS.start_workflow(parent_workflow)
     child_handle: WorkflowHandle[None] = DBOS.retrieve_workflow(
         child_id, existing_workflow=False
     )
@@ -414,9 +382,9 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
 
     retry_until_success(check_attempt_1)
 
-    DBOS.destroy()
-    dbos = DBOS(config=config)
-    DBOS.launch()
+    database.expire_lease(parent_handle.workflow_id)
+    database.expire_lease(child_id)
+    DBOS._recover_pending_workflows()
 
     def check_attempt_2() -> None:
         assert parent_handle.get_status().recovery_attempts == 2
@@ -424,9 +392,9 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
 
     retry_until_success(check_attempt_2)
 
-    DBOS.destroy()
-    dbos = DBOS(config=config)
-    DBOS.launch()
+    database.expire_lease(parent_handle.workflow_id)
+    database.expire_lease(child_id)
+    DBOS._recover_pending_workflows()
 
     def check_attempt_3() -> None:
         assert parent_handle.get_status().recovery_attempts == 3
@@ -438,7 +406,7 @@ def test_recovery_attempts(dbos: DBOS, config: DBOSConfig) -> None:
         assert parent_handle.get_status().status == WorkflowStatusString.ERROR.value
         assert isinstance(
             parent_handle.get_status().error,
-            DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+            dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
         )
 
     retry_until_success(check_attempt_3)

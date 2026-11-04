@@ -1,11 +1,13 @@
+import json
 import os
-import sqlite3
+import subprocess
+import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import pymysql
 import pytest
@@ -18,6 +20,27 @@ MYSQL_PASSWORD = "dbos-test-root"
 
 def _mysql_connection(database: str | None = None) -> pymysql.Connection:
     return pymysql.connect(host="127.0.0.1", port=MYSQL_PORT, user="root", password=MYSQL_PASSWORD, database=database, autocommit=True)
+
+
+_SQLITE_SCRIPT = """
+import json, sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=30)
+with connection:
+    rows = connection.execute(sys.argv[2], json.loads(sys.argv[3])).fetchall()
+connection.close()
+print(json.dumps(rows))
+"""
+
+
+def _sqlite_in_subprocess(path: Path, sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]]:
+    """The extension bundles its own SQLite, and two SQLite copies in one process do not coordinate file locks."""
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, "-I", "-c", _SQLITE_SCRIPT, str(path), sql, json.dumps(params)],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return [tuple(row) for row in json.loads(result.stdout)]
 
 
 class Database:
@@ -39,8 +62,7 @@ class Database:
 
     def execute(self, sql: str, *params: Any) -> list[tuple[Any, ...]]:
         if self.backend == "sqlite":
-            with sqlite3.connect(self._path, timeout=30) as connection:
-                return connection.execute(sql.replace("%s", "?"), params).fetchall()
+            return _sqlite_in_subprocess(self._path, sql.replace("%s", "?"), params)
         with _mysql_connection(self._mysql_name) as connection, connection.cursor() as cursor:
             cursor.execute(sql, params)
             return list(cursor.fetchall())
@@ -49,10 +71,25 @@ class Database:
         """Make a workflow look as if its process crashed, so recovery can take it."""
         column, past = ("claim_after_ms", 0) if self.backend == "sqlite" else ("claim_after", "2000-01-01 00:00:00")
         self.execute(
-            f"UPDATE dbos_workflows SET status = 'PENDING', lease_token = 'crashed', {column} = %s WHERE workflow_id = %s",
+            f"UPDATE dbos_workflows SET status = 'PENDING', output = NULL, error = NULL, lease_token = 'crashed', {column} = %s WHERE workflow_id = %s",
             past,
             workflow_id,
         )
+
+    def plant_step(self, workflow_id: str, step_id: int, step_name: str) -> None:
+        """Record a step behind the running workflow's back, as another writer would."""
+        column, now = ("created_at_ms", 0) if self.backend == "sqlite" else ("created_at", "2000-01-01 00:00:00")
+        self.execute(
+            f"INSERT INTO dbos_steps (workflow_id, step_id, step_name, {column}) VALUES (%s, %s, %s, %s)",
+            workflow_id,
+            step_id,
+            step_name,
+            now,
+        )
+
+    def take_over(self, workflow_id: str) -> None:
+        """Hand the workflow to another owner without touching when its lease expires."""
+        self.execute("UPDATE dbos_workflows SET lease_token = 'another-execution' WHERE workflow_id = %s", workflow_id)
 
     def drop(self) -> None:
         if self.backend == "mysql":
@@ -81,12 +118,28 @@ def dbos(config: DBOSConfig) -> Iterator[DBOS]:
     DBOS.destroy(destroy_registry=True)
 
 
-def retry_until_success(function: Callable[[], Any], retries: int = 10, interval: float = 1.0) -> Any:
-    for attempt in range(retries):
+@pytest.fixture
+def gate(dbos: DBOS) -> Iterator[Callable[[], threading.Event]]:
+    """Events released at teardown, so a failing test cannot leave a sync workflow thread blocking process exit."""
+    events: list[threading.Event] = []
+
+    def create() -> threading.Event:
+        event = threading.Event()
+        events.append(event)
+        return event
+
+    yield create
+    for event in events:
+        event.set()
+
+
+def retry_until_success(function: Callable[[], Any], interval: float = 1.0, max_attempts: int = 10) -> Any:
+    error: Exception | None = None
+    for _ in range(max_attempts):
         try:
             return function()
-        except AssertionError:
-            if attempt == retries - 1:
-                raise
+        except Exception as caught:  # noqa: BLE001
+            error = caught
             time.sleep(interval)
-    return None
+    assert error is not None
+    raise error

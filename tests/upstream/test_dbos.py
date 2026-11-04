@@ -1,28 +1,13 @@
 # Adapted from dbos-transact-py tests/test_dbos.py at commit 236142b. See MANIFEST.md.
 import asyncio
-import functools
 import logging
-import threading
 import time
 import uuid
-from collections.abc import Generator
-from typing import Any
 
 import pytest
 
-from dbos_mysql import (
-    DBOS,
-    DBOSConfig,
-    DBOSMaxStepRetriesExceeded,
-    DBOSUnexpectedStepError,
-    MaxRecoveryAttemptsExceededError,
-    SetWorkflowID,
-    StepStatus,
-    WorkflowHandle,
-    WorkflowHandleAsync,
-    WorkflowStatusString,
-)
-from tests.conftest import Database, retry_until_success
+from dbos_mysql import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle, WorkflowStatusString
+from tests.conftest import Database
 
 
 
@@ -87,22 +72,15 @@ def test_simple_workflow_attempts_counter(dbos: DBOS) -> None:
         time.sleep(2)
 
     wfuuid = str(uuid.uuid4())
-    with dbos._sys_db.engine.connect() as c:
-        stmt = sa.select(
-            SystemSchema.workflow_status.c.recovery_attempts,
-            SystemSchema.workflow_status.c.created_at,
-            SystemSchema.workflow_status.c.updated_at,
-        ).where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
-        for i in range(10):
-            with SetWorkflowID(wfuuid):
-                noop()
-            result = c.execute(stmt).fetchone()
-            assert result is not None
-            recovery_attempts, created_at, updated_at = result
-            assert (
-                recovery_attempts == 1
-            )  # This is just runs, and does not imply recovery retries
-            assert updated_at >= created_at
+    for i in range(10):
+        with SetWorkflowID(wfuuid):
+            noop()
+        result = DBOS.get_workflow_status(wfuuid)
+        assert result is not None
+        assert (
+            result.recovery_attempts == 1
+        )  # This is just runs, and does not imply recovery retries
+        assert result.updated_at >= result.created_at
 
 
 def test_child_workflow(dbos: DBOS) -> None:
@@ -244,7 +222,7 @@ def test_exception_workflow(dbos: DBOS) -> None:
     assert wf_counter == 2  # The workflow error is directly returned without running
 
 
-def test_recovery_workflow(dbos: DBOS) -> None:
+def test_recovery_workflow(dbos: DBOS, database: Database) -> None:
     other_step_counter: int = 0
     other_step_return_none_counter: int = 0
     wf_counter: int = 0
@@ -275,12 +253,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob1bob"
 
     # Change the workflow status to pending
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING", "name": test_workflow.__qualname__})
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
-        )
+    database.expire_lease(wfuuid)
 
     # Recovery should execute the workflow again but skip the step
     workflow_handles = DBOS._recover_pending_workflows()
@@ -296,7 +269,7 @@ def test_recovery_workflow(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 2  # original attempt + recovery attempt
 
 
-def test_recovery_workflow_step(dbos: DBOS) -> None:
+def test_recovery_workflow_step(dbos: DBOS, database: Database) -> None:
     step_counter: int = 0
     wf_counter: int = 0
 
@@ -320,12 +293,7 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
         assert test_workflow("bob", "bob") == "bob"
 
     # Change the workflow status to pending
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING", "name": test_workflow.__qualname__})
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
-        )
+    database.expire_lease(wfuuid)
 
     # Recovery should execute the workflow again but skip the step
     workflow_handles = DBOS._recover_pending_workflows()
@@ -340,7 +308,7 @@ def test_recovery_workflow_step(dbos: DBOS) -> None:
     assert stat.recovery_attempts == 2
 
 
-def test_workflow_returns_none(dbos: DBOS) -> None:
+def test_workflow_returns_none(dbos: DBOS, database: Database) -> None:
     wf_counter: int = 0
 
     @DBOS.workflow()
@@ -364,12 +332,7 @@ def test_workflow_returns_none(dbos: DBOS) -> None:
     assert wf_counter == 1
 
     # Change the workflow status to pending
-    with dbos._sys_db.engine.begin() as c:
-        c.execute(
-            sa.update(SystemSchema.workflow_status)
-            .values({"status": "PENDING", "name": test_workflow.__qualname__})
-            .where(SystemSchema.workflow_status.c.workflow_uuid == wfuuid)
-        )
+    database.expire_lease(wfuuid)
 
     workflow_handles = DBOS._recover_pending_workflows()
     assert len(workflow_handles) == 1
@@ -404,18 +367,15 @@ def test_start_workflow(dbos: DBOS) -> None:
     wfuuid = str(uuid.uuid4())
     with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
-        context = assert_current_dbos_context()
-        assert not context.is_within_workflow()
+        assert DBOS.workflow_id is None
         assert handle.get_result() == "bob1bob"
     with SetWorkflowID(wfuuid):
         handle = dbos.start_workflow(test_workflow, "bob", "bob")
-        context = assert_current_dbos_context()
-        assert not context.is_within_workflow()
+        assert DBOS.workflow_id is None
         assert handle.get_result() == "bob1bob"
     with SetWorkflowID(wfuuid):
         assert test_workflow("bob", "bob") == "bob1bob"
-        context = assert_current_dbos_context()
-        assert not context.is_within_workflow()
+        assert DBOS.workflow_id is None
     assert other_step_counter == 1
     assert wf_counter == 1
 
@@ -423,14 +383,14 @@ def test_start_workflow(dbos: DBOS) -> None:
 def test_retrieve_workflow(dbos: DBOS) -> None:
     @DBOS.workflow()
     def test_sleep_workflow(secs: float) -> str:
-        dbos.sleep(secs)
+        time.sleep(secs)
         workflow_id = DBOS.workflow_id
         assert workflow_id is not None
         return workflow_id
 
     @DBOS.workflow()
     def test_sleep_workthrow(secs: float) -> str:
-        dbos.sleep(secs)
+        time.sleep(secs)
         raise Exception("Wake Up!")
 
     @DBOS.workflow()
@@ -561,7 +521,6 @@ def test_duplicate_registration(
 def test_custom_names(dbos: DBOS) -> None:
     workflow_name = "workflow_name"
     step_name = "step_name"
-    DBOS.register_queue("test-queue")
 
     @DBOS.workflow(name=workflow_name)
     def workflow() -> str:
@@ -569,7 +528,7 @@ def test_custom_names(dbos: DBOS) -> None:
         assert workflow_id is not None
         return workflow_id
 
-    handle = DBOS.enqueue_workflow("test-queue", workflow)
+    handle = DBOS.start_workflow(workflow)
     assert handle.get_status().name == workflow_name
     assert handle.get_result() == handle.workflow_id
     assert DBOS.get_result(handle.workflow_id) == handle.workflow_id
@@ -580,7 +539,7 @@ def test_custom_names(dbos: DBOS) -> None:
         assert workflow_id is not None
         return workflow_id
 
-    handle = DBOS.enqueue_workflow("test-queue", step)
+    handle = DBOS.start_workflow(step)
     assert handle.get_status().name == f"<temp>.{step_name}"
     assert handle.get_result() == handle.workflow_id
 
