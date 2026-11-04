@@ -181,9 +181,11 @@ async def test_cancelling_an_inline_workflow_hands_it_over_without_using_an_atte
     with pytest.raises(asyncio.CancelledError):
         await running
 
+    # Recovery may already hold the released workflow, so only the count after it is taken is stable.
+    DBOS._recover_pending_workflows()
     status = await (await DBOS.retrieve_workflow_async(workflow_id)).get_status()
     assert status.status == "PENDING"
-    assert status.recovery_attempts == 0
+    assert status.recovery_attempts == 1
 
 
 def test_step_retries_follow_the_policy_and_failures_replay(dbos: DBOS) -> None:

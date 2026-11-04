@@ -39,6 +39,8 @@ pub enum Error {
     InvalidConfig(String),
     #[error("this process no longer owns workflow {0}")]
     LeaseLost(String),
+    #[error("DBOS was destroyed while this work was running")]
+    ShuttingDown,
     #[error("{field} is longer than the 255 character limit")]
     NameTooLong { field: &'static str },
     #[error("value of {size} bytes is over the database limit of {limit} bytes")]

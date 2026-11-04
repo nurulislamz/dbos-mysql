@@ -29,6 +29,7 @@ fn to_py(error: Error) -> PyErr {
         Error::StepNondeterminism { .. } => DBOSStepNondeterminismError::new_err(message),
         Error::WorkflowNotFound(_) => DBOSNonExistentWorkflowError::new_err(message),
         Error::LeaseLost(_) => DBOSLeaseLostError::new_err(message),
+        Error::ShuttingDown => DBOSException::new_err(message),
         _ => StoreError::new_err(message),
     }
 }
@@ -46,10 +47,6 @@ impl PyRun {
     #[getter]
     fn workflow_id(&self) -> &str {
         self.0.workflow_id()
-    }
-
-    fn next_step_id(&self) -> u32 {
-        self.0.next_step_id()
     }
 }
 
@@ -279,7 +276,11 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, parent_step_id=None))]
+    fn close(&self) {
+        self.0.close();
+    }
+
+    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false))]
     #[allow(clippy::too_many_arguments)]
     fn begin<'py>(
         &self,
@@ -289,10 +290,12 @@ impl PyEngine {
         max_recovery_attempts: u32,
         workflow_id: Option<String>,
         parent: Option<PyRef<'py, PyRun>>,
-        parent_step_id: Option<u32>,
+        in_step: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         let parent = parent.map(|run| run.0.clone());
+        // Taken at the call, not in the future, so concurrent calls keep their call order.
+        let parent_step_id = parent.as_ref().and_then(|run| run.child_step_id(in_step));
         future_into_py(py, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
@@ -330,20 +333,21 @@ impl PyEngine {
         })
     }
 
-    fn check_step<'py>(
+    fn begin_step<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
-        step_id: u32,
         name: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
+        // Taken at the call, not in the future, so concurrent calls keep their call order.
+        let step_id = run.next_step_id();
         future_into_py(py, async move {
             let decision = engine
                 .check_step(&run, step_id, &name)
                 .await
                 .map_err(to_py)?;
-            Ok(match decision {
+            let replay = match decision {
                 StepDecision::Run => None,
                 StepDecision::ReplayOutput(output) => Some(PyStepReplay {
                     output: Some(output),
@@ -353,7 +357,8 @@ impl PyEngine {
                     output: None,
                     error: Some(error),
                 }),
-            })
+            };
+            Ok((step_id, replay))
         })
     }
 
