@@ -1,6 +1,6 @@
 # dbos-mysql: plan
 
-Durable workflows for Python on MySQL 8.4, with a Rust core and a Python SDK that follows the DBOS API. A workflow's state is stored in MySQL, so it survives a crash and resumes without repeating finished steps.
+Durable workflows for Python on MySQL 8.4 and SQLite, with a Rust core and a Python SDK that follows the DBOS API. A workflow's state is stored in the database, so it survives a crash and resumes without repeating finished steps.
 
 This is an unofficial project and is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence.
 
@@ -10,11 +10,11 @@ Status: planning, no code yet. Plan date: 2026-11-04.
 
 The first usable version does five things:
 
-1. Stores workflow and step state in MySQL.
+1. Stores workflow and step state in MySQL or SQLite, chosen by the database URL.
 2. Runs async workflows made of steps.
 3. Returns saved results when a workflow ID or step is seen again.
 4. Stores failures, and replays them the same way.
-5. Recovers workflows from a crashed process, on the same or another machine.
+5. Recovers workflows from a crashed process. MySQL covers the same or another machine, and SQLite covers one machine.
 
 **Usable means:** you can `pip install` a wheel, follow the README, `kill -9` the example mid-workflow, start it again, and see it finish without repeating finished steps.
 
@@ -157,7 +157,7 @@ The library is a compiled Python extension inside your process. There is no sepa
 │  SQL · leases · reclaiming crashed work · DB error retries    │
 └─────────────────────────┼─────────────────────────────────────┘
                           ▼
-                      MySQL 8.4
+               MySQL 8.4 or SQLite
 ```
 
 ### Repository layout
@@ -168,9 +168,10 @@ Cargo.lock
 pyproject.toml
 compose.yml
 NOTICE
-schema/001_init.sql
+schema/mysql/001_init.sql
+schema/sqlite/001_init.sql
 crates/dbos-mysql-core/src/
-    lib.rs  config.rs  error.rs  store.rs  lease.rs  retry.rs
+    lib.rs  config.rs  error.rs  store.rs  mysql.rs  sqlite.rs  lease.rs  retry.rs
 crates/dbos-mysql-core/tests/
 crates/dbos-mysql-py/src/lib.rs
 python/dbos_mysql/
@@ -286,7 +287,9 @@ Why it looks like this:
 - **`UTC_TIMESTAMP(6)`** is the only clock, so differences between machines cannot break leases.
 - **Connection settings:** `READ COMMITTED` and `time_zone = '+00:00'`.
 
-The library does not create tables on its own at first. `DBOS.launch()` checks that the schema exists and raises a clear error if not. `schema/001_init.sql` is the source, and `python -m dbos_mysql migrate` runs it.
+The SQL below is the MySQL version. Section 6a gives the SQLite differences.
+
+The library does not create tables on its own at first. `DBOS.launch()` checks that the schema exists and raises a clear error if not. `schema/<backend>/001_init.sql` is the source, and `python -m dbos_mysql migrate` runs it.
 
 ### SQL protocol
 
@@ -327,7 +330,7 @@ WHERE workflow_id = ?;
 ```
 
 - `name IN` means a process only takes work it can run, so a rolling deploy cannot burn attempts.
-- Attempts are counted here, so a workflow that keeps crashing its process still stops. A row past its limit becomes `MAX_RECOVERY_ATTEMPTS_EXCEEDED` and does not run.
+- Attempts are counted here, so a workflow that keeps crashing its process still stops. As upstream does, a row becomes `MAX_RECOVERY_ATTEMPTS_EXCEEDED` when attempts exceed `max_recovery_attempts + 1`, and does not run. The default limit is 100.
 
 **Renew the lease.** Every `lease_seconds / 3`:
 
@@ -349,7 +352,7 @@ ON DUPLICATE KEY UPDATE workflow_id = workflow_id;
 SELECT step_name, output, error FROM dbos_steps WHERE workflow_id = ? AND step_id = ?;
 ```
 
-A different token means roll back and report the lost lease. The code always uses the row it read back, so a first run and a replay return the same value.
+A different token means roll back and report the lost lease. If the step already exists, as upstream treats it, an identical record counts as a retry and a different one raises a nondeterminism error. The Python SDK still decodes what it encoded, so a first run and a replay return the same value.
 
 **Finish.** Same guard for success and error:
 
@@ -386,6 +389,29 @@ Zero rows means the lease was lost, and the result is discarded.
 
 Renewals use their own small connection pool, so busy work cannot starve leases.
 
+## 6a. SQLite
+
+Both backends implement the same `Store` operations and pass the same tests. They do not share SQL text, because the dialects differ in the places that matter most for correctness.
+
+| Concern | MySQL | SQLite |
+|---|---|---|
+| Upsert | `ON DUPLICATE KEY UPDATE` | `ON CONFLICT DO NOTHING` |
+| Claiming | `FOR UPDATE SKIP LOCKED` | `BEGIN IMMEDIATE`, which serialises writers |
+| Lease fence | `SELECT ... FOR SHARE` | `BEGIN IMMEDIATE` |
+| Clock | `UTC_TIMESTAMP(6)` | `unixepoch('subsec')`, stored as integer milliseconds |
+| Text columns | `LONGTEXT` with binary collation | `TEXT`, whose default collation is binary |
+| Busy errors | Retry 1213 and 1205 | `busy_timeout` of 30 s. No extra retry yet |
+
+SQLite connections always set `journal_mode=WAL`, `synchronous=FULL` and `foreign_keys=ON`. `synchronous=FULL` matters here: with lower settings, WAL mode can lose a committed checkpoint in a power cut, and this library exists to keep those.
+
+**Limits:**
+
+- One machine only. Several processes can share a file on a local disk, but never on a network filesystem such as NFS, where its locks are unreliable.
+- One writer at a time, so write-heavy loads belong on MySQL.
+- SQLite is compiled into the wheel, so there is nothing else to install.
+
+**Testing:** every Rust, upstream and chaos test runs against both backends, except the database-restart fault, which only applies to MySQL.
+
 ## 7. Rust and Python boundary
 
 | Rule | Why |
@@ -413,21 +439,36 @@ Renewals use their own small connection pool, so busy work cannot starve leases.
 
 Each one must pass before the next starts.
 
+### Build order: SQLite first, then MySQL
+
+The storage work in M2 happens in two phases:
+
+1. **Phase 1, SQLite (done):** port DBOS's minimal workflow and step logic into Rust, on SQLite. `crates/dbos-mysql-core/src/sqlite.rs` holds it, and `MySql` returns `NotImplemented` for these operations.
+2. **Phase 2, MySQL:** add `mysql.rs` with the same operations, and run the same test suite against both.
+
+Phase 1 ports only what the first version needs: start or attach, read status, load and save steps, finish, renew, release, and reclaim. Bindings and the Python SDK come after Phase 2.
+
 ### M0: prove the toolchain
 
 Do this first, because it can change the plan.
 
 - Cargo workspace, `pyproject.toml`, and an async function called from Python.
-- `sqlx` runs `SELECT 1` against MySQL 8.4, called from Python.
+- `sqlx` runs `SELECT 1` against MySQL 8.4 and SQLite, called from Python.
 - `compose.yml` with MySQL on port `${DBOS_TEST_DB_PORT:-13307}`, working on Docker and Podman. Ports 3306 and 13306 are already used on the dev machine.
 
 **Done when:**
 
-- [ ] A wheel installs in `python:3.14.8-slim` with no Rust on the image, and works against MySQL.
-- [ ] Cancelling a Python task during a Rust await rolls back and leaks nothing.
-- [ ] Rust logs reach Python's `logging`.
+- [x] A wheel installs in `python:3.14.8-slim` with no Rust on the image, and works against MySQL and SQLite.
+- [x] Cancelling a Python task during a Rust await rolls back and leaks nothing.
+- [x] Rust logs reach Python's `logging`.
 
 **If this fails:** the core moves to Python. The schema, SQL, API and tests all stay.
+
+**Findings to carry forward:**
+
+- Rust awaitables are `asyncio.Future` objects, not coroutines, so `asyncio.create_task` rejects them. The SDK must wrap them in `async def`.
+- A failing `after_connect` makes `sqlx` retry until the pool times out, and the caller only sees "pool timed out", after 10 s. M2 must surface the real cause.
+- The manylinux wheel builds with `maturin[zig]`.
 
 ### M1: copy the tests
 
@@ -441,10 +482,10 @@ Write the tests before the code.
 
 ### M2: store state
 
-- `schema/001_init.sql` and `store.rs`, with every statement in section 6.
+- Both schema files, `store.rs`, `mysql.rs` and `sqlite.rs`, covering sections 6 and 6a.
 - Retries of database errors.
 
-**Done when these Rust tests pass on real MySQL:**
+**Done when these Rust tests pass on real MySQL and on SQLite:**
 
 - [ ] Same workflow ID twice gives one row. A different name is reported as a conflict.
 - [ ] `Job-1` and `job-1` are separate workflows.
@@ -556,6 +597,8 @@ Add features one at a time, copying the upstream tests first. The likely order i
 
 | Decision | Choice | Reason |
 |---|---|---|
+| Backends | MySQL and SQLite, equal status | Owner's decision |
+| Build order | SQLite in Rust first, then MySQL | Owner's decision |
 | Language | Rust core, Python SDK | Owner's decision |
 | Shape | In-process extension | No extra service to run |
 | API | Follow DBOS Python | Makes upstream tests portable |
@@ -585,4 +628,8 @@ Everything else in this plan is design, and nothing has been run.
 | PyO3's build script lists Python 3.14 | Read `build.rs` on `main` |
 | The dev machine has Rust 1.99.1, `uv`, Python 3.14.8, and Podman with Compose | Ran the commands |
 
-**To prove at M0 or M2:** whether the crates compile together on 3.14, how cancellation crosses the boundary, Rust log forwarding, and matched-row reporting from `sqlx`.
+**Proven at M0:** the crates compile together on 3.14, and cancellation and Rust log forwarding work, on both backends.
+
+**Proven in Phase 1, on SQLite only:** the store's rules, by 30 Rust tests, including a child process aborting mid-transaction. Seven deliberate breaks of the code were each caught by a test.
+
+**To prove in Phase 2:** matched-row reporting from `sqlx` on MySQL.

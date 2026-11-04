@@ -1,0 +1,36 @@
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("unsupported database URL scheme, expected mysql:// or sqlite://")]
+    UnsupportedUrl,
+    #[error("invalid database URL")]
+    InvalidUrl,
+    #[error("{0} is not implemented for the {1} backend yet")]
+    NotImplemented(&'static str, &'static str),
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("workflow {0} does not exist")]
+    WorkflowNotFound(String),
+    #[error(
+        "workflow {workflow_id} already exists with function {recorded_name}, but {requested_name} was requested"
+    )]
+    ConflictingWorkflow {
+        workflow_id: String,
+        recorded_name: String,
+        requested_name: String,
+    },
+    #[error(
+        "during workflow {workflow_id} step {step_id}, {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic"
+    )]
+    UnexpectedStep {
+        workflow_id: String,
+        step_id: u32,
+        expected_name: String,
+        recorded_name: String,
+    },
+    #[error("workflow {workflow_id} step {step_id} was already recorded with a different result")]
+    StepNondeterminism { workflow_id: String, step_id: u32 },
+    #[error("this process no longer owns workflow {0}")]
+    LeaseLost(String),
+    #[error("stored data is invalid: {0}")]
+    Corrupt(String),
+}
