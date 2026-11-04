@@ -16,7 +16,7 @@ Status and task order are in [`PROGRESS.md`](../PROGRESS.md).
 - Python contains no step, result, or lease decisions.
 - All of this passes on all three databases.
 
-Queues and durable sleep come after this bar.
+Core work now includes durable sleep, workflow deadlines, events/messages, workflow management and durable FIFO queues. The user deferred SDK integration and restricted current verification to Rust.
 
 ## Architecture
 
@@ -86,6 +86,12 @@ We do not fork `dbos-transact-rust`. It is Postgres only, its storage trait has 
 
 What may differ per database: the schema file, "now in milliseconds", the insert-if-absent clause, the row lock clause, the transaction start, connection settings, and which errors count as retryable.
 
+## Durable queues
+
+The core now offers durable FIFO enqueue and global lease-owner concurrency. Queue metadata and membership use new companion tables; workflow identity, status, results and ownership remain in the existing workflow row. A queue transaction revokes expired owners, counts all remaining tokens and admits compatible work. Ordinary recovery and direct resume claims exclude queue members. Relative timeout budgets begin on first admission; inherited deadlines apply while waiting.
+
+Upgrade or stop old workers before using queues: older claim SQL does not enforce queue admission. The core API and remaining SDK obligations are described in [`dwos-core/README.md`](../crates/dwos-core/README.md).
+
 ## Behaviour we keep
 
 | Topic | Behaviour |
@@ -100,7 +106,7 @@ What may differ per database: the schema file, "now in milliseconds", the insert
 
 ## Not in this version
 
-Queues, durable sleep, send and receive, events, schedules, streams, cancel and resume, fork, a TypeScript SDK, and a separate coordinator.
+Schedules, streams, fork, a TypeScript SDK, and a separate coordinator. Queue rate limits, priorities, partitions and runtime reconfiguration are outside the current basic FIFO/global-concurrency scope. MessagePack is deferred by the user.
 
 ## Tests
 

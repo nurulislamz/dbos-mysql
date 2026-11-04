@@ -10,7 +10,7 @@ Keep `ActiveRun` alive with `keep_lease` while executing. Monitor `ActiveRun::lo
 
 `sleep` records an absolute database-clock wake time and returns the remaining duration. The SDK performs the actual sleep while monitoring ownership. A relative workflow timeout starts when execution starts; children inherit the absolute deadline unless they supply their own timeout or explicitly opt out. Deadlines survive restart and resume. An expired deadline cancels the workflow; resume does not silently grant a new budget.
 
-Workflow management supports cancellation, resume and filtered listing. Events and messages use durable step records for replay, and messages are FIFO within a destination/topic. Polling APIs return serialized values or remaining wait time; SDKs perform the waits.
+Workflow management supports cancellation, resume and filtered listing. Events and messages use durable step records for replay, and messages are FIFO within a destination/topic. Recovered waits use the recorded arrival deadline. Event revisions preserve earlier eligible values after overwrites and remain until workflow deletion. Older event rows without history support immediate reads, but their past arrival times cannot be reconstructed. Polling APIs return serialized values or remaining wait time; SDKs perform the waits.
 
 ## Queues
 
