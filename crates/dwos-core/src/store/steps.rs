@@ -45,6 +45,7 @@ impl Store {
         step_id: u32,
         step_name: &str,
     ) -> Result<Option<StepRecord>, Error> {
+        check_name("step name", step_name)?;
         self.attempt(|| async {
             let (mut tx, _) = self.owned_transaction(lease).await?;
             let saved = self.read_step(&mut tx, &lease.workflow_id, step_id).await?;
@@ -66,6 +67,7 @@ impl Store {
         step_id: u32,
         step_name: &str,
     ) -> Result<Option<StepRecord>, Error> {
+        check_name("step name", step_name)?;
         self.attempt(|| async {
             let mut conn = self.pool.acquire().await?;
             let exists =

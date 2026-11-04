@@ -108,6 +108,35 @@ all_dbs!(check_step_stops_once_the_workflow_is_cancelled, backend, {
     assert!(matches!(error, Error::WorkflowCancelled(_)), "{error:?}");
 });
 
+all_dbs!(invalid_step_names_are_rejected_before_execution, backend, {
+    let db = TestDb::create(backend).await;
+    let engine = engine(&db, config()).await;
+    let run = begin_run(&engine, "a").await;
+    for name in ["bad\0step".to_owned(), "x".repeat(256)] {
+        for error in [
+            engine.check_step(&run, 1, &name).await.unwrap_err(),
+            engine
+                .store()
+                .load_step("missing", 1, &name)
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    error,
+                    Error::ContainsNul { field: "step name" }
+                        | Error::NameTooLong { field: "step name" }
+                ),
+                "{error:?}"
+            );
+        }
+    }
+    assert_eq!(
+        engine.check_step(&run, 1, &"é".repeat(255)).await.unwrap(),
+        StepDecision::Run
+    );
+});
+
 all_dbs!(resume_makes_a_cancelled_workflow_claimable, backend, {
     let db = TestDb::create(backend).await;
     let engine = engine(&db, config()).await;
