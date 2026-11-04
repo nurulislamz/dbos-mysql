@@ -474,21 +474,21 @@ impl Engine {
     }
 
     pub async fn recovery_tick(&self, names: &[String]) -> Vec<Claimed> {
+        tokio::time::sleep(jittered(self.config.recovery_interval)).await;
         let free = usize::try_from(self.config.max_concurrent_recoveries)
             .unwrap_or(usize::MAX)
             .saturating_sub(self.active_runs());
         let limit = u32::try_from(free).unwrap_or(u32::MAX);
-        if limit > 0 {
-            match self.store.reclaim(names, limit, self.config.lease).await {
-                Ok(claims) if !claims.is_empty() => return claims,
-                Ok(_) => {}
-                Err(error) => {
-                    log::error!("workflow recovery failed, and will be tried again: {error}")
-                }
+        if limit == 0 {
+            return Vec::new();
+        }
+        match self.store.reclaim(names, limit, self.config.lease).await {
+            Ok(claims) => claims,
+            Err(error) => {
+                log::error!("workflow recovery failed, and will be tried again: {error}");
+                Vec::new()
             }
         }
-        tokio::time::sleep(jittered(self.config.recovery_interval)).await;
-        Vec::new()
     }
 }
 

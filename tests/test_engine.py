@@ -1,9 +1,9 @@
-import time
 import asyncio
 import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -451,3 +451,24 @@ def test_rows_use_millisecond_times_and_record_their_format(dbos: DBOS, database
     assert claim_after is None
     assert steps[0][0] == "portable_json"
     assert before < steps[0][1] < after
+
+
+def test_background_recovery_waits_one_interval_before_its_first_claim(config: DBOSConfig, database: Database) -> None:
+    @DBOS.workflow()
+    def work() -> int:
+        return 1
+
+    DBOS(config=config)
+    DBOS.launch()
+    handle = DBOS.start_workflow(work)
+    assert handle.get_result() == 1
+    DBOS.destroy()
+
+    database.expire_lease(handle.workflow_id)
+    DBOS(config=config)
+    DBOS.launch()
+    time.sleep(0.3)
+    try:
+        assert [recovered.workflow_id for recovered in DBOS._recover_pending_workflows()] == [handle.workflow_id]
+    finally:
+        DBOS.destroy()
