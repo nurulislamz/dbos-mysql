@@ -93,6 +93,16 @@ DBOS.destroy()
 
 For MySQL, use `mysql://user:password@host:3306/database`. For Postgres, use `postgres://user:password@host:5432/database`.
 
+## See your workflows
+
+A small read-only page shows workflows, their status, and each saved step. Your program never needs it.
+
+```sh
+python -m rust_dwos.ui --db sqlite://app.sqlite --port 8000
+```
+
+Then open <http://127.0.0.1:8000>. Stored values are shown as stored, without decoding. It answers only on your own machine and has no login, so do not expose the port without adding one. A database URL given with `--db` is visible to other users of the machine in the process list.
+
 **SQLite warning:** do not open the workflow database with Python's `sqlite3` in a process that also runs this library. The library has its own copy of SQLite, and two copies in one process can corrupt the file.
 
 ## Tests
