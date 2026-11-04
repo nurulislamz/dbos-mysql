@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use dwos_core::{
     ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Engine, EngineConfig, Error,
-    FinalOutcome, Finished, Outcome, ParentStep, RecordedStep, Run, StepDecision, StepPolicy,
-    Workflow, WorkflowResult,
+    FinalOutcome, Finished, Outcome, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, Run,
+    StepDecision, StepPolicy, Workflow, WorkflowResult, pickle_from_serializer,
 };
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -48,6 +48,11 @@ impl PyRun {
     fn workflow_id(&self) -> &str {
         self.0.workflow_id()
     }
+
+    #[getter]
+    fn serialization(&self) -> &str {
+        self.0.serialization()
+    }
 }
 
 #[pyclass(name = "WorkflowRow", frozen, get_all)]
@@ -64,6 +69,7 @@ struct PyWorkflow {
     created_at_ms: i64,
     updated_at_ms: i64,
     completed_at_ms: Option<i64>,
+    serialization: String,
 }
 
 impl From<Workflow> for PyWorkflow {
@@ -81,6 +87,7 @@ impl From<Workflow> for PyWorkflow {
             created_at_ms: row.created_at_ms,
             updated_at_ms: row.updated_at_ms,
             completed_at_ms: row.completed_at_ms,
+            serialization: row.serialization,
         }
     }
 }
@@ -92,6 +99,7 @@ struct PyStep {
     output: Option<String>,
     error: Option<String>,
     child_workflow_id: Option<String>,
+    serialization: String,
 }
 
 impl From<RecordedStep> for PyStep {
@@ -102,6 +110,7 @@ impl From<RecordedStep> for PyStep {
             output: step.record.output,
             error: step.record.error,
             child_workflow_id: step.record.child_workflow_id,
+            serialization: step.serialization,
         }
     }
 }
@@ -113,6 +122,7 @@ struct PyResult_ {
     kind: &'static str,
     value: Option<String>,
     max_recovery_attempts: Option<u32>,
+    serialization: String,
 }
 
 impl From<WorkflowResult> for PyResult_ {
@@ -130,6 +140,7 @@ impl From<WorkflowResult> for PyResult_ {
             kind,
             value,
             max_recovery_attempts,
+            serialization: result.serialization,
         }
     }
 }
@@ -163,7 +174,10 @@ fn claims_to_py(claims: Vec<Claimed>) -> PyResult<Vec<PyClaim>> {
             .map(|claim| {
                 Ok(PyClaim {
                     workflow_id: claim.lease.workflow_id.clone(),
-                    run: Py::new(py, PyRun(Arc::new(Run::new(claim.lease))))?,
+                    run: Py::new(
+                        py,
+                        PyRun(Arc::new(Run::new(claim.lease, claim.serialization))),
+                    )?,
                     name: claim.name,
                     input: claim.input,
                     recovery_attempts: claim.recovery_attempts,
@@ -244,7 +258,8 @@ struct PyEngine(Engine);
 #[pymethods]
 impl PyEngine {
     #[staticmethod]
-    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None))]
     fn connect(
         py: Python<'_>,
         url: String,
@@ -253,6 +268,7 @@ impl PyEngine {
         recovery_interval_seconds: Option<f64>,
         max_concurrent_recoveries: Option<u32>,
         run_migrations: Option<bool>,
+        serializer: Option<String>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let mut config = EngineConfig::default();
         if let Some(value) = lease_seconds {
@@ -270,10 +286,18 @@ impl PyEngine {
         if let Some(value) = run_migrations {
             config.run_migrations = value;
         }
+        if let Some(value) = serializer {
+            config.pickle = pickle_from_serializer(&value).map_err(to_py)?;
+        }
         future_into_py(py, async move {
             let engine = Engine::connect(&url, config).await.map_err(to_py)?;
             Ok(PyEngine(engine))
         })
+    }
+
+    #[getter]
+    fn serialization(&self) -> &'static str {
+        self.0.serialization()
     }
 
     fn close(&self) {
@@ -501,6 +525,8 @@ fn silence_logs() {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
+    m.add("PORTABLE_JSON", PORTABLE_JSON)?;
+    m.add("PY_PICKLE", PY_PICKLE)?;
     pyo3_log::Logger::new(py, pyo3_log::Caching::Loggers)?
         .install()
         .ok();

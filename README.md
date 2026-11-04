@@ -1,6 +1,6 @@
 # rust-dwos
 
-Durable workflows on Postgres, MySQL 8.4 and SQLite. A Rust core decides what runs. A thin Python layer only calls your function and returns the result. Finished steps are stored as JSON, so a crash resumes without repeating them.
+Durable workflows on Postgres, MySQL 8.4 and SQLite. A Rust core decides what runs. A thin Python layer only calls your function and returns the result. Finished steps are saved, so a crash resumes without repeating them.
 
 > **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. Do not run payment or email steps on it yet.
 
@@ -12,7 +12,7 @@ There is no extra server. A running copy of your program is the coordinator. Whe
 |---|---|
 | Rust core | Decides the step, the saved result, and the lease. Writes and reads the rows |
 | Python | Runs your function and returns the result. Holds no step, result, or lease decisions |
-| Postgres, MySQL 8.4 or SQLite | Stores the workflow and each finished step as JSON |
+| Postgres, MySQL 8.4 or SQLite | Stores the workflow and each finished step |
 | TypeScript SDK | Not part of this version |
 | Queues and durable sleep | Not part of this version |
 
@@ -41,9 +41,22 @@ A step that charges a card or sends email still needs an idempotency key at that
 
 ## What can be stored
 
-Values are stored as JSON, not pickle, so a database row can never run code. Annotate your functions to keep rich types, for example `-> Order` or `tuple[int, str]`.
+Values are stored with pickle by default, so most Python values come back as they were, with no annotations.
 
-| Value | Result |
+- **Trust:** loading a pickle can run code. Anyone who can write to this database could run code on every process that reads it, so keep write access to admins and your own program.
+- **Renames:** a pickle stores the path to its class. Renaming or moving a class can break unfinished workflows when they recover.
+- **Exceptions:** attributes are kept, but `__cause__` and tracebacks are lost. An exception that cannot be rebuilt comes back as `DBOSRecordedError`.
+- **Viewer:** the web viewer shows pickled values as base64 and never loads them.
+
+### Using JSON instead
+
+```python
+DBOS(config={"name": "my-app", "system_database_url": url, "serializer": "json"})
+```
+
+With JSON, a database row cannot run code, and the viewer shows readable values. A row's tag cannot turn pickle on: a JSON process refuses pickled values and leaves pickled workflows unclaimed. Annotate your functions to keep rich types, for example `-> Order` or `tuple[int, str]`.
+
+| Value, with JSON | Result |
 |---|---|
 | `NaN`, `Infinity`, non-UTF-8 `bytes`, arbitrary class instances | `TypeError`, nothing is stored |
 | `tuple` or `set` with no annotation | Comes back as `list` |
@@ -52,6 +65,8 @@ Values are stored as JSON, not pickle, so a database row can never run code. Ann
 | Non-string dict keys with no annotation | Come back as strings |
 | Exception attributes that are not JSON, and `__cause__` | Dropped |
 | Exception whose class is not loaded in the process | Comes back as `DBOSRecordedError` |
+
+Each workflow keeps the format it started with, so you can switch without breaking old rows.
 
 ## Try it
 

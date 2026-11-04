@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
+from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
 from rust_dwos.serialization import Codec, decode_exception, encode_exception
 from tests.conftest import Database
 
@@ -37,6 +37,11 @@ class Declined(Exception):
 class Order:
     item: str
     placed: datetime
+
+
+@pytest.fixture
+def config(config: DBOSConfig) -> DBOSConfig:
+    return {**config, "serializer": "json"}
 
 
 def _blob(marker: Path) -> str:

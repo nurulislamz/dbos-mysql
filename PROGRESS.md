@@ -13,6 +13,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | 6 | Read-only web viewer | done | A | 0 | `tests/test_ui.py` on all 3; viewed in headless Chromium on SQLite |
 | 4 | Python tests and crash harness run on Postgres too | done | B | 1, 3 | 309 Python tests pass on all 3 |
 | 5 | Pass `kill -9` and every fault on all 3 | done | alone, last | all | 6 crash tests clean, plus 6 database restart runs clean |
+| 7 | Pickle by default, with `"serializer": "json"` to opt out | done | alone | 3 | `tests/test_pickle_option.py` on all 3; its gate tests fail when the gate is removed; crash tests run both formats |
 
 ## Databases
 
@@ -41,8 +42,9 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 - Keep this code and reshape it. Do not restart from scratch.
 - Do not fork `dbos-transact-rust`. Reuse its design, schema and tests.
 - One store through `sqlx` `Any`. See `docs/PLAN.md`.
-- Leases for crash detection. Stored values are `portable_json`.
-- Old work and the old README and plan are on the local branch `archive/pre-rewrite`.
+- Leases for crash detection.
+- Stored values use pickle by default, because only admins and the program write to the database. JSON is opt-out through config. The config decides, never a row's tag.
+- All work lives on `main`. Old branches and worktrees were deleted on 2026-11-04.
 
 ## Known problems
 
@@ -51,10 +53,12 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 - Postgres rejects NUL characters in text, so a workflow ID or name containing one fails only there. Not handled.
 - Background recovery now waits one interval first. With the default one second, a restart recovers up to 1.5s later, and a backlog recovers at most one batch of 50 per interval.
 - A real error raised during the shutdown window is no longer final. The workflow runs again after restart.
-- Stored values follow the DBOS `portable_json` shape, but the `serialization` column is never read and reading rows across SDKs is untested.
-- Rows written with `py_pickle` by older builds fail with a clear error. MySQL counters became `BIGINT`. Nothing was released, so there is no migration, and old test databases need recreating.
+- JSON values follow the DBOS `portable_json` shape, but reading rows across SDKs is untested.
+- If every running copy is set to JSON, pickled workflows wait unclaimed with no warning.
+- With the default pickle, the web viewer shows stored values as base64, so it is less useful for debugging.
+- MySQL counters became `BIGINT`. Nothing was released, so there is no migration, and old test databases need recreating.
 - A stored error can name any `Exception` class already loaded in the process. It cannot import anything or run a constructor, but that class's `__str__` can still run later.
 - The viewer can write to a SQLite file: connecting sets WAL mode in the Rust core. A read-only connection would fix it.
 - The viewer's browser checks used SQLite and Chromium only. Its API tests ran on all 3.
-- Stale worktrees remain in `.worktrees/`. Local branch `archive/pre-rewrite` was not merged, because it holds the old plan and README. The stopped container `dbos-mysql-chaos-mysql-1` can be removed.
+- The stopped container `dbos-mysql-chaos-mysql-1` can be removed.
 - Ports: 13307 test MySQL, 13308 crash MySQL, 13309 test Postgres, 13310 crash Postgres.

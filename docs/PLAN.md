@@ -60,7 +60,7 @@ What may differ per database: the schema file, "now in milliseconds", the insert
 | Steps | Saved steps never run again. An unsaved step may run again after a crash |
 | Step IDs | Start at 1, in call order. Rust assigns them |
 | Crash detection | A lease with an expiry, not an executor ID. A surviving copy can take over without a server |
-| Stored values | JSON text (`portable_json`). Not pickle |
+| Stored values | Pickle by default, because only admins and the program can write to the database. `"serializer": "json"` stores `portable_json` instead, and a JSON process never loads a pickle, whatever a row's tag says. A workflow keeps the format it started with |
 | Stale owner | A process that lost its lease cannot save a step or a result |
 | Recovery limit | Too many recoveries end as `MAX_RECOVERY_ATTEMPTS_EXCEEDED` |
 

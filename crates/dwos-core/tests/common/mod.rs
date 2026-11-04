@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use dwos_core::{Lease, NewWorkflow, Started, StepRecord, Store};
+use dwos_core::{Lease, NewWorkflow, PORTABLE_JSON, Started, StepRecord, Store};
 use sqlx::Connection;
 use sqlx::mysql::MySqlConnection;
 use sqlx::postgres::PgConnection;
@@ -173,6 +173,7 @@ pub fn workflow<'a>(id: &'a str, lease: Duration) -> NewWorkflow<'a> {
         max_recovery_attempts: 100,
         lease,
         parent_workflow_id: None,
+        serialization: PORTABLE_JSON,
     }
 }
 

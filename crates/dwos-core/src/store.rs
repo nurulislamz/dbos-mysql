@@ -10,9 +10,9 @@ use crate::Error;
 use crate::lease::LeaseKeeper;
 use crate::retry::with_retry;
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, SERIALIZATION, Started, Status, StepRecord,
-    Workflow, attempts_exhausted, check_recorded_step, check_step_name, check_workflow_name,
-    new_token,
+    Claimed, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
+    StepRecord, Workflow, attempts_exhausted, check_recorded_step, check_step_name,
+    check_workflow_name, new_token,
 };
 
 const MAX_NAME_CHARS: usize = 255;
@@ -24,7 +24,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(40);
 const POSTGRES_MIGRATION_LOCK: &str =
     "SELECT 1 FROM (SELECT pg_advisory_xact_lock(7240319)) AS locked";
-const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, lease_token \
+const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, lease_token \
      FROM workflow_status WHERE workflow_uuid = ?";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,6 +139,7 @@ fn workflow_from_row(row: &AnyRow) -> Result<Workflow, Error> {
         created_at_ms: row.try_get("created_at")?,
         updated_at_ms: row.try_get("updated_at")?,
         completed_at_ms: row.try_get("completed_at")?,
+        serialization: row.try_get("serialization")?,
     })
 }
 
@@ -209,6 +210,7 @@ pub struct Store {
     lease_pool: AnyPool,
     max_packet: Option<u64>,
     retries: Arc<AtomicU64>,
+    pickle: bool,
 }
 
 impl Store {
@@ -229,6 +231,7 @@ impl Store {
                 pool,
                 max_packet: None,
                 retries: Arc::new(AtomicU64::new(0)),
+                pickle: false,
             });
         }
 
@@ -248,7 +251,22 @@ impl Store {
             lease_pool,
             max_packet,
             retries: Arc::new(AtomicU64::new(0)),
+            pickle: false,
         })
+    }
+
+    /// Lets this store claim pickled workflows. Without it they wait for a process that can read them.
+    pub fn with_pickle(mut self) -> Self {
+        self.pickle = true;
+        self
+    }
+
+    fn readable_formats(&self) -> String {
+        if self.pickle {
+            format!("'{PORTABLE_JSON}', '{PY_PICKLE}'")
+        } else {
+            format!("'{PORTABLE_JSON}'")
+        }
     }
 
     pub fn backend(&self) -> &'static str {
@@ -367,7 +385,7 @@ impl Store {
         .bind(token)
         .bind(i64::from(new.max_recovery_attempts))
         .bind(new.parent_workflow_id)
-        .bind(SERIALIZATION)
+        .bind(new.serialization)
         .execute(&mut *tx)
         .await?;
 
@@ -475,16 +493,17 @@ impl Store {
     ) -> Result<(), Error> {
         let mut tx = self.begin().await?;
         let owner = sqlx::query(self.sql(&format!(
-            "SELECT 1 FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' {}",
+            "SELECT serialization FROM workflow_status WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' {}",
             self.dialect.lock_row()
         )))
         .bind(lease.workflow_id.as_str())
         .bind(lease.token.as_str())
         .fetch_optional(&mut *tx)
         .await?;
-        if owner.is_none() {
+        let Some(owner) = owner else {
             return Err(Error::LeaseLost(lease.workflow_id.clone()));
-        }
+        };
+        let serialization: String = owner.try_get("serialization")?;
         if let Some(recorded) = self.read_step(&mut tx, &lease.workflow_id, step_id).await? {
             return check_recorded_step(&lease.workflow_id, step_id, step_name, record, &recorded);
         }
@@ -498,7 +517,7 @@ impl Store {
         .bind(record.output.as_deref())
         .bind(record.error.as_deref())
         .bind(record.child_workflow_id.as_deref())
-        .bind(SERIALIZATION)
+        .bind(serialization.as_str())
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -587,9 +606,10 @@ impl Store {
     ) -> Result<Vec<Claimed>, Error> {
         let mut tx = self.begin().await?;
         let select_sql = self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts FROM workflow_status \
-             WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND name IN ({}) \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization FROM workflow_status \
+             WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND serialization IN ({}) AND name IN ({}) \
              ORDER BY claim_after, workflow_uuid LIMIT ? {}",
+            self.readable_formats(),
             vec!["?"; names.len()].join(", "),
             self.dialect.lock_free_rows()
         ));
@@ -630,6 +650,7 @@ impl Store {
                 name: row.try_get("name")?,
                 input: row.try_get("inputs")?,
                 recovery_attempts: attempts,
+                serialization: row.try_get("serialization")?,
             });
         }
         tx.commit().await?;
@@ -639,7 +660,7 @@ impl Store {
     pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
         self.attempt(|| async {
             let rows = sqlx::query(
-                "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at \
+                "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization \
                  FROM workflow_status ORDER BY created_at, workflow_uuid",
             )
             .fetch_all(&self.pool)
@@ -652,7 +673,7 @@ impl Store {
     pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
         self.attempt(|| async {
             let rows = sqlx::query(self.sql(
-                "SELECT function_id, function_name, output, error, child_workflow_id FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
+                "SELECT function_id, function_name, output, error, child_workflow_id, serialization FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
             ))
             .bind(workflow_id)
             .fetch_all(&self.pool)
@@ -663,6 +684,7 @@ impl Store {
                         step_id: get_u32(row, "function_id")?,
                         step_name: row.try_get("function_name")?,
                         record: record_from_row(row)?,
+                        serialization: row.try_get("serialization")?,
                     })
                 })
                 .collect()

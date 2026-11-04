@@ -169,3 +169,66 @@ async def test_an_async_body_stopped_by_a_base_exception_is_not_stored(dbos: DBO
         await stopped()
     rows = database.execute("SELECT status, error FROM workflow_status WHERE workflow_uuid = %s", workflow_id)
     assert rows == [("PENDING", None)]
+
+
+_DYING_LOOP_APP = """
+import asyncio, sys, time
+from rust_dwos import DBOS
+
+@DBOS.workflow(name="uses_a_thread")
+async def uses_a_thread() -> int:
+    await asyncio.to_thread(time.sleep, 0.01)
+    return 1
+
+async def main() -> None:
+    DBOS(config={"name": "app", "system_database_url": sys.argv[1], "lease_seconds": 1.0, "recovery_interval_seconds": 0.05})
+    DBOS.launch()
+    asyncio.create_task(asyncio.to_thread(time.sleep, 2))  # keeps the closing loop running
+    await asyncio.sleep(0)
+    sys.exit(0)
+
+asyncio.run(main())
+"""
+
+
+def test_a_workflow_recovered_while_the_app_loop_closes_is_not_stored_as_an_error(config: DBOSConfig, database: Database) -> None:
+    DBOS.destroy(destroy_registry=True)
+
+    @DBOS.workflow(name="uses_a_thread")
+    async def uses_a_thread() -> int:
+        return 1
+
+    DBOS(config=config)
+    DBOS.launch()
+    handle = DBOS.start_workflow(uses_a_thread)
+    assert handle.get_result() == 1
+    DBOS.destroy(destroy_registry=True)
+    database.expire_lease(handle.workflow_id)
+
+    subprocess.run([sys.executable, "-c", _DYING_LOOP_APP, database.url], check=True, timeout=30)
+    rows = database.execute("SELECT status, error FROM workflow_status WHERE workflow_uuid = %s", handle.workflow_id)
+    assert rows[0][0] != "ERROR", rows[0][1]
+
+
+_EXITING_APP = """
+import asyncio, sys, time
+from rust_dwos import DBOS, SetWorkflowID
+
+@DBOS.workflow()
+async def keeps_using_threads() -> None:
+    while True:
+        await asyncio.to_thread(time.sleep, 0.01)
+
+DBOS(config={"name": "app", "system_database_url": sys.argv[1]})
+DBOS.launch()
+with SetWorkflowID(sys.argv[2]):
+    DBOS.start_workflow(keeps_using_threads)
+time.sleep(0.3)
+"""
+
+
+def test_thread_executors_stopping_at_exit_is_not_stored_as_an_error(database: Database) -> None:
+    workflow_id = str(uuid.uuid4())
+    subprocess.run([sys.executable, "-c", _EXITING_APP, database.url, workflow_id], check=True, timeout=30)
+    rows = database.execute("SELECT status, error FROM workflow_status WHERE workflow_uuid = %s", workflow_id)
+    assert rows[0][0] == "PENDING", rows[0][1]

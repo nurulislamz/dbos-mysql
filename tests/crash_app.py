@@ -39,9 +39,10 @@ def register(ledger: Path, crash: bool) -> dict[str, Callable[..., Any]]:
 
 
 def main() -> None:
-    url, workflow_id, kind, ledger = sys.argv[1:]
+    url, workflow_id, kind, ledger, *serializer = sys.argv[1:]
     workflows = register(Path(ledger), crash=True)
-    DBOS(config={"name": "crash", "system_database_url": url, "lease_seconds": 1.0, "recovery_interval_seconds": 3600.0})
+    options = {"serializer": serializer[0]} if serializer else {}
+    DBOS(config={"name": "crash", "system_database_url": url, "lease_seconds": 1.0, "recovery_interval_seconds": 3600.0, **options})
     DBOS.launch()
     with SetWorkflowID(workflow_id):
         if kind == "async":

@@ -1063,3 +1063,73 @@ mod postgres_only {
         assert!(store.get_workflow("a").await.unwrap().is_some());
     }
 }
+
+fn pickled<'a>(id: &'a str, lease: Duration) -> dwos_core::NewWorkflow<'a> {
+    let mut new = workflow(id, lease);
+    new.serialization = dwos_core::PY_PICKLE;
+    new
+}
+
+all_dbs!(
+    a_workflow_and_its_steps_keep_the_format_they_started_with,
+    backend,
+    {
+        let (_db, store) = setup(backend).await;
+        let lease = start(&store, &pickled("a", LONG)).await;
+        store
+            .save_step(&lease, 1, "step", &output("1"))
+            .await
+            .unwrap();
+        let state = store.get_workflow("a").await.unwrap().unwrap();
+        assert_eq!(state.serialization, dwos_core::PY_PICKLE);
+        let steps = store.list_steps("a").await.unwrap();
+        assert_eq!(steps[0].serialization, dwos_core::PY_PICKLE);
+    }
+);
+
+all_dbs!(
+    only_a_store_with_pickle_claims_pickled_workflows,
+    backend,
+    {
+        let (_db, store) = setup(backend).await;
+        start(&store, &pickled("a", EXPIRED)).await;
+        assert!(store.reclaim(&names(), 10, LONG).await.unwrap().is_empty());
+        let state = store.get_workflow("a").await.unwrap().unwrap();
+        assert_eq!(state.recovery_attempts, 1, "no recovery attempt was used");
+
+        let claims = store
+            .clone()
+            .with_pickle()
+            .reclaim(&names(), 10, LONG)
+            .await
+            .unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].serialization, dwos_core::PY_PICKLE);
+    }
+);
+
+all_dbs!(a_store_with_pickle_still_claims_json_workflows, backend, {
+    let (_db, store) = setup(backend).await;
+    start(&store, &workflow("a", EXPIRED)).await;
+    let claims = store
+        .clone()
+        .with_pickle()
+        .reclaim(&names(), 10, LONG)
+        .await
+        .unwrap();
+    assert_eq!(claims[0].serialization, dwos_core::PORTABLE_JSON);
+});
+
+all_dbs!(an_unknown_format_is_never_claimed, backend, {
+    let (_db, store) = setup(backend).await;
+    let mut unknown = workflow("a", EXPIRED);
+    unknown.serialization = "some_other_format";
+    start(&store, &unknown).await;
+    let claims = store
+        .clone()
+        .with_pickle()
+        .reclaim(&names(), 10, LONG)
+        .await
+        .unwrap();
+    assert!(claims.is_empty());
+});

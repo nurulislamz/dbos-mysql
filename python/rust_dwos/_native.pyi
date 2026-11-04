@@ -1,6 +1,8 @@
 import asyncio
 
 DEFAULT_MAX_RECOVERY_ATTEMPTS: int
+PORTABLE_JSON: str
+PY_PICKLE: str
 
 class DBOSException(Exception): ...
 class StoreError(DBOSException): ...
@@ -13,6 +15,8 @@ class DBOSLeaseLostError(DBOSException): ...
 class Run:
     @property
     def workflow_id(self) -> str: ...
+    @property
+    def serialization(self) -> str: ...
 
 class WorkflowRow:
     workflow_id: str
@@ -27,6 +31,7 @@ class WorkflowRow:
     created_at_ms: int
     updated_at_ms: int
     completed_at_ms: int | None
+    serialization: str
 
 class StepRow:
     step_id: int
@@ -34,6 +39,7 @@ class StepRow:
     output: str | None
     error: str | None
     child_workflow_id: str | None
+    serialization: str
 
 class WorkflowResult:
     workflow_id: str
@@ -41,6 +47,7 @@ class WorkflowResult:
     kind: str
     value: str | None
     max_recovery_attempts: int | None
+    serialization: str
 
 class Begun:
     workflow_id: str
@@ -83,7 +90,10 @@ class Engine:
         recovery_interval_seconds: float | None = None,
         max_concurrent_recoveries: int | None = None,
         run_migrations: bool | None = None,
+        serializer: str | None = None,
     ) -> asyncio.Future[Engine]: ...
+    @property
+    def serialization(self) -> str: ...
     def close(self) -> None: ...
     def begin(
         self,

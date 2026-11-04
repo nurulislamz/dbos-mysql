@@ -446,10 +446,10 @@ def test_rows_use_millisecond_times_and_record_their_format(dbos: DBOS, database
         handle.workflow_id,
     )
     serialization, *times, claim_after = rows[0]
-    assert serialization == "portable_json"
+    assert serialization == "py_pickle"
     assert all(before < moment < after for moment in times)
     assert claim_after is None
-    assert steps[0][0] == "portable_json"
+    assert steps[0][0] == "py_pickle"
     assert before < steps[0][1] < after
 
 

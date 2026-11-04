@@ -3,7 +3,8 @@ use std::time::Duration;
 use crate::Error;
 
 pub const DEFAULT_MAX_RECOVERY_ATTEMPTS: u32 = 100;
-pub const SERIALIZATION: &str = "portable_json";
+pub const PORTABLE_JSON: &str = "portable_json";
+pub const PY_PICKLE: &str = "py_pickle";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {
@@ -42,6 +43,7 @@ pub struct NewWorkflow<'a> {
     pub max_recovery_attempts: u32,
     pub lease: Duration,
     pub parent_workflow_id: Option<&'a str>,
+    pub serialization: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,6 +66,7 @@ pub struct Workflow {
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+    pub serialization: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +81,7 @@ pub struct Claimed {
     pub name: String,
     pub input: String,
     pub recovery_attempts: u32,
+    pub serialization: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -92,12 +96,23 @@ pub struct RecordedStep {
     pub step_id: u32,
     pub step_name: String,
     pub record: StepRecord,
+    pub serialization: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Outcome {
     Success(String),
     Error(String),
+}
+
+pub fn pickle_from_serializer(name: &str) -> Result<bool, Error> {
+    match name {
+        "json" => Ok(false),
+        "pickle" => Ok(true),
+        other => Err(Error::InvalidConfig(format!(
+            "serializer must be json or pickle, not {other}"
+        ))),
+    }
 }
 
 pub(crate) fn new_token() -> String {

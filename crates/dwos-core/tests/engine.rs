@@ -332,7 +332,7 @@ all_dbs!(
         let engine = engine(&db, expired()).await;
         let stale = begin_run(&engine, "a").await;
         let claim = engine.recover_now(&names()).await.unwrap().remove(0);
-        let owner = Run::new(claim.lease);
+        let owner = Run::new(claim.lease, claim.serialization);
 
         let late = engine.clone();
         let finishing = tokio::spawn(async move {

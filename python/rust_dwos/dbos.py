@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import concurrent.futures
+import concurrent.futures.thread  # registers its exit hook first, so ours runs before it
 import contextvars
 import functools
 import inspect
@@ -13,7 +14,7 @@ import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from rust_dwos import _native
 from rust_dwos.errors import (
@@ -22,11 +23,11 @@ from rust_dwos.errors import (
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
 )
-from rust_dwos.serialization import Codec, decode_exception, encode_exception
+from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
 
 logger = logging.getLogger("dbos")
 
-_ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations")
+_ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
 _PLAIN_CODEC = Codec(lambda: None)
 _UNLIMITED_RECOVERY_ATTEMPTS = 2**32 - 1
 
@@ -40,6 +41,7 @@ class DBOSConfig(TypedDict):
     recovery_interval_seconds: NotRequired[float]
     max_concurrent_recoveries: NotRequired[int]
     shutdown_timeout_seconds: NotRequired[float]
+    serializer: NotRequired[Literal["json", "pickle"]]
 
 
 class WorkflowStatusString(Enum):
@@ -228,6 +230,7 @@ class DBOS(metaclass=_DBOSMeta):
         self._keepers: set[_native.ActiveRun] = set()
         self._active_lock = threading.Lock()
         self._app_loop: asyncio.AbstractEventLoop | None = None
+        self._app_loop_watch: asyncio.Task[Any] | None = None
 
     @classmethod
     def launch(cls) -> None:
@@ -243,6 +246,7 @@ class DBOS(metaclass=_DBOSMeta):
         self._workflows = _LoopThread("dbos-workflows")
         try:
             self._app_loop = asyncio.get_running_loop()
+            self._app_loop_watch = self._app_loop.create_task(asyncio.Event().wait())
         except RuntimeError:
             self._app_loop = None
         options = {name: self._config[name] for name in _ENGINE_OPTIONS if name in self._config}
@@ -252,6 +256,7 @@ class DBOS(metaclass=_DBOSMeta):
             self._workflows.stop()
             self._state.stop()
             raise
+        allow_pickle(self._engine.serialization == _native.PY_PICKLE)
         self._recovery = self._workflows.submit(self._recovery_loop())
 
     def _blocking(self, method: Callable[..., Any], *args: Any) -> Any:
@@ -277,6 +282,8 @@ class DBOS(metaclass=_DBOSMeta):
             future.cancel()
         for task in tasks:
             _cancel_task(task)
+        if self._app_loop_watch is not None:
+            _cancel_task(self._app_loop_watch)
         self._recovery.cancel()
         concurrent.futures.wait([*active, self._recovery], timeout=self._shutdown_timeout)
         self._workflows.stop()
@@ -347,7 +354,7 @@ class DBOS(metaclass=_DBOSMeta):
                 instance = _running()
                 step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name)
                 if replay is not None:
-                    return _replay_step(replay, codec)
+                    return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
                 attempt = 1
                 while True:
@@ -375,7 +382,7 @@ class DBOS(metaclass=_DBOSMeta):
                 instance = _running()
                 step_id, replay = await instance._engine.begin_step(run, step_name)
                 if replay is not None:
-                    return _replay_step(replay, codec)
+                    return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
                 attempt = 1
                 while True:
@@ -506,7 +513,8 @@ class DBOS(metaclass=_DBOSMeta):
 
     @property
     def _use_app_loop(self) -> bool:
-        return self._app_loop is not None and self._app_loop.is_running()
+        # A closing loop still reports running but cannot use threads. Closing starts by cancelling every task.
+        return self._app_loop is not None and self._app_loop.is_running() and not self._app_loop_watch.done()
 
     def _task_on_this_loop(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> asyncio.Task[Any]:
         task = asyncio.get_running_loop().create_task(self._run_async(info, run, args, kwargs))
@@ -583,30 +591,30 @@ class DBOS(metaclass=_DBOSMeta):
 
     async def _finish_success(self, info: _Workflow, run: _native.Run, value: Any) -> Any:
         try:
-            text = info.codec.encode_output(value)
+            text = info.codec.encode_output(value, run.serialization)
         except TypeError as error:
             return await self._finish_error(info, run, error)
         superseded = await self._engine.finish_success(run, text)
         if superseded is not None:
             return _decode_result(superseded, info)
-        return info.codec.decode_output(text)
+        return info.codec.decode_output(text, run.serialization)
 
     async def _finish_error(self, info: _Workflow, run: _native.Run, error: BaseException) -> Any:
-        superseded = await self._engine.finish_error(run, encode_exception(error))
+        superseded = await self._engine.finish_error(run, encode_exception(error, run.serialization))
         if superseded is not None:
             return _decode_result(superseded, info)
         raise error
 
     async def _save_success(self, run: _native.Run, step_id: int, step_name: str, codec: Codec, value: Any) -> Any:
         try:
-            text = codec.encode_output(value)
+            text = codec.encode_output(value, run.serialization)
         except TypeError as error:
             raise await self._save_failure(run, step_id, step_name, error) from error
         await self._engine.save_step_output(run, step_id, step_name, text)
-        return codec.decode_output(text)
+        return codec.decode_output(text, run.serialization)
 
     async def _save_failure(self, run: _native.Run, step_id: int, step_name: str, error: Exception) -> Exception:
-        await self._engine.save_step_error(run, step_id, step_name, encode_exception(error))
+        await self._engine.save_step_error(run, step_id, step_name, encode_exception(error, run.serialization))
         return error
 
     async def _recovery_loop(self) -> None:
@@ -620,8 +628,17 @@ class DBOS(metaclass=_DBOSMeta):
     def _resume(self, claim: _native.Claim) -> WorkflowHandle[Any]:
         info = _registry[claim.name]
         logger.info(f"Recovering workflow {claim.workflow_id}, attempt {claim.recovery_attempts}")
-        args, kwargs = info.codec.decode_input(claim.input)
+        args, kwargs = info.codec.decode_input(claim.input, claim.run.serialization)
         return WorkflowHandle(claim.workflow_id, self._launch_run(info, claim.run, args, kwargs))
+
+
+def _close_before_executors_stop() -> None:
+    if _instance is not None and _instance._engine is not None:
+        _instance._engine.close()
+
+
+# Runs before concurrent.futures stops its threads, which is before atexit, so the errors that causes are not final.
+threading._register_atexit(_close_before_executors_stop)
 
 
 def _at_exit() -> None:
@@ -634,7 +651,7 @@ atexit.register(_at_exit)
 
 
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
-    text = info.codec.encode_input(args, kwargs)
+    text = info.codec.encode_input(args, kwargs, _running()._engine.serialization)
     return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None)
 
 
@@ -645,18 +662,18 @@ def _info_of(function: Callable[..., Any]) -> _Workflow:
     return info
 
 
-def _replay_step(replay: _native.StepReplay, codec: Codec) -> Any:
+def _replay_step(replay: _native.StepReplay, codec: Codec, serialization: str) -> Any:
     if replay.error is not None:
-        raise decode_exception(replay.error)
-    return codec.decode_output(replay.output)
+        raise decode_exception(replay.error, serialization)
+    return codec.decode_output(replay.output, serialization)
 
 
 def _decode_result(result: _native.WorkflowResult, info: _Workflow | None = None) -> Any:
     if result.kind == "max_recovery_attempts":
         raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(result.workflow_id)
     if result.kind == "error":
-        raise decode_exception(result.value)
-    return _codec_for(result.name, info).decode_output(result.value)
+        raise decode_exception(result.value, result.serialization)
+    return _codec_for(result.name, info).decode_output(result.value, result.serialization)
 
 
 def _codec_for(name: str, info: _Workflow | None = None) -> Codec:
@@ -670,8 +687,8 @@ def _status_of(row: _native.WorkflowRow) -> WorkflowStatus:
         status=row.status,
         name=row.name,
         input=row.input,
-        output=_codec_for(row.name).decode_output(row.output) if row.output is not None else None,
-        error=decode_exception(row.error) if row.error is not None else None,
+        output=_codec_for(row.name).decode_output(row.output, row.serialization) if row.output is not None else None,
+        error=decode_exception(row.error, row.serialization) if row.error is not None else None,
         recovery_attempts=row.recovery_attempts,
         max_recovery_attempts=None if row.max_recovery_attempts == _UNLIMITED_RECOVERY_ATTEMPTS else row.max_recovery_attempts,
         parent_workflow_id=row.parent_workflow_id,
@@ -685,8 +702,8 @@ def _step_of(step: _native.StepRow) -> dict[str, Any]:
     return {
         "function_id": step.step_id,
         "function_name": step.step_name,
-        "output": _codec_for(step.step_name).decode_output(step.output) if step.output is not None else None,
-        "error": decode_exception(step.error) if step.error is not None else None,
+        "output": _codec_for(step.step_name).decode_output(step.output, step.serialization) if step.output is not None else None,
+        "error": decode_exception(step.error, step.serialization) if step.error is not None else None,
         "child_workflow_id": step.child_workflow_id,
     }
 

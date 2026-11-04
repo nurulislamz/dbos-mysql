@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import inspect
 import json
+import pickle
 import sys
 import typing
 from collections.abc import Callable, Collection
@@ -12,10 +14,44 @@ from pydantic.errors import PydanticUserError
 from pydantic_core import PydanticSerializationError, ValidationError
 
 from rust_dwos import errors
+from rust_dwos._native import PORTABLE_JSON, PY_PICKLE
 from rust_dwos.errors import DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
 
 _ANY: TypeAdapter[Any] = TypeAdapter(Any)
 _MISSING = object()
+_pickle_allowed = False
+
+
+def allow_pickle(allowed: bool) -> None:
+    global _pickle_allowed
+    _pickle_allowed = allowed
+
+
+def _uses_pickle(serialization: str) -> bool:
+    # The only way to reach pickle. A row's tag alone never turns it on, because loading a pickle can run code.
+    if serialization == PORTABLE_JSON:
+        return False
+    if serialization != PY_PICKLE:
+        raise DBOSException(f"A stored value has the unknown format {serialization!r}, so it was not loaded")
+    if not _pickle_allowed:
+        raise DBOSException('A stored value uses pickle, so it was not loaded. Set "serializer": "pickle" in the DBOS config only if you trust this database')
+    return True
+
+
+def _pickle_dumps(value: Any) -> str:
+    if inspect.isgenerator(value) or inspect.isasyncgen(value) or inspect.iscoroutine(value):
+        raise TypeError(f"A value of type {type(value).__name__} cannot be stored")
+    try:
+        return base64.b64encode(pickle.dumps(value)).decode("ascii")
+    except (TypeError, AttributeError, pickle.PicklingError) as error:
+        raise TypeError(f"A value of type {type(value).__name__} cannot be stored with pickle: {error}") from error
+
+
+def _pickle_loads(text: str) -> Any:
+    try:
+        return pickle.loads(base64.b64decode(text))  # noqa: S301
+    except Exception as error:  # noqa: BLE001
+        raise DBOSException(f"A stored pickle could not be loaded: {error}") from error
 
 
 def _adapter(hint: Any) -> TypeAdapter[Any]:
@@ -92,12 +128,17 @@ class Codec:
             else:
                 bound.arguments[name] = convert(adapters[name], value)
 
-    def encode_input(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+    def encode_input(self, args: tuple[Any, ...], kwargs: dict[str, Any], serialization: str = PORTABLE_JSON) -> str:
         bound = self._signature.bind(*args, **kwargs)
+        if _uses_pickle(serialization):
+            return _pickle_dumps((bound.args, bound.kwargs))
         self._convert(bound, lambda adapter, value: json.loads(_dumps(adapter, value)))
         return json.dumps({"positionalArgs": list(bound.args), "namedArgs": bound.kwargs})
 
-    def decode_input(self, text: str) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    def decode_input(self, text: str, serialization: str = PORTABLE_JSON) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        if _uses_pickle(serialization):
+            args, kwargs = _pickle_loads(text)
+            return tuple(args), dict(kwargs)
         payload = _parse(text)
         if not isinstance(payload, dict):
             raise DBOSException("A stored workflow input has the wrong shape, so it was not loaded")
@@ -105,10 +146,14 @@ class Codec:
         self._convert(bound, lambda adapter, value: _loads(adapter, json.dumps(value)))
         return bound.args, bound.kwargs
 
-    def encode_output(self, value: Any) -> str:
+    def encode_output(self, value: Any, serialization: str = PORTABLE_JSON) -> str:
+        if _uses_pickle(serialization):
+            return _pickle_dumps(value)
         return _dumps(self._resolved()["return"], value)
 
-    def decode_output(self, text: str) -> Any:
+    def decode_output(self, text: str, serialization: str = PORTABLE_JSON) -> Any:
+        if _uses_pickle(serialization):
+            return _pickle_loads(text)
         return _loads(self._resolved()["return"], text)
 
 
@@ -135,7 +180,18 @@ def _exception_payload(error: BaseException) -> dict[str, Any]:
     return {"name": kind.__qualname__, "message": str(error), "code": None, "data": data}
 
 
-def encode_exception(error: BaseException) -> str:
+def _reloads(error: BaseException) -> bool:
+    # Loading calls the exception's constructor, so a class that cannot be rebuilt fails here, not at replay.
+    try:
+        _pickle_loads(_pickle_dumps(error))
+    except (TypeError, DBOSException):
+        return False
+    return True
+
+
+def encode_exception(error: BaseException, serialization: str = PORTABLE_JSON) -> str:
+    if _uses_pickle(serialization):
+        return _pickle_dumps(error if _reloads(error) else DBOSRecordedError(type(error).__qualname__, str(error)))
     return json.dumps(_exception_payload(error))
 
 
@@ -171,7 +227,13 @@ def _exception_from(payload: dict[str, Any]) -> Exception:
     return error
 
 
-def decode_exception(text: str) -> Exception:
+def decode_exception(text: str, serialization: str = PORTABLE_JSON) -> Exception:
+    if _uses_pickle(serialization):
+        try:
+            value = _pickle_loads(text)
+        except DBOSException:
+            return DBOSRecordedError("Exception", "stored error could not be loaded")
+        return value if isinstance(value, Exception) else DBOSRecordedError(type(value).__qualname__, str(value))
     try:
         return _exception_from(json.loads(text))
     except Exception:  # noqa: BLE001

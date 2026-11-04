@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
-    Claimed, Lease, NewWorkflow, Outcome, RecordedStep, Started, Status, StepRecord, Workflow,
-    new_token,
+    Claimed, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
+    StepRecord, Workflow, new_token,
 };
 use crate::{Error, Store};
 
@@ -19,6 +19,7 @@ pub struct EngineConfig {
     pub recovery_interval: Duration,
     pub max_concurrent_recoveries: u32,
     pub run_migrations: bool,
+    pub pickle: bool,
 }
 
 impl Default for EngineConfig {
@@ -29,6 +30,7 @@ impl Default for EngineConfig {
             recovery_interval: Duration::from_secs(1),
             max_concurrent_recoveries: 50,
             run_migrations: true,
+            pickle: true,
         }
     }
 }
@@ -37,13 +39,15 @@ impl Default for EngineConfig {
 pub struct Run {
     lease: Lease,
     last_step_id: AtomicU32,
+    serialization: String,
 }
 
 impl Run {
-    pub fn new(lease: Lease) -> Self {
+    pub fn new(lease: Lease, serialization: String) -> Self {
         Self {
             lease,
             last_step_id: AtomicU32::new(0),
+            serialization,
         }
     }
 
@@ -53,6 +57,11 @@ impl Run {
 
     pub fn token(&self) -> &str {
         &self.lease.token
+    }
+
+    /// A workflow's values all use the format it started with, even after a config change.
+    pub fn serialization(&self) -> &str {
+        &self.serialization
     }
 
     pub fn next_step_id(&self) -> u32 {
@@ -92,6 +101,7 @@ pub struct WorkflowResult {
     pub workflow_id: String,
     pub name: String,
     pub outcome: FinalOutcome,
+    pub serialization: String,
 }
 
 #[derive(Debug)]
@@ -227,6 +237,7 @@ fn final_result(workflow: &Workflow) -> Result<Option<WorkflowResult>, Error> {
         workflow_id: workflow.workflow_id.clone(),
         name: workflow.name.clone(),
         outcome,
+        serialization: workflow.serialization.clone(),
     }))
 }
 
@@ -246,6 +257,11 @@ pub struct Engine {
 impl Engine {
     pub async fn connect(url: &str, config: EngineConfig) -> Result<Self, Error> {
         let store = Store::connect(url).await?;
+        let store = if config.pickle {
+            store.with_pickle()
+        } else {
+            store
+        };
         if config.run_migrations {
             store.migrate().await?;
         }
@@ -264,6 +280,14 @@ impl Engine {
 
     fn is_closing(&self) -> bool {
         self.closing.load(Ordering::SeqCst)
+    }
+
+    pub fn serialization(&self) -> &'static str {
+        if self.config.pickle {
+            PY_PICKLE
+        } else {
+            PORTABLE_JSON
+        }
     }
 
     pub fn store(&self) -> &Store {
@@ -292,9 +316,12 @@ impl Engine {
             max_recovery_attempts: begin.max_recovery_attempts,
             lease: self.config.lease,
             parent_workflow_id: begin.parent.map(|parent| parent.run.workflow_id()),
+            serialization: self.serialization(),
         };
         match self.store.start_workflow(&new).await? {
-            Started::Owned(lease) => Ok(Begun::Run(Run::new(lease))),
+            Started::Owned(lease) => {
+                Ok(Begun::Run(Run::new(lease, self.serialization().to_owned())))
+            }
             Started::Existing(existing) => Ok(match final_result(&existing)? {
                 Some(result) => Begun::Stored(result),
                 None => Begun::Attach(workflow_id),
@@ -536,10 +563,13 @@ mod tests {
 
     #[test]
     fn a_child_takes_a_step_id_only_outside_a_step() {
-        let run = Run::new(Lease {
-            workflow_id: "w".to_owned(),
-            token: "t".to_owned(),
-        });
+        let run = Run::new(
+            Lease {
+                workflow_id: "w".to_owned(),
+                token: "t".to_owned(),
+            },
+            PORTABLE_JSON.to_owned(),
+        );
         assert_eq!(run.child_step_id(false), Some(1));
         assert_eq!(run.child_step_id(true), None);
         assert_eq!(run.child_step_id(false), Some(2));
@@ -547,10 +577,13 @@ mod tests {
 
     #[test]
     fn step_ids_start_at_one_and_never_repeat() {
-        let run = Arc::new(Run::new(Lease {
-            workflow_id: "a".to_owned(),
-            token: "t".to_owned(),
-        }));
+        let run = Arc::new(Run::new(
+            Lease {
+                workflow_id: "a".to_owned(),
+                token: "t".to_owned(),
+            },
+            PORTABLE_JSON.to_owned(),
+        ));
         assert_eq!(run.next_step_id(), 1);
         let threads: Vec<_> = (0..8)
             .map(|_| {

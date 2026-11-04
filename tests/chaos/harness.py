@@ -1,5 +1,7 @@
+import base64
 import json
 import os
+import pickle
 import random
 import signal
 import sqlite3
@@ -34,6 +36,7 @@ class ChaosConfig:
     fault_seconds: float = 15.0
     finish_deadline_seconds: float = 100.0
     lease_seconds: float = 1.0
+    serializer: str = "pickle"
 
 
 @dataclass
@@ -149,6 +152,7 @@ class _Workers:
             "CHAOS_LEDGER": self._target.ledger,
             "CHAOS_CRASH_RATE": str(self._crash_rate),
             "CHAOS_LEASE": str(self._config.lease_seconds),
+            "CHAOS_SERIALIZER": self._config.serializer,
         }
         self.processes[index] = subprocess.Popen(
             [sys.executable, "-m", "tests.chaos.worker"], cwd=REPO, env=environment, stdout=subprocess.DEVNULL, stderr=self._log
@@ -190,7 +194,8 @@ def _inject(fault: str, workers: _Workers, config: ChaosConfig, rng: random.Rand
 
 
 def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: ChaosResult) -> None:
-    rows = target.query("SELECT workflow_uuid, status, output, recovery_attempts, max_recovery_attempts FROM workflow_status")
+    read = json.loads if config.serializer == "json" else lambda text: pickle.loads(base64.b64decode(text))  # noqa: S301
+    rows = target.query("SELECT workflow_uuid, status, output, recovery_attempts, max_recovery_attempts, error FROM workflow_status")
     steps = target.query("SELECT workflow_uuid, function_id, output, completed_at_epoch_ms FROM operation_outputs")
     ledger = target.query("SELECT workflow_id, step_id, pid, started_at_ms FROM ledger")
     answers: dict[str, list[str]] = {}
@@ -206,7 +211,7 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
         executions.setdefault((workflow_id, step_id), []).append((pid, started))
 
     fault_free = not any(result.faults_fired.values()) and "crash_window" not in config.faults
-    for workflow_id, status, output, attempts, max_attempts in rows:
+    for workflow_id, status, output, attempts, max_attempts, error in rows:
         result.recovered_workflows += int(attempts > 1)
         if status == "PENDING":
             violations.append(f"{workflow_id} is stuck in PENDING")
@@ -215,10 +220,10 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
                 violations.append(f"{workflow_id} was dead-lettered at {attempts} of {max_attempts} attempts")
             continue
         elif status != "SUCCESS":
-            violations.append(f"{workflow_id} ended as {status}")
+            violations.append(f"{workflow_id} ended as {status}: {read(error)!r}")
             continue
-        expected = [json.loads(saved[(workflow_id, step_id)][0]) for step_id in range(1, STEPS + 1) if (workflow_id, step_id) in saved]
-        stored = json.loads(output)
+        expected = [read(saved[(workflow_id, step_id)][0]) for step_id in range(1, STEPS + 1) if (workflow_id, step_id) in saved]
+        stored = read(output)
         if status == "SUCCESS" and stored["steps"] != expected:
             violations.append(f"{workflow_id} returned {stored}, but its saved steps are {expected}")
         for answer in answers.get(workflow_id, []):
@@ -229,7 +234,7 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
             if row is None:
                 violations.append(f"{workflow_id} has no saved step {step_id}")
                 continue
-            if not json.loads(row[0]).startswith(f"{workflow_id}:{step_id}:"):
+            if not read(row[0]).startswith(f"{workflow_id}:{step_id}:"):
                 violations.append(f"{workflow_id} step {step_id} saved {row[0]}")
             runs = executions.get((workflow_id, step_id), [])
             if not runs:

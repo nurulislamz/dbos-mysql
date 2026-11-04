@@ -130,6 +130,7 @@ async def main() -> None:
         "system_database_url": URL,
         "lease_seconds": float(os.environ.get("CHAOS_LEASE", "1.0")),
         "recovery_interval_seconds": 0.2,
+        "serializer": os.environ["CHAOS_SERIALIZER"],
     }
     DBOS(config=config)
     while True:
