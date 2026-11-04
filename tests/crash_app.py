@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from dbos_mysql import DBOS, SetWorkflowID
+from rust_dwos import DBOS, SetWorkflowID
 
 
 def register(ledger: Path, crash: bool) -> dict[str, Callable[..., Any]]:

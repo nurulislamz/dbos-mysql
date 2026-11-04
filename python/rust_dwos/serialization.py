@@ -6,7 +6,7 @@ import pickle
 from collections.abc import Callable
 from typing import Any
 
-from dbos_mysql.errors import DBOSRecordedError
+from rust_dwos.errors import DBOSRecordedError
 
 
 def _reject_live(value: Any) -> None:

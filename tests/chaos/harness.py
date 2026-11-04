@@ -19,7 +19,7 @@ import pymysql
 REPO = Path(__file__).resolve().parents[2]
 MYSQL_PORT = int(os.environ.get("DBOS_CHAOS_DB_PORT", "13308"))
 MYSQL_PASSWORD = "dbos-test-root"
-COMPOSE_PROJECT = "dbos-mysql-chaos"
+COMPOSE_PROJECT = "rust-dwos-chaos"
 ALL_FAULTS = ("kill", "pause", "term", "crash_window", "db_restart")
 STEPS = 3
 

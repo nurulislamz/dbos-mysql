@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbos_mysql_core::{
+use dwos_core::{
     Begin, Begun, Engine, EngineConfig, Error, FinalOutcome, Finished, Outcome, ParentStep, Run,
     StepDecision, StepRecord,
 };

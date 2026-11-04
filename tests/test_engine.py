@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from dbos_mysql import (
+from rust_dwos import (
     DBOSException,
     DBOS,
     DBOSConfig,
@@ -319,7 +319,7 @@ def test_a_changed_step_is_rejected_on_recovery(dbos: DBOS, database: Database) 
 def test_a_blocked_sync_workflow_does_not_stop_the_process_exiting(database: Database) -> None:
     program = f"""
 import threading
-from dbos_mysql import DBOS
+from rust_dwos import DBOS
 
 blocker = threading.Event()
 
@@ -394,7 +394,7 @@ import logging
 import sys
 import threading
 import time
-from dbos_mysql import DBOS
+from rust_dwos import DBOS
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
 started = threading.Event()

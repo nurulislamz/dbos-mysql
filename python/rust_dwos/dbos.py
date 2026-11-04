@@ -15,14 +15,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, NotRequired, TypedDict
 
-from dbos_mysql import _native
-from dbos_mysql.errors import (
+from rust_dwos import _native
+from rust_dwos.errors import (
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
 )
-from dbos_mysql.serialization import Codec, decode_exception, encode_exception
+from rust_dwos.serialization import Codec, decode_exception, encode_exception
 
 logger = logging.getLogger("dbos")
 

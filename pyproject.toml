@@ -3,9 +3,9 @@ requires = ["maturin>=1.16,<2"]
 build-backend = "maturin"
 
 [project]
-name = "dbos-mysql"
+name = "rust-dwos"
 version = "0.0.1"
-description = "Unofficial durable workflows for Python on MySQL and SQLite"
+description = "Durable workflows on Postgres, MySQL and SQLite. Rust decides. Python runs the function."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14,<3.15"
@@ -15,9 +15,9 @@ dependencies = []
 dev = ["maturin>=1.16,<2", "pymysql>=1.1", "pytest>=8", "pytest-asyncio>=1", "pytest-timeout>=2"]
 
 [tool.maturin]
-manifest-path = "crates/dbos-mysql-py/Cargo.toml"
+manifest-path = "crates/dwos-py/Cargo.toml"
 python-source = "python"
-module-name = "dbos_mysql._native"
+module-name = "rust_dwos._native"
 features = ["pyo3/extension-module"]
 
 [tool.pytest.ini_options]

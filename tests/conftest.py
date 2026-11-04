@@ -12,7 +12,7 @@ from typing import Any
 import pymysql
 import pytest
 
-from dbos_mysql import DBOS, DBOSConfig
+from rust_dwos import DBOS, DBOSConfig
 
 MYSQL_PORT = int(os.environ.get("DBOS_TEST_DB_PORT", "13307"))
 MYSQL_PASSWORD = "dbos-test-root"

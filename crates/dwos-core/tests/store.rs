@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbos_mysql_core::{Error, Outcome, Started, Status, StepRecord, Store};
+use dwos_core::{Error, Outcome, Started, Status, StepRecord, Store};
 use sqlx::Connection;
 use sqlx::mysql::MySqlConnection;
 

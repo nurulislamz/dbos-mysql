@@ -6,8 +6,8 @@ from collections.abc import Callable
 
 import pytest
 
-import dbos_mysql
-from dbos_mysql import (
+import rust_dwos
+from rust_dwos import (
     DBOS,
     DBOSConflictingWorkflowError,
     DBOSStepNondeterminismError,
@@ -276,12 +276,12 @@ def test_dead_letter_queue_scenario(dbos: DBOS, database: Database) -> None:
     runs_before = recovery_count
     with SetWorkflowID(handle.workflow_id):
         direct: WorkflowHandle[None] = DBOS.start_workflow(dead_letter_workflow)
-    with pytest.raises(dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
+    with pytest.raises(rust_dwos.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
         direct.get_result()
     assert recovery_count == runs_before
 
     retrieved: WorkflowHandle[None] = DBOS.retrieve_workflow(handle.workflow_id)
-    with pytest.raises(dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
+    with pytest.raises(rust_dwos.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
         retrieved.get_result()
 
 

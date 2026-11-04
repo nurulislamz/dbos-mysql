@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-import dbos_mysql
-from dbos_mysql import (
+import rust_dwos
+from rust_dwos import (
     DBOS,
     DBOSConfig,
     DBOSMaxStepRetriesExceeded,
@@ -18,7 +18,7 @@ from dbos_mysql import (
     WorkflowHandle,
     WorkflowStatusString,
 )
-from dbos_mysql.serialization import decode_exception, encode_exception
+from rust_dwos.serialization import decode_exception, encode_exception
 from tests.conftest import Database, retry_until_success
 
 
@@ -90,7 +90,7 @@ def test_dead_letter_queue(dbos: DBOS, database: Database) -> None:
     with pytest.raises(Exception) as exc_info:
         with SetWorkflowID(wfid):
             dead_letter_workflow()
-    assert exc_info.errisinstance(dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded)
+    assert exc_info.errisinstance(rust_dwos.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded)
 
     @DBOS.workflow(max_recovery_attempts=None)
     def infinite_dead_letter_workflow() -> None:
@@ -422,7 +422,7 @@ def test_recovery_attempts(dbos: DBOS, database: Database, gate: Callable[[], th
         assert parent_handle.get_status().status == WorkflowStatusString.ERROR.value
         assert isinstance(
             parent_handle.get_status().error,
-            dbos_mysql.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+            rust_dwos.DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
         )
 
     retry_until_success(check_attempt_3)

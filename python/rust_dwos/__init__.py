@@ -1,5 +1,5 @@
-from dbos_mysql._native import Store, StoreError, connect
-from dbos_mysql.dbos import (
+from rust_dwos._native import Store, StoreError, connect
+from rust_dwos.dbos import (
     DBOS,
     DBOSConfig,
     SetWorkflowID,
@@ -9,7 +9,7 @@ from dbos_mysql.dbos import (
     WorkflowStatus,
     WorkflowStatusString,
 )
-from dbos_mysql.errors import (
+from rust_dwos.errors import (
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,

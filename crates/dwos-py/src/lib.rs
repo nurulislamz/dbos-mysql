@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dbos_mysql_core::{
+use dwos_core::{
     ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Engine, EngineConfig, Error,
     FinalOutcome, Finished, Outcome, ParentStep, RecordedStep, Run, StepDecision, StepPolicy,
     Store, Workflow, WorkflowResult,

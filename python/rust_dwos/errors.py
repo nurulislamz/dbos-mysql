@@ -3,7 +3,7 @@ from __future__ import annotations
 import copyreg
 from collections.abc import Sequence
 
-from dbos_mysql._native import (
+from rust_dwos._native import (
     DBOSConflictingWorkflowError,
     DBOSException,
     DBOSLeaseLostError,

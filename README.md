@@ -1,81 +1,31 @@
-# dbos-mysql
+# rust-dwos
 
-A Rust port of [DBOS Transact](https://github.com/dbos-inc/dbos-transact-ts), the original TypeScript implementation. Workflow state is stored in MySQL 8.4 or SQLite, so a workflow survives a crash and resumes without repeating finished steps. The Python package is paused.
+Durable workflows on Postgres, MySQL 8.4 and SQLite. A Rust core decides what runs. A thin Python layer only calls your function and returns the result. Finished steps are stored as JSON, so a crash resumes without repeating them.
 
-> **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence. It is under active development, and crash recovery has not yet passed load and fault testing. Do not run payment or email steps on it yet.
+> **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. Do not run payment or email steps on it yet.
 
-## Feature checklist
+There is no extra server. A running copy of your program is the coordinator. When every copy is stopped, the rows wait until you start one again.
 
-Compared with [`dbos-transact-ts`](https://github.com/dbos-inc/dbos-transact-ts). The checklist below was written against the Python SDK and has not been rechecked against the TypeScript API.
+## Direction
 
-| Mark | Meaning |
+| Piece | Role |
 |---|---|
-| ✅ | Built and passing its own tests |
-| 🚧 | Written, but not fully verified yet |
-| 📅 | Planned after 0.1 |
-| ❌ | Not planned |
+| Rust core | Decides the step, the saved result, and the lease. Writes and reads the rows |
+| Python | Runs your function and returns the result. Holds no step, result, or lease decisions |
+| Postgres, MySQL 8.4 or SQLite | Stores the workflow and each finished step as JSON |
+| TypeScript SDK | Not part of this version |
+| Queues and durable sleep | Not part of this version |
 
-### Databases
+Crash detection uses leases that expire. A dead process loses the workflow, and another running copy can take it.
 
-| Feature | DBOS | dbos-mysql |
-|---|---|---|
-| Postgres | ✅ | ❌ |
-| SQLite | ✅ | ✅ One machine only |
-| MySQL 8.4 | ❌ | ✅ |
+## Done when
 
-### Core workflows
+- Killing the process mid-workflow leaves that workflow unfinished.
+- Starting the program again finishes it without repeating finished steps.
+- A shutdown is not stored as a final error.
+- Python contains no step, result, or lease decisions.
 
-| Feature | DBOS | dbos-mysql |
-|---|---|---|
-| Workflow and step state storage | ✅ | ✅ Rust store |
-| Stale owners blocked from saving results | ✅ | ✅ Rust store |
-| `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
-| Async and sync functions | ✅ | ✅ |
-| `SetWorkflowID`, one run per workflow ID | ✅ | ✅ |
-| Replaying saved steps and stored errors | ✅ | ✅ |
-| Changed code detected during replay | ✅ | ✅ |
-| Step retries | ✅ | ✅ |
-| Child workflows | ✅ | ✅ |
-| `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ |
-| `list_workflows`, `list_workflow_steps` | ✅ | ✅ No filters |
-| Crash recovery | ✅ | 🚧 Passes crash tests, but load and fault testing is not done |
-| Recovery attempt limit | ✅ | ✅ |
-
-### Coordination and control
-
-| Feature | DBOS | dbos-mysql |
-|---|---|---|
-| Durable sleep | ✅ | 📅 |
-| `send`, `recv` | ✅ | 📅 |
-| `set_event`, `get_event` | ✅ | 📅 |
-| Workflow timeouts | ✅ | 📅 |
-| Queues | ✅ | 📅 |
-| Cancel and resume | ✅ | 📅 |
-| Fork and rewind | ✅ | 📅 |
-| Deleting old workflows | ✅ | 📅 Needed for 0.1 |
-| `run_step`, `wait_first` | ✅ | 📅 |
-| Schedules | ✅ | 📅 |
-| Streams | ✅ | 📅 |
-| Debouncer | ✅ | 📅 |
-| External client (`DBOSClient`) | ✅ | 📅 |
-| App database transactions (datasources) | ✅ | 📅 |
-| Patching and app versions | ✅ | 📅 |
-| Pydantic AI integration | ✅ | 📅 |
-| Kafka | ✅ | ❌ |
-| OpenTelemetry tracing | ✅ | ❌ |
-| Authentication and roles | ✅ | ❌ |
-| Class-based workflows | ✅ | ❌ |
-| External object storage | ✅ | ❌ |
-| Sharding | ✅ | ❌ |
-
-### Design differences
-
-| Topic | DBOS | dbos-mysql |
-|---|---|---|
-| Core language | Python | Rust, with a Python SDK |
-| Crash detection | Executor IDs and ownership tokens | Leases that expire |
-| Default stored format | SuperJSON (`js_superjson`), plus portable JSON | Not ported yet. The working tree still has a paused Python pickle experiment |
-| Custom exceptions after replay | Restored as their own type | Restored when the constructor accepts the saved arguments. Otherwise `DBOSRecordedError` |
+The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
 
 ## Guarantees
 
@@ -83,15 +33,15 @@ Compared with [`dbos-transact-ts`](https://github.com/dbos-inc/dbos-transact-ts)
 |---|---|
 | Workflow result | Each workflow ID reaches one final state, which never changes |
 | Workflow code | Runs at least once, and may replay |
-| Steps | **At least once.** A crash after a side effect but before the save runs that step again |
+| Steps | At least once. A crash after a side effect but before the save runs that step again |
 | Saved steps | Never run again for that workflow |
 | Stale owners | A process that lost its lease cannot save a step or a result |
 
-A step sending email or taking payment still needs an idempotency key at the outside service. `DBOS.workflow_id` and `DBOS.step_id` give a stable key.
+A step that charges a card or sends email still needs an idempotency key at that service. `DBOS.workflow_id` and `DBOS.step_id` give a stable key.
 
 ## Try it
 
-There is no release yet, so build it from source. You need Rust, [`uv`](https://docs.astral.sh/uv/) and Python 3.14.
+There is no release yet. You need Rust, [uv](https://docs.astral.sh/uv/), and Python 3.14. The install name is `rust-dwos`, the import is `rust_dwos`, and the class is `DBOS`.
 
 ```sh
 uv venv --python 3.14 .venv
@@ -103,7 +53,7 @@ maturin develop
 ```python
 import asyncio
 
-from dbos_mysql import DBOS, SetWorkflowID
+from rust_dwos import DBOS, SetWorkflowID
 
 
 @DBOS.step()
@@ -127,18 +77,14 @@ asyncio.run(main())
 DBOS.destroy()
 ```
 
-For MySQL, use `mysql://user:password@host:3306/database`.
+For MySQL, use `mysql://user:password@host:3306/database`. For Postgres, use `postgres://user:password@host:5432/database`.
 
-**SQLite warning:** never open the workflow database with Python's `sqlite3` module in a process that also runs this library. The library has its own copy of SQLite, and two copies in one process can corrupt the file. Use a separate process to inspect it.
+**SQLite warning:** do not open the workflow database with Python's `sqlite3` in a process that also runs this library. The library has its own copy of SQLite, and two copies in one process can corrupt the file.
 
-## Testing
+## Tests
 
-The same tests run against MySQL and SQLite. `tests/upstream` holds tests adapted from DBOS, and [`MANIFEST.md`](tests/upstream/MANIFEST.md) records what happened to each one.
-
-## Project plan
-
-See [`docs/PLAN.md`](docs/PLAN.md).
+The same tests run against MySQL and SQLite. `tests/upstream` holds tests adapted from DBOS. [`MANIFEST.md`](tests/upstream/MANIFEST.md) records each one. Those tests are a record of what was copied. They are not the product plan.
 
 ## Licence
 
-Apache 2.0. Tests in `tests/upstream` are adapted from DBOS under the MIT licence; see [`NOTICE`](NOTICE) and [`tests/upstream/LICENSE-DBOS`](tests/upstream/LICENSE-DBOS).
+Apache 2.0. Tests in `tests/upstream` are adapted from DBOS under the MIT licence. See [`NOTICE`](NOTICE) and [`tests/upstream/LICENSE-DBOS`](tests/upstream/LICENSE-DBOS).

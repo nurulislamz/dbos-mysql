@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dbos-mysql-core", "crates/dbos-mysql-py"]
+members = ["crates/dwos-core", "crates/dwos-py"]
 resolver = "3"
 
 [workspace.package]

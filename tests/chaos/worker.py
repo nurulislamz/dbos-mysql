@@ -10,7 +10,7 @@ from typing import Any
 
 import pymysql
 
-from dbos_mysql import DBOS, DBOSConfig, DBOSException, SetWorkflowID
+from rust_dwos import DBOS, DBOSConfig, DBOSException, SetWorkflowID
 
 WORKER = int(os.environ["CHAOS_WORKER"])
 WORKERS = int(os.environ["CHAOS_WORKERS"])

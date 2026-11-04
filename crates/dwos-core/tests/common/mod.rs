@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use dbos_mysql_core::{Lease, NewWorkflow, Started, StepRecord, Store};
+use dwos_core::{Lease, NewWorkflow, Started, StepRecord, Store};
 use sqlx::Connection;
 use sqlx::mysql::MySqlConnection;
 use tempfile::TempDir;
