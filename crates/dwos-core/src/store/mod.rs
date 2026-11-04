@@ -65,8 +65,16 @@ impl Dialect {
 
     fn session_settings(self, read_only: bool) -> &'static str {
         match (self, read_only) {
-            (Self::Postgres, _) => "SET lock_timeout = '10s'",
-            (Self::MySql, _) => {
+            (Self::Postgres, true) => {
+                "SET lock_timeout = '10s'; SET default_transaction_read_only = on"
+            }
+            (Self::Postgres, false) => "SET lock_timeout = '10s'",
+            (Self::MySql, true) => {
+                "SET SESSION transaction_isolation = 'READ-COMMITTED', time_zone = '+00:00', \
+                 innodb_lock_wait_timeout = 10, sql_mode = CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), \
+                 transaction_read_only = ON"
+            }
+            (Self::MySql, false) => {
                 "SET SESSION transaction_isolation = 'READ-COMMITTED', time_zone = '+00:00', \
                  innodb_lock_wait_timeout = 10, sql_mode = CONCAT(@@sql_mode, ',STRICT_ALL_TABLES')"
             }
@@ -202,8 +210,13 @@ async fn probe(dialect: Dialect, options: &AnyConnectOptions) -> Result<Option<u
 
 fn sqlite_url(url: &str, read_only: bool) -> String {
     if read_only {
-        let base = url.split('?').next().unwrap_or(url);
-        return format!("{base}?mode=ro");
+        let (base, query) = url.split_once('?').unwrap_or((url, ""));
+        let mut params: Vec<_> = query
+            .split('&')
+            .filter(|part| !part.is_empty() && !part.starts_with("mode="))
+            .collect();
+        params.push("mode=ro");
+        return format!("{base}?{}", params.join("&"));
     }
     match url.split_once('?') {
         Some((_, query)) if query.split('&').any(|part| part.starts_with("mode=")) => {
@@ -376,5 +389,22 @@ impl Store {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sqlite_url;
+
+    #[test]
+    fn read_only_sqlite_preserves_other_options() {
+        assert_eq!(
+            sqlite_url("sqlite://test.db?cache=shared&mode=rwc", true),
+            "sqlite://test.db?cache=shared&mode=ro"
+        );
+        assert_eq!(
+            sqlite_url("sqlite://test.db", true),
+            "sqlite://test.db?mode=ro"
+        );
     }
 }

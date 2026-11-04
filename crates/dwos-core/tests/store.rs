@@ -1215,13 +1215,13 @@ all_dbs!(read_only_connection_lists_without_writing, backend, {
             .await
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
-        let error = reader
-            .start_workflow(&workflow("c", LONG))
-            .await
-            .unwrap_err();
-        assert!(matches!(error, Error::Database(_)), "{error:?}");
-        assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
     }
+    let error = reader
+        .start_workflow(&workflow("c", LONG))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, Error::Database(_)), "{error:?}");
+    assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
 });
 
 all_dbs!(an_unknown_format_is_never_claimed, backend, {
