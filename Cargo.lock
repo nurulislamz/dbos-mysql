@@ -261,6 +261,7 @@ name = "dbos-mysql-py"
 version = "0.0.1"
 dependencies = [
  "dbos-mysql-core",
+ "log",
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-log",

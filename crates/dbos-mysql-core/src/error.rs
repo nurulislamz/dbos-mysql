@@ -6,7 +6,7 @@ pub enum Error {
     InvalidUrl,
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
-    #[error("workflow {0} does not exist")]
+    #[error("Non-existent target workflow ID: {0}")]
     WorkflowNotFound(String),
     #[error(
         "workflow {workflow_id} already exists with function {recorded_name}, but {requested_name} was requested"

@@ -132,6 +132,8 @@ both!(child_id_comes_from_the_parent_and_step, backend, {
     let steps = engine.list_steps("p").await.unwrap();
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0].record.child_workflow_id.as_deref(), Some("p-1"));
+    let child_row = engine.get_status("p-1").await.unwrap();
+    assert_eq!(child_row.parent_workflow_id.as_deref(), Some("p"));
 });
 
 both!(

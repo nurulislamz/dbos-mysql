@@ -35,19 +35,22 @@ fn workflow_from_row(row: &SqliteRow) -> Result<Workflow, Error> {
         error: row.try_get("error")?,
         recovery_attempts: row.try_get("recovery_attempts")?,
         max_recovery_attempts: row.try_get("max_recovery_attempts")?,
+        parent_workflow_id: row.try_get("parent_workflow_id")?,
+        created_at_ms: row.try_get("created_at_ms")?,
+        updated_at_ms: row.try_get("updated_at_ms")?,
+        completed_at_ms: row.try_get("completed_at_ms")?,
     })
 }
 
-const SELECT_WORKFLOW: &str = "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+const SELECT_WORKFLOW: &str = "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms, completed_at_ms \
      FROM dbos_workflows WHERE workflow_id = ?";
 
 pub async fn start_workflow(pool: &SqlitePool, new: &NewWorkflow<'_>) -> Result<Started, Error> {
     let token = new_token();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let inserted = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after_ms, lease_token, \
-         max_recovery_attempts, created_at_ms, updated_at_ms) \
-         VALUES (?, ?, 'PENDING', ?, {NOW_MS} + ?, ?, ?, {NOW_MS}, {NOW_MS}) \
+        "INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after_ms, lease_token, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms) \
+         VALUES (?, ?, 'PENDING', ?, {NOW_MS} + ?, ?, ?, ?, {NOW_MS}, {NOW_MS}) \
          ON CONFLICT (workflow_id) DO NOTHING"
     )))
     .bind(new.workflow_id)
@@ -56,6 +59,7 @@ pub async fn start_workflow(pool: &SqlitePool, new: &NewWorkflow<'_>) -> Result<
     .bind(millis(new.lease))
     .bind(&token)
     .bind(new.max_recovery_attempts)
+    .bind(new.parent_workflow_id)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -179,8 +183,7 @@ pub async fn finish_workflow(
         Outcome::Error(value) => (Status::Error, None, Some(value)),
     };
     let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE dbos_workflows SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after_ms = NULL, \
-         updated_at_ms = {NOW_MS} WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
+        "UPDATE dbos_workflows SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after_ms = NULL, completed_at_ms = {NOW_MS}, updated_at_ms = {NOW_MS} WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
     )))
     .bind(status.as_str())
     .bind(output)
@@ -263,7 +266,7 @@ pub async fn reclaim(
         if attempts_exhausted(attempts, row.try_get("max_recovery_attempts")?) {
             sqlx::query(sqlx::AssertSqlSafe(format!(
                 "UPDATE dbos_workflows SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
-                 lease_token = NULL, claim_after_ms = NULL, updated_at_ms = {NOW_MS} WHERE workflow_id = ?"
+                 lease_token = NULL, claim_after_ms = NULL, completed_at_ms = {NOW_MS}, updated_at_ms = {NOW_MS} WHERE workflow_id = ?"
             )))
             .bind(attempts)
             .bind(&workflow_id)
@@ -296,7 +299,7 @@ pub async fn reclaim(
 
 pub async fn list_workflows(pool: &SqlitePool) -> Result<Vec<Workflow>, Error> {
     let rows = sqlx::query(
-        "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+        "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at_ms, updated_at_ms, completed_at_ms \
          FROM dbos_workflows ORDER BY created_at_ms, workflow_id",
     )
     .fetch_all(pool)

@@ -10,6 +10,7 @@ from dbos_mysql.dbos import (
     WorkflowStatusString,
 )
 from dbos_mysql.errors import (
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,
     DBOSLeaseLostError,
@@ -23,6 +24,7 @@ from dbos_mysql.errors import (
 
 __all__ = [
     "DBOS",
+    "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
     "DBOSConfig",
     "DBOSConflictingWorkflowError",
     "DBOSException",

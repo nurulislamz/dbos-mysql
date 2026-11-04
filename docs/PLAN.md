@@ -124,7 +124,7 @@ We match DBOS unless this table says otherwise.
 | Crash detection | **Leases with expiry, not executor IDs** | No |
 | Stored format | **JSON through Pydantic, not pickle** | No |
 | Recovered errors | **Built-in exception types come back as themselves, others as `DBOSRecordedError`** | No |
-| Sync functions | **Async first, sync added in M6** | Not at first |
+| Sync functions | Supported from the start, because the copied tests mix sync steps into async workflows. Database calls from sync code go through a dedicated thread that never runs user code, so they cannot deadlock | Yes |
 
 ### Guarantees
 
@@ -594,6 +594,13 @@ Add features one at a time, copying the upstream tests first. The likely order i
 4. Queues
 5. Cancel, resume and list
 6. Pydantic AI adapter
+
+## 9a. Findings from building M1 to M4
+
+- **Exit crash.** Rust threads outlive the Python interpreter, so a log call during finalization segfaulted about 1 exit in 5 when workflows were still running. An `atexit` hook now destroys DBOS and turns Rust logs off first. The fix leans on stopping work cleanly, so an in-flight Rust future resolving during finalization remains a theoretical gap.
+- **Two SQLite copies.** Python's `sqlite3` and the bundled SQLite in one process can corrupt a database file. The README warns about this, and the test helper uses a subprocess.
+- **Threads and exit.** Sync workflows run on daemon threads, because a `ThreadPoolExecutor` joins its workers at exit and a blocked workflow would stop the process exiting.
+- **Destroy cannot leave a false failure.** Work submitted after `destroy` starts is refused, so a cancelled database call cannot be recorded as a workflow error.
 
 ## 10. Risks
 

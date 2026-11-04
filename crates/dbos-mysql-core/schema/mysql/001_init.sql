@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS dbos_workflows (
     name                  VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
     status                VARCHAR(40)  CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     input                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NOT NULL,
+    parent_workflow_id    VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     output                LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     error                 LONGTEXT     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin NULL,
     claim_after           DATETIME(6)  NULL,
@@ -11,6 +12,7 @@ CREATE TABLE IF NOT EXISTS dbos_workflows (
     max_recovery_attempts INT UNSIGNED NOT NULL,
     created_at            DATETIME(6)  NOT NULL,
     updated_at            DATETIME(6)  NOT NULL,
+    completed_at          DATETIME(6)  NULL,
     PRIMARY KEY (workflow_id),
     KEY ix_dbos_workflows_claim (claim_after),
     CONSTRAINT ck_dbos_workflows_status

@@ -40,6 +40,7 @@ pub struct NewWorkflow<'a> {
     pub input: &'a str,
     pub max_recovery_attempts: u32,
     pub lease: Duration,
+    pub parent_workflow_id: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +59,10 @@ pub struct Workflow {
     pub error: Option<String>,
     pub recovery_attempts: u32,
     pub max_recovery_attempts: u32,
+    pub parent_workflow_id: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

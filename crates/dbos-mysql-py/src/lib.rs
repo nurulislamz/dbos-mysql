@@ -63,6 +63,10 @@ struct PyWorkflow {
     error: Option<String>,
     recovery_attempts: u32,
     max_recovery_attempts: u32,
+    parent_workflow_id: Option<String>,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    completed_at_ms: Option<i64>,
 }
 
 impl From<Workflow> for PyWorkflow {
@@ -76,6 +80,10 @@ impl From<Workflow> for PyWorkflow {
             error: row.error,
             recovery_attempts: row.recovery_attempts,
             max_recovery_attempts: row.max_recovery_attempts,
+            parent_workflow_id: row.parent_workflow_id,
+            created_at_ms: row.created_at_ms,
+            updated_at_ms: row.updated_at_ms,
+            completed_at_ms: row.completed_at_ms,
         }
     }
 }
@@ -544,6 +552,11 @@ fn connect(py: Python<'_>, url: String) -> PyResult<Bound<'_, PyAny>> {
     })
 }
 
+#[pyfunction]
+fn silence_logs() {
+    log::set_max_level(log::LevelFilter::Off);
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
@@ -551,6 +564,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .install()
         .ok();
     m.add_function(wrap_pyfunction!(connect, m)?)?;
+    m.add_function(wrap_pyfunction!(silence_logs, m)?)?;
     m.add_class::<PyEngine>()?;
     m.add_class::<PyStore>()?;
     m.add_class::<PyRun>()?;

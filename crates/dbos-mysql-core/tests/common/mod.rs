@@ -124,6 +124,7 @@ pub fn workflow<'a>(id: &'a str, lease: Duration) -> NewWorkflow<'a> {
         input: "{}",
         max_recovery_attempts: 100,
         lease,
+        parent_workflow_id: None,
     }
 }
 

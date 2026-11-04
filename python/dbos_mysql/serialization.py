@@ -12,6 +12,7 @@ from pydantic.errors import PydanticUserError
 from pydantic_core import PydanticSerializationError, ValidationError
 
 from dbos_mysql.errors import (
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSConflictingWorkflowError,
     DBOSException,
     DBOSMaxStepRetriesExceeded,
@@ -121,6 +122,8 @@ def encode_exception(error: BaseException) -> str:
     except (PydanticSerializationError, ValueError, TypeError):
         args = None
     payload: dict[str, Any] = {"module": kind.__module__, "type": kind.__qualname__, "message": str(error), "args": args}
+    if isinstance(error, DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
+        payload["workflow_id"] = error.workflow_id
     if isinstance(error, DBOSMaxStepRetriesExceeded):
         payload["step_name"] = error.step_name
         payload["max_retries"] = error.max_retries
@@ -132,6 +135,8 @@ def decode_exception(text: str) -> Exception:
     type_name = payload["type"]
     if payload["module"] == DBOSMaxStepRetriesExceeded.__module__ and type_name == DBOSMaxStepRetriesExceeded.__qualname__:
         return DBOSMaxStepRetriesExceeded(payload["step_name"], payload["max_retries"])
+    if payload["module"] == DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded.__module__ and type_name == DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded.__qualname__:
+        return DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(payload["workflow_id"])
     for own in _OWN_ERRORS:
         if payload["module"] == own.__module__ and type_name == own.__qualname__:
             return own(payload["message"])

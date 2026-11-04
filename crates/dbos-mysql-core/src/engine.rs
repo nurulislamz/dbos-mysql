@@ -275,6 +275,7 @@ impl Engine {
             input: begin.input,
             max_recovery_attempts: begin.max_recovery_attempts,
             lease: self.config.lease,
+            parent_workflow_id: begin.parent.map(|parent| parent.run.workflow_id()),
         };
         match self.store.start_workflow(&new).await? {
             Started::Owned(lease) => Ok(Begun::Run(Run::new(lease))),

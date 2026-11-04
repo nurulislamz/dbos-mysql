@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import concurrent.futures
 import contextvars
 import functools
@@ -15,13 +16,19 @@ from enum import Enum
 from typing import Any, NotRequired, TypedDict
 
 from dbos_mysql import _native
-from dbos_mysql.errors import DBOSException, DBOSLeaseLostError, DBOSMaxStepRetriesExceeded, MaxRecoveryAttemptsExceededError
+from dbos_mysql.errors import (
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
+    DBOSException,
+    DBOSMaxStepRetriesExceeded,
+    DBOSNonExistentWorkflowError,
+)
 from dbos_mysql.serialization import Codec, decode_exception, encode_exception
 
 logger = logging.getLogger("dbos")
 
 _ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations")
 _PLAIN_CODEC = Codec(lambda: None)
+_UNLIMITED_RECOVERY_ATTEMPTS = 2**32 - 1
 
 
 class DBOSConfig(TypedDict):
@@ -51,7 +58,11 @@ class WorkflowStatus:
     output: Any
     error: Exception | None
     recovery_attempts: int
-    max_recovery_attempts: int
+    max_recovery_attempts: int | None
+    parent_workflow_id: str | None
+    created_at: int
+    updated_at: int
+    completed_at: int | None
 
 
 @dataclass(frozen=True)
@@ -94,15 +105,21 @@ class _LoopThread:
     def __init__(self, name: str) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, name=name, daemon=True)
+        self._closing = False
         self._thread.start()
 
     def submit[T](self, coroutine: Coroutine[Any, Any, T]) -> concurrent.futures.Future[T]:
+        if self._closing:
+            coroutine.close()
+            raise DBOSException("DBOS was destroyed while this work was running")
         return asyncio.run_coroutine_threadsafe(coroutine, self._loop)
 
     def run[T](self, coroutine: Coroutine[Any, Any, T]) -> T:
         return self.submit(coroutine).result()
 
     def stop(self) -> None:
+        self._closing = True
+        asyncio.run_coroutine_threadsafe(_drain(), self._loop).result(timeout=5)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
 
@@ -155,7 +172,7 @@ class WorkflowHandle[T]:
 
 
 class WorkflowHandleAsync[T]:
-    def __init__(self, workflow_id: str, local: concurrent.futures.Future[T] | None = None) -> None:
+    def __init__(self, workflow_id: str, local: concurrent.futures.Future[T] | asyncio.Task[T] | None = None) -> None:
         self.workflow_id = workflow_id
         self._local = local
 
@@ -163,8 +180,12 @@ class WorkflowHandleAsync[T]:
         return self.workflow_id
 
     async def get_result(self) -> T:
-        if self._local is not None:
-            return await asyncio.shield(asyncio.wrap_future(self._local))
+        local = self._local
+        if isinstance(local, asyncio.Task):
+            if local.get_loop() is asyncio.get_running_loop():
+                return await asyncio.shield(local)
+        elif local is not None:
+            return await asyncio.shield(asyncio.wrap_future(local))
         return _decode_result(await _running()._engine.await_result(self.workflow_id))
 
     async def get_status(self) -> WorkflowStatus:
@@ -203,7 +224,10 @@ class DBOS(metaclass=_DBOSMeta):
         self._engine: Any = None
         self._pid = os.getpid()
         self._active: set[concurrent.futures.Future[Any]] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._keepers: set[_native.ActiveRun] = set()
         self._active_lock = threading.Lock()
+        self._app_loop: asyncio.AbstractEventLoop | None = None
 
     @classmethod
     def launch(cls) -> None:
@@ -217,12 +241,14 @@ class DBOS(metaclass=_DBOSMeta):
         self._pid = os.getpid()
         self._state = _LoopThread("dbos-state")
         self._workflows = _LoopThread("dbos-workflows")
-        self._threads = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="dbos-sync")
+        try:
+            self._app_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._app_loop = None
         options = {name: self._config[name] for name in _ENGINE_OPTIONS if name in self._config}
         try:
             self._engine = self._state.run(_call(_native.Engine.connect, self._config["system_database_url"], **options))
         except BaseException:
-            self._threads.shutdown(wait=False)
             self._workflows.stop()
             self._state.stop()
             raise
@@ -244,21 +270,26 @@ class DBOS(metaclass=_DBOSMeta):
     def _shutdown(self) -> None:
         with self._active_lock:
             active = list(self._active)
+            tasks = list(self._tasks)
         for future in active:
             future.cancel()
+        for task in tasks:
+            _cancel_task(task)
         self._recovery.cancel()
         concurrent.futures.wait([*active, self._recovery], timeout=self._shutdown_timeout)
-        self._workflows.run(_drain())
-        self._threads.shutdown(wait=False)
         self._workflows.stop()
         self._state.stop()
-        self._engine = None
+        with self._active_lock:
+            keepers = list(self._keepers)
+        for keeper in keepers:
+            keeper.stop()
 
     @classmethod
-    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS) -> Callable[..., Any]:
+    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS) -> Callable[..., Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             is_async = inspect.iscoroutinefunction(function)
-            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts)
+            attempts = _UNLIMITED_RECOVERY_ATTEMPTS if max_recovery_attempts is None else max_recovery_attempts
+            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, attempts)
             _register(info)
 
             @functools.wraps(function)
@@ -388,23 +419,46 @@ class DBOS(metaclass=_DBOSMeta):
         instance = _running()
         info = _info_of(function)
         begun = await instance._engine.begin(*_begin_args(info, args, kwargs))
+        if begun.run is not None and info.is_async:
+            return WorkflowHandleAsync(begun.workflow_id, instance._task_on_this_loop(info, begun.run, args, kwargs))
         return WorkflowHandleAsync(begun.workflow_id, instance._background(info, begun, args, kwargs))
 
     @classmethod
-    def retrieve_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
+    def retrieve_workflow(cls, workflow_id: str, existing_workflow: bool = True) -> WorkflowHandle[Any]:
         instance = _running()
-        instance._blocking(instance._engine.get_status, workflow_id)
+        if existing_workflow:
+            instance._blocking(instance._engine.get_status, workflow_id)
         return WorkflowHandle(workflow_id)
 
     @classmethod
-    async def retrieve_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
-        await _running()._engine.get_status(workflow_id)
+    async def retrieve_workflow_async(cls, workflow_id: str, existing_workflow: bool = True) -> WorkflowHandleAsync[Any]:
+        if existing_workflow:
+            await _running()._engine.get_status(workflow_id)
         return WorkflowHandleAsync(workflow_id)
 
     @classmethod
     def get_result(cls, workflow_id: str) -> Any:
         instance = _running()
         return _decode_result(instance._blocking(instance._engine.await_result, workflow_id))
+
+    @classmethod
+    async def get_result_async(cls, workflow_id: str) -> Any:
+        return _decode_result(await _running()._engine.await_result(workflow_id))
+
+    @classmethod
+    def get_workflow_status(cls, workflow_id: str) -> WorkflowStatus | None:
+        instance = _running()
+        try:
+            return _status_of(instance._blocking(instance._engine.get_status, workflow_id))
+        except DBOSNonExistentWorkflowError:
+            return None
+
+    @classmethod
+    async def get_workflow_status_async(cls, workflow_id: str) -> WorkflowStatus | None:
+        try:
+            return _status_of(await _running()._engine.get_status(workflow_id))
+        except DBOSNonExistentWorkflowError:
+            return None
 
     @classmethod
     def list_workflows(cls) -> list[WorkflowStatus]:
@@ -435,10 +489,12 @@ class DBOS(metaclass=_DBOSMeta):
         return self._launch_run(info, begun.run, args, kwargs)
 
     def _launch_run(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> concurrent.futures.Future[Any]:
-        if info.is_async:
-            future = self._workflows.submit(self._run_async(info, run, args, kwargs))
+        if not info.is_async:
+            future = _in_daemon_thread(self._run_sync, info, run, args, kwargs)
+        elif self._use_app_loop:
+            future = asyncio.run_coroutine_threadsafe(self._run_async(info, run, args, kwargs), self._app_loop)
         else:
-            future = self._threads.submit(self._run_sync, info, run, args, kwargs)
+            future = self._workflows.submit(self._run_async(info, run, args, kwargs))
         with self._active_lock:
             self._active.add(future)
         future.add_done_callback(self._forget)
@@ -448,8 +504,36 @@ class DBOS(metaclass=_DBOSMeta):
         with self._active_lock:
             self._active.discard(future)
 
+    @property
+    def _use_app_loop(self) -> bool:
+        return self._app_loop is not None and self._app_loop.is_running()
+
+    def _task_on_this_loop(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> asyncio.Task[Any]:
+        task = asyncio.get_running_loop().create_task(self._run_async(info, run, args, kwargs))
+        with self._active_lock:
+            self._tasks.add(task)
+        task.add_done_callback(self._forget_task)
+        return task
+
+    def _forget_task(self, task: asyncio.Task[Any]) -> None:
+        with self._active_lock:
+            self._tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    def _keep_lease(self, run: _native.Run) -> _native.ActiveRun:
+        keeper = self._engine.keep_lease(run)
+        with self._active_lock:
+            self._keepers.add(keeper)
+        return keeper
+
+    def _stop_keeper(self, keeper: _native.ActiveRun) -> None:
+        keeper.stop()
+        with self._active_lock:
+            self._keepers.discard(keeper)
+
     async def _run_async(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        active = self._engine.keep_lease(run)
+        active = self._keep_lease(run)
         context = contextvars.copy_context()
         context.run(_bind_run, run)
         body = asyncio.get_running_loop().create_task(info.function(*args, **kwargs), context=context)
@@ -462,7 +546,7 @@ class DBOS(metaclass=_DBOSMeta):
             await self._engine.release(run)
             raise
         finally:
-            active.stop()
+            self._stop_keeper(active)
             lost.cancel()
 
         if not body.done():
@@ -479,19 +563,19 @@ class DBOS(metaclass=_DBOSMeta):
         return await self._finish_success(info, run, body.result())
 
     def _run_sync(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-        active = self._engine.keep_lease(run)
+        active = self._keep_lease(run)
         context = contextvars.copy_context()
         context.run(_bind_run, run)
         try:
             value = context.run(info.function, *args, **kwargs)
         except Exception as error:  # noqa: BLE001
-            active.stop()
+            self._stop_keeper(active)
             return self._state.run(self._finish_error(info, run, error))
         except BaseException:
-            active.stop()
+            self._stop_keeper(active)
             self._blocking(self._engine.release, run)
             raise
-        active.stop()
+        self._stop_keeper(active)
         return self._state.run(self._finish_success(info, run, value))
 
     async def _finish_success(self, info: _Workflow, run: _native.Run, value: Any) -> Any:
@@ -505,8 +589,6 @@ class DBOS(metaclass=_DBOSMeta):
         return info.codec.decode_output(text)
 
     async def _finish_error(self, info: _Workflow, run: _native.Run, error: BaseException) -> Any:
-        if isinstance(error, DBOSLeaseLostError):
-            return _decode_result(await self._engine.await_result(run.workflow_id), info)
         superseded = await self._engine.finish_error(run, encode_exception(error))
         if superseded is not None:
             return _decode_result(superseded, info)
@@ -539,6 +621,15 @@ class DBOS(metaclass=_DBOSMeta):
         return WorkflowHandle(claim.workflow_id, self._launch_run(info, claim.run, args, kwargs))
 
 
+def _at_exit() -> None:
+    DBOS.destroy()
+    # Rust threads outlive the interpreter, and a log call into a finalizing interpreter segfaults.
+    _native.silence_logs()
+
+
+atexit.register(_at_exit)
+
+
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
     parent = _current_run.get()
     step_id = parent.next_step_id() if parent is not None and _current_step.get() is None else None
@@ -561,7 +652,7 @@ def _replay_step(replay: _native.StepReplay, codec: Codec) -> Any:
 
 def _decode_result(result: _native.WorkflowResult, info: _Workflow | None = None) -> Any:
     if result.kind == "max_recovery_attempts":
-        raise MaxRecoveryAttemptsExceededError(result.workflow_id, result.max_recovery_attempts)
+        raise DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(result.workflow_id)
     if result.kind == "error":
         raise decode_exception(result.value)
     return _codec_for(result.name, info).decode_output(result.value)
@@ -581,7 +672,11 @@ def _status_of(row: _native.WorkflowRow) -> WorkflowStatus:
         output=_codec_for(row.name).decode_output(row.output) if row.output is not None else None,
         error=decode_exception(row.error) if row.error is not None else None,
         recovery_attempts=row.recovery_attempts,
-        max_recovery_attempts=row.max_recovery_attempts,
+        max_recovery_attempts=None if row.max_recovery_attempts == _UNLIMITED_RECOVERY_ATTEMPTS else row.max_recovery_attempts,
+        parent_workflow_id=row.parent_workflow_id,
+        created_at=row.created_at_ms,
+        updated_at=row.updated_at_ms,
+        completed_at=row.completed_at_ms,
     )
 
 
@@ -589,10 +684,32 @@ def _step_of(step: _native.StepRow) -> dict[str, Any]:
     return {
         "function_id": step.step_id,
         "function_name": step.step_name,
-        "output": step.output,
-        "error": step.error,
+        "output": _codec_for(step.step_name).decode_output(step.output) if step.output is not None else None,
+        "error": decode_exception(step.error) if step.error is not None else None,
         "child_workflow_id": step.child_workflow_id,
     }
+
+
+def _in_daemon_thread[T](function: Callable[..., T], *args: Any) -> concurrent.futures.Future[T]:
+    future: concurrent.futures.Future[T] = concurrent.futures.Future()
+
+    def target() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            future.set_result(function(*args))
+        except BaseException as error:  # noqa: BLE001
+            future.set_exception(error)
+
+    threading.Thread(target=target, name="dbos-sync", daemon=True).start()
+    return future
+
+
+def _cancel_task(task: asyncio.Task[Any]) -> None:
+    try:
+        task.get_loop().call_soon_threadsafe(task.cancel)
+    except RuntimeError:
+        pass
 
 
 async def _drain() -> None:

@@ -36,7 +36,14 @@ class MaxRecoveryAttemptsExceededError(DBOSException):
         super().__init__(f"Workflow {workflow_id} has exceeded its maximum of {max_retries} recovery attempts")
 
 
+class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
+    def __init__(self, workflow_id: str) -> None:
+        self.workflow_id = workflow_id
+        super().__init__(f"Awaited workflow {workflow_id} exceeded its maximum recovery attempts")
+
+
 __all__ = [
+    "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
     "DBOSConflictingWorkflowError",
     "DBOSException",
     "DBOSLeaseLostError",

@@ -21,7 +21,7 @@ const PACKET_MARGIN: u64 = 4096;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_SETTINGS: &str = "SET SESSION transaction_isolation = 'READ-COMMITTED', time_zone = '+00:00', \
      innodb_lock_wait_timeout = 10, sql_mode = CONCAT(@@sql_mode, ',STRICT_ALL_TABLES')";
-const SELECT_WORKFLOW: &str = "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+const SELECT_WORKFLOW: &str = "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, CAST(UNIX_TIMESTAMP(created_at) * 1000 AS SIGNED) AS created_at_ms, CAST(UNIX_TIMESTAMP(updated_at) * 1000 AS SIGNED) AS updated_at_ms, CAST(UNIX_TIMESTAMP(completed_at) * 1000 AS SIGNED) AS completed_at_ms \
      FROM dbos_workflows WHERE workflow_id = ?";
 
 fn micros(duration: Duration) -> i64 {
@@ -113,9 +113,8 @@ impl MySqlStore {
     ) -> Result<Started, Error> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after, lease_token, \
-             max_recovery_attempts, created_at, updated_at) \
-             VALUES (?, ?, 'PENDING', ?, {NOW} + INTERVAL ? MICROSECOND, ?, ?, {NOW}, {NOW}) \
+            "INSERT INTO dbos_workflows (workflow_id, name, status, input, claim_after, lease_token, max_recovery_attempts, parent_workflow_id, created_at, updated_at) \
+             VALUES (?, ?, 'PENDING', ?, {NOW} + INTERVAL ? MICROSECOND, ?, ?, ?, {NOW}, {NOW}) \
              ON DUPLICATE KEY UPDATE workflow_id = workflow_id"
         )))
         .bind(new.workflow_id)
@@ -124,11 +123,12 @@ impl MySqlStore {
         .bind(micros(new.lease))
         .bind(token)
         .bind(new.max_recovery_attempts)
+        .bind(new.parent_workflow_id)
         .execute(&mut *tx)
         .await?;
 
         let row = sqlx::query(
-            "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, lease_token \
+            "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, CAST(UNIX_TIMESTAMP(created_at) * 1000 AS SIGNED) AS created_at_ms, CAST(UNIX_TIMESTAMP(updated_at) * 1000 AS SIGNED) AS updated_at_ms, CAST(UNIX_TIMESTAMP(completed_at) * 1000 AS SIGNED) AS completed_at_ms, lease_token \
              FROM dbos_workflows WHERE workflow_id = ?",
         )
         .bind(new.workflow_id)
@@ -162,7 +162,7 @@ impl MySqlStore {
     pub async fn list_workflows(&self) -> Result<Vec<Workflow>, Error> {
         with_retry(&self.retries, || async {
             let rows = sqlx::query(
-                "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts \
+                "SELECT workflow_id, name, status, input, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, CAST(UNIX_TIMESTAMP(created_at) * 1000 AS SIGNED) AS created_at_ms, CAST(UNIX_TIMESTAMP(updated_at) * 1000 AS SIGNED) AS updated_at_ms, CAST(UNIX_TIMESTAMP(completed_at) * 1000 AS SIGNED) AS completed_at_ms \
                  FROM dbos_workflows ORDER BY created_at, workflow_id",
             )
             .fetch_all(&self.pool)
@@ -279,8 +279,7 @@ impl MySqlStore {
         self.check_size(&[output, error])?;
         let changed = with_retry(&self.retries, || async {
             let result = sqlx::query(sqlx::AssertSqlSafe(format!(
-                "UPDATE dbos_workflows SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, \
-                 updated_at = {NOW} WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
+                "UPDATE dbos_workflows SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_id = ? AND lease_token = ? AND status = 'PENDING'"
             )))
             .bind(status.as_str())
             .bind(output)
@@ -368,7 +367,7 @@ impl MySqlStore {
             if attempts_exhausted(attempts, row.try_get("max_recovery_attempts")?) {
                 sqlx::query(sqlx::AssertSqlSafe(format!(
                     "UPDATE dbos_workflows SET status = 'MAX_RECOVERY_ATTEMPTS_EXCEEDED', recovery_attempts = ?, \
-                     lease_token = NULL, claim_after = NULL, updated_at = {NOW} WHERE workflow_id = ?"
+                     lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_id = ?"
                 )))
                 .bind(attempts)
                 .bind(&workflow_id)
@@ -409,6 +408,10 @@ fn workflow_from_row(row: &MySqlRow) -> Result<Workflow, Error> {
         error: row.try_get("error")?,
         recovery_attempts: row.try_get("recovery_attempts")?,
         max_recovery_attempts: row.try_get("max_recovery_attempts")?,
+        parent_workflow_id: row.try_get("parent_workflow_id")?,
+        created_at_ms: row.try_get("created_at_ms")?,
+        updated_at_ms: row.try_get("updated_at_ms")?,
+        completed_at_ms: row.try_get("completed_at_ms")?,
     })
 }
 

@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS dbos_workflows (
     name                  TEXT NOT NULL,
     status                TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCESS', 'ERROR', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')),
     input                 TEXT NOT NULL,
+    parent_workflow_id    TEXT,
     output                TEXT,
     error                 TEXT,
     claim_after_ms        INTEGER,
@@ -10,7 +11,8 @@ CREATE TABLE IF NOT EXISTS dbos_workflows (
     recovery_attempts     INTEGER NOT NULL DEFAULT 1,
     max_recovery_attempts INTEGER NOT NULL,
     created_at_ms         INTEGER NOT NULL,
-    updated_at_ms         INTEGER NOT NULL
+    updated_at_ms         INTEGER NOT NULL,
+    completed_at_ms       INTEGER
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS ix_dbos_workflows_claim

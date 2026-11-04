@@ -24,6 +24,10 @@ class WorkflowRow:
     error: str | None
     recovery_attempts: int
     max_recovery_attempts: int
+    parent_workflow_id: str | None
+    created_at_ms: int
+    updated_at_ms: int
+    completed_at_ms: int | None
 
 class StepRow:
     step_id: int
@@ -58,6 +62,8 @@ class Claim:
 class ActiveRun:
     def lost(self) -> asyncio.Future[str]: ...
     def stop(self) -> None: ...
+
+def silence_logs() -> None: ...
 
 class StepPolicy:
     def __init__(self, retries_allowed: bool, interval_seconds: float, max_attempts: int, backoff_rate: float) -> None: ...

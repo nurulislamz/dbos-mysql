@@ -2,7 +2,7 @@
 
 Durable workflows for Python on MySQL 8.4 and SQLite, with a Rust core and an API that follows [DBOS](https://github.com/dbos-inc/dbos-transact-py). Workflow state is stored in the database, so a workflow survives a crash and resumes without repeating finished steps.
 
-> **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence. It is under active development, and crash recovery has not yet passed real process-kill testing. Do not run payment or email steps on it yet.
+> **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. It is new code, plus tests adapted from DBOS under the MIT licence. It is under active development, and crash recovery has not yet passed load and fault testing. Do not run payment or email steps on it yet.
 
 ## Feature checklist
 
@@ -29,17 +29,17 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 |---|---|---|
 | Workflow and step state storage | ✅ | ✅ Rust store |
 | Stale owners blocked from saving results | ✅ | ✅ Rust store |
-| `@DBOS.workflow()`, `@DBOS.step()` | ✅ | 🚧 |
-| Async and sync functions | ✅ | 🚧 |
-| `SetWorkflowID`, one run per workflow ID | ✅ | 🚧 |
-| Replaying saved steps and stored errors | ✅ | 🚧 |
-| Changed code detected during replay | ✅ | 🚧 |
-| Step retries | ✅ | 🚧 |
-| Child workflows | ✅ | 🚧 |
-| `start_workflow`, `retrieve_workflow`, handles | ✅ | 🚧 |
-| `list_workflows`, `list_workflow_steps` | ✅ | 🚧 No filters |
-| Crash recovery | ✅ | 🚧 |
-| Recovery attempt limit | ✅ | 🚧 |
+| `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
+| Async and sync functions | ✅ | ✅ |
+| `SetWorkflowID`, one run per workflow ID | ✅ | ✅ |
+| Replaying saved steps and stored errors | ✅ | ✅ |
+| Changed code detected during replay | ✅ | ✅ |
+| Step retries | ✅ | ✅ |
+| Child workflows | ✅ | ✅ |
+| `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ |
+| `list_workflows`, `list_workflow_steps` | ✅ | ✅ No filters |
+| Crash recovery | ✅ | 🚧 Passes crash tests, but load and fault testing is not done |
+| Recovery attempt limit | ✅ | ✅ |
 
 ### Coordination and control
 
@@ -128,6 +128,12 @@ DBOS.destroy()
 ```
 
 For MySQL, use `mysql://user:password@host:3306/database`.
+
+**SQLite warning:** never open the workflow database with Python's `sqlite3` module in a process that also runs this library. The library has its own copy of SQLite, and two copies in one process can corrupt the file. Use a separate process to inspect it.
+
+## Testing
+
+The same tests run against MySQL and SQLite. `tests/upstream` holds tests adapted from DBOS, and [`MANIFEST.md`](tests/upstream/MANIFEST.md) records what happened to each one.
 
 ## Project plan
 

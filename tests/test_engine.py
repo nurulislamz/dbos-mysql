@@ -1,3 +1,4 @@
+import time
 import asyncio
 import os
 import subprocess
@@ -10,11 +11,12 @@ from pathlib import Path
 import pytest
 
 from dbos_mysql import (
+    DBOSException,
     DBOS,
     DBOSConfig,
     DBOSMaxStepRetriesExceeded,
     DBOSUnexpectedStepError,
-    MaxRecoveryAttemptsExceededError,
+    DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     SetWorkflowID,
     StoreError,
 )
@@ -122,10 +124,10 @@ def test_too_many_recoveries_are_reported(dbos: DBOS, database: Database) -> Non
     database.expire_lease(handle.workflow_id)
     assert DBOS._recover_pending_workflows() == []
 
-    with pytest.raises(MaxRecoveryAttemptsExceededError):
+    with pytest.raises(DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
         DBOS.retrieve_workflow(handle.workflow_id).get_result()
     release.set()
-    with pytest.raises(MaxRecoveryAttemptsExceededError):
+    with pytest.raises(DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded):
         handle.get_result()
 
 
@@ -279,3 +281,109 @@ def test_a_changed_step_is_rejected_on_recovery(dbos: DBOS, database: Database) 
     release.set()
     with pytest.raises(DBOSUnexpectedStepError):
         stale.get_result()
+
+
+def test_a_blocked_sync_workflow_does_not_stop_the_process_exiting(database: Database) -> None:
+    program = f"""
+import threading
+from dbos_mysql import DBOS
+
+blocker = threading.Event()
+
+@DBOS.workflow()
+def blocked() -> None:
+    blocker.wait()
+
+DBOS(config={{"name": "t", "system_database_url": {database.url!r}}})
+DBOS.launch()
+DBOS.start_workflow(blocked)
+print("started", flush=True)
+"""
+    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, timeout=30, check=True)
+    assert "started" in result.stdout
+
+
+def test_destroy_stops_renewing_a_running_sync_workflows_lease(database: Database) -> None:
+    DBOS.destroy(destroy_registry=True)
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.workflow()
+    def blocked() -> None:
+        started.set()
+        release.wait()
+
+    DBOS(config={"name": "t", "system_database_url": database.url, "lease_seconds": 0.3, "shutdown_timeout_seconds": 0.1})
+    DBOS.launch()
+    handle = DBOS.start_workflow(blocked)
+    assert started.wait(10)
+    column = "claim_after_ms" if database.backend == "sqlite" else "claim_after"
+    query = f"SELECT {column} FROM dbos_workflows WHERE workflow_id = %s"
+    DBOS.destroy(destroy_registry=True)
+    time.sleep(0.2)
+    before = database.execute(query, handle.workflow_id)
+    time.sleep(0.5)
+    assert database.execute(query, handle.workflow_id) == before
+    release.set()
+
+
+def test_destroy_never_records_a_false_failure(database: Database) -> None:
+    DBOS.destroy(destroy_registry=True)
+    release = threading.Event()
+    started = threading.Event()
+
+    @DBOS.step()
+    def after_release() -> str:
+        return "done"
+
+    @DBOS.workflow()
+    def blocked() -> str:
+        started.set()
+        release.wait()
+        return after_release()
+
+    DBOS(config={"name": "t", "system_database_url": database.url, "shutdown_timeout_seconds": 0.1})
+    DBOS.launch()
+    handle = DBOS.start_workflow(blocked)
+    assert started.wait(10)
+    DBOS.destroy(destroy_registry=True)
+    release.set()
+    with pytest.raises(DBOSException, match="destroyed"):
+        handle.get_result()
+    rows = database.execute("SELECT status, error FROM dbos_workflows WHERE workflow_id = %s", handle.workflow_id)
+    assert rows == [("PENDING", None)]
+
+
+@pytest.mark.timeout(120)
+def test_exiting_with_running_workflows_never_crashes(database: Database) -> None:
+    program = f"""
+import asyncio
+import logging
+import sys
+import threading
+import time
+from dbos_mysql import DBOS
+
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+started = threading.Event()
+
+@DBOS.workflow()
+def blocked_sync() -> None:
+    started.set()
+    threading.Event().wait()
+
+@DBOS.workflow()
+async def blocked_async() -> None:
+    await asyncio.sleep(60)
+
+DBOS(config={{"name": "t", "system_database_url": {database.url!r}, "lease_seconds": 0.05, "shutdown_timeout_seconds": 0.05}})
+DBOS.launch()
+for _ in range(5):
+    DBOS.start_workflow(blocked_sync)
+    DBOS.start_workflow(blocked_async)
+started.wait(10)
+time.sleep(float(sys.argv[1]))
+"""
+    for delay in ("0", "0.02", "0.1") * 5:
+        result = subprocess.run([sys.executable, "-c", program, delay], capture_output=True, text=True, timeout=30, check=False)
+        assert result.returncode == 0, result.stderr[-2000:]
