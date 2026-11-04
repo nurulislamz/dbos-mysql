@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod engine;
 mod error;
 mod lease;
 mod mysql;
@@ -8,6 +9,10 @@ mod sqlite;
 mod store;
 mod workflow;
 
+pub use engine::{
+    ActiveRun, Begin, Begun, Engine, EngineConfig, FinalOutcome, Finished, ParentStep, Run,
+    StepDecision, StepPolicy, WorkflowResult,
+};
 pub use error::Error;
 pub use lease::{LeaseKeeper, LeaseLoss};
 pub use store::Store;

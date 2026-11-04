@@ -149,16 +149,32 @@ The library is a compiled Python extension inside your process. There is no sepa
 ```text
 ┌───────────────────── your Python process ─────────────────────┐
 │  python/dbos_mysql                                            │
-│  decorators · registry · replay · JSON · running workflows    │
+│  decorators · registry · JSON · calling your functions        │
 │                         │ IDs and JSON strings only           │
 │  crates/dbos-mysql-py   PyO3 bindings, no logic               │
 │                         │                                     │
 │  crates/dbos-mysql-core Tokio threads                         │
-│  SQL · leases · reclaiming crashed work · DB error retries    │
+│  engine decisions · SQL · leases · recovery · DB error retries│
 └─────────────────────────┼─────────────────────────────────────┘
                           ▼
                MySQL 8.4 or SQLite
 ```
+
+### Who owns what
+
+| Concern | Owner |
+|---|---|
+| Run, attach or return stored; child IDs and child pointers | Rust, `engine.rs` |
+| Step IDs and replay decisions | Rust, `engine.rs` |
+| Step retry timing and attempt accounting | Rust, `engine.rs` |
+| Waiting for results; a lost lease at finish | Rust, `engine.rs` |
+| Recovery schedule, limit and reclaim | Rust, `engine.rs` |
+| SQL and leases | Rust, `store.rs`, `mysql.rs`, `sqlite.rs`, `lease.rs` |
+| Decorators and the function registry | Python |
+| Calling your functions, including `asyncio` tasks and threads | Python |
+| Cancelling a body when Rust reports a lost lease | Python |
+| Context variables such as `DBOS.workflow_id` | Python |
+| Converting values and exceptions to and from JSON | Python |
 
 ### Repository layout
 
@@ -171,12 +187,12 @@ NOTICE
 schema/mysql/001_init.sql
 schema/sqlite/001_init.sql
 crates/dbos-mysql-core/src/
-    lib.rs  config.rs  error.rs  store.rs  mysql.rs  sqlite.rs  lease.rs  retry.rs
+    lib.rs  engine.rs  error.rs  store.rs  mysql.rs  sqlite.rs  lease.rs  retry.rs  workflow.rs
 crates/dbos-mysql-core/tests/
 crates/dbos-mysql-py/src/lib.rs
 python/dbos_mysql/
     __init__.py  _native.pyi  py.typed
-    dbos.py  context.py  serialization.py  recovery.py  errors.py
+    dbos.py  serialization.py  errors.py
 tests/
     conftest.py
     upstream/

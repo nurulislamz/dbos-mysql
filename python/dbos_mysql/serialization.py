@@ -11,10 +11,27 @@ from pydantic import TypeAdapter
 from pydantic.errors import PydanticUserError
 from pydantic_core import PydanticSerializationError, ValidationError
 
-from dbos_mysql.errors import DBOSMaxStepRetriesExceeded, DBOSRecordedError
+from dbos_mysql.errors import (
+    DBOSConflictingWorkflowError,
+    DBOSException,
+    DBOSMaxStepRetriesExceeded,
+    DBOSNonExistentWorkflowError,
+    DBOSRecordedError,
+    DBOSStepNondeterminismError,
+    DBOSUnexpectedStepError,
+    StoreError,
+)
 
 _ANY: TypeAdapter[Any] = TypeAdapter(Any)
 _MISSING = object()
+_OWN_ERRORS: tuple[type[DBOSException], ...] = (
+    DBOSConflictingWorkflowError,
+    DBOSException,
+    DBOSNonExistentWorkflowError,
+    DBOSStepNondeterminismError,
+    DBOSUnexpectedStepError,
+    StoreError,
+)
 
 
 def _adapter(hint: Any) -> TypeAdapter[Any]:
@@ -115,6 +132,9 @@ def decode_exception(text: str) -> Exception:
     type_name = payload["type"]
     if payload["module"] == DBOSMaxStepRetriesExceeded.__module__ and type_name == DBOSMaxStepRetriesExceeded.__qualname__:
         return DBOSMaxStepRetriesExceeded(payload["step_name"], payload["max_retries"])
+    for own in _OWN_ERRORS:
+        if payload["module"] == own.__module__ and type_name == own.__qualname__:
+            return own(payload["message"])
     kind = getattr(builtins, type_name, None) if payload["module"] == "builtins" else None
     if isinstance(kind, type) and issubclass(kind, Exception):
         try:

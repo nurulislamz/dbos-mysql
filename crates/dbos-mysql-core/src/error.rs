@@ -27,6 +27,16 @@ pub enum Error {
     },
     #[error("workflow {workflow_id} step {step_id} was already recorded with a different result")]
     StepNondeterminism { workflow_id: String, step_id: u32 },
+    #[error(
+        "workflow {workflow_id} step {step_id} is recorded as something other than the expected {expected}. Check that your workflow is deterministic"
+    )]
+    StepKindMismatch {
+        workflow_id: String,
+        step_id: u32,
+        expected: &'static str,
+    },
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
     #[error("this process no longer owns workflow {0}")]
     LeaseLost(String),
     #[error("{field} is longer than the 255 character limit")]
