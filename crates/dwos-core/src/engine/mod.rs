@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::lease::{LeaseKeeper, LeaseLoss};
@@ -25,6 +25,7 @@ pub struct EngineConfig {
     pub max_concurrent_recoveries: u32,
     pub run_migrations: bool,
     pub pickle: bool,
+    pub read_only: bool,
 }
 
 impl Default for EngineConfig {
@@ -36,6 +37,7 @@ impl Default for EngineConfig {
             max_concurrent_recoveries: 50,
             run_migrations: true,
             pickle: true,
+            read_only: false,
         }
     }
 }
@@ -190,17 +192,22 @@ pub struct Engine {
     config: EngineConfig,
     active: Arc<AtomicUsize>,
     closing: Arc<AtomicBool>,
+    last_unreadable_warn_ms: Arc<AtomicU64>,
 }
 
 impl Engine {
     pub async fn connect(url: &str, config: EngineConfig) -> Result<Self, Error> {
-        let store = Store::connect(url).await?;
+        let store = if config.read_only {
+            Store::connect_read_only(url).await?
+        } else {
+            Store::connect(url).await?
+        };
         let store = if config.pickle {
             store.with_pickle()
         } else {
             store
         };
-        if config.run_migrations {
+        if config.run_migrations && !config.read_only {
             store.migrate().await?;
         }
         Ok(Self {
@@ -208,6 +215,7 @@ impl Engine {
             config,
             active: Arc::new(AtomicUsize::new(0)),
             closing: Arc::new(AtomicBool::new(false)),
+            last_unreadable_warn_ms: Arc::new(AtomicU64::new(0)),
         })
     }
 

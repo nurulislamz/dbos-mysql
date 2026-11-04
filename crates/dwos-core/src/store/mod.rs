@@ -63,15 +63,19 @@ impl Dialect {
         }
     }
 
-    fn session_settings(self) -> &'static str {
-        match self {
-            Self::Postgres => "SET lock_timeout = '10s'",
-            Self::MySql => {
+    fn session_settings(self, read_only: bool) -> &'static str {
+        match (self, read_only) {
+            (Self::Postgres, _) => "SET lock_timeout = '10s'",
+            (Self::MySql, _) => {
                 "SET SESSION transaction_isolation = 'READ-COMMITTED', time_zone = '+00:00', \
                  innodb_lock_wait_timeout = 10, sql_mode = CONCAT(@@sql_mode, ',STRICT_ALL_TABLES')"
             }
+            // Read-only must not set WAL: that writes to the file the viewer is only looking at.
+            (Self::Sqlite, true) => {
+                "PRAGMA busy_timeout = 30000; PRAGMA query_only = ON; PRAGMA foreign_keys = ON"
+            }
             // busy_timeout comes first so that the other settings wait for a busy database.
-            Self::Sqlite => {
+            (Self::Sqlite, false) => {
                 "PRAGMA busy_timeout = 30000; PRAGMA journal_mode = WAL; \
                  PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON"
             }
@@ -110,6 +114,9 @@ impl Dialect {
 }
 
 fn check_name(field: &'static str, value: &str) -> Result<(), Error> {
+    if value.contains('\0') {
+        return Err(Error::ContainsNul { field });
+    }
     if value.chars().count() > MAX_NAME_CHARS {
         return Err(Error::NameTooLong { field });
     }
@@ -158,12 +165,12 @@ fn require_owner(changed: u64, lease: &Lease) -> Result<(), Error> {
     Ok(())
 }
 
-fn pool_options(dialect: Dialect, size: u32) -> AnyPoolOptions {
+fn pool_options(dialect: Dialect, size: u32, read_only: bool) -> AnyPoolOptions {
     let timeout = match dialect {
         Dialect::Sqlite => SQLITE_ACQUIRE_TIMEOUT,
         Dialect::Postgres | Dialect::MySql => CONNECT_TIMEOUT,
     };
-    let settings = dialect.session_settings();
+    let settings = dialect.session_settings(read_only);
     AnyPoolOptions::new()
         .max_connections(size)
         .acquire_timeout(timeout)
@@ -178,7 +185,7 @@ fn pool_options(dialect: Dialect, size: u32) -> AnyPoolOptions {
 // A first connection reports a wrong password at once, not after the pool's timeout.
 async fn probe(dialect: Dialect, options: &AnyConnectOptions) -> Result<Option<u64>, Error> {
     let mut conn = AnyConnection::connect_with(options).await?;
-    sqlx::raw_sql(dialect.session_settings())
+    sqlx::raw_sql(dialect.session_settings(false))
         .execute(&mut conn)
         .await?;
     let max_packet = if dialect == Dialect::MySql {
@@ -193,7 +200,11 @@ async fn probe(dialect: Dialect, options: &AnyConnectOptions) -> Result<Option<u
     Ok(max_packet)
 }
 
-fn sqlite_url(url: &str) -> String {
+fn sqlite_url(url: &str, read_only: bool) -> String {
+    if read_only {
+        let base = url.split('?').next().unwrap_or(url);
+        return format!("{base}?mode=ro");
+    }
     match url.split_once('?') {
         Some((_, query)) if query.split('&').any(|part| part.starts_with("mode=")) => {
             url.to_owned()
@@ -215,13 +226,21 @@ pub struct Store {
 
 impl Store {
     pub async fn connect(url: &str) -> Result<Self, Error> {
+        Self::open(url, false).await
+    }
+
+    pub async fn connect_read_only(url: &str) -> Result<Self, Error> {
+        Self::open(url, true).await
+    }
+
+    async fn open(url: &str, read_only: bool) -> Result<Self, Error> {
         let dialect = Dialect::from_url(url).ok_or(Error::UnsupportedUrl)?;
         install_default_drivers();
 
         if dialect == Dialect::Sqlite {
-            let options =
-                AnyConnectOptions::from_str(&sqlite_url(url)).map_err(|_| Error::InvalidUrl)?;
-            let pool = pool_options(dialect, SQLITE_POOL_SIZE)
+            let options = AnyConnectOptions::from_str(&sqlite_url(url, read_only))
+                .map_err(|_| Error::InvalidUrl)?;
+            let pool = pool_options(dialect, SQLITE_POOL_SIZE, read_only)
                 .connect_with(options)
                 .await?;
             log::info!("connected to {}", dialect.name());
@@ -241,13 +260,13 @@ impl Store {
             .map_err(|_| Error::Timeout(CONNECT_TIMEOUT))??;
         log::info!("connected to {}", dialect.name());
         // Connects now: opening a connection takes about 50ms, too long for a short lease to wait.
-        let lease_pool = pool_options(dialect, LEASE_POOL_SIZE)
+        let lease_pool = pool_options(dialect, LEASE_POOL_SIZE, read_only)
             .min_connections(1)
             .connect_with(options.clone())
             .await?;
         Ok(Self {
             dialect,
-            pool: pool_options(dialect, POOL_SIZE).connect_lazy_with(options),
+            pool: pool_options(dialect, POOL_SIZE, read_only).connect_lazy_with(options),
             lease_pool,
             max_packet,
             retries: Arc::new(AtomicU64::new(0)),

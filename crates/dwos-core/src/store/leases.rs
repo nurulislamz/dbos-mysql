@@ -5,7 +5,7 @@ use sqlx::Row;
 use super::{Store, get_u32, millis, require_owner};
 use crate::Error;
 use crate::lease::LeaseKeeper;
-use crate::workflow::{Claimed, Lease, attempts_exhausted, new_token};
+use crate::workflow::{Claimed, Lease, PY_PICKLE, attempts_exhausted, new_token};
 
 impl Store {
     // Uses its own pool, so busy workflows cannot starve a renewal.
@@ -43,6 +43,20 @@ impl Store {
             })
             .await?;
         require_owner(changed, lease)
+    }
+
+    pub async fn count_due_pickled(&self) -> Result<u64, Error> {
+        self.attempt(|| async {
+            let count: i64 = sqlx::query_scalar(self.sql(
+                "SELECT COUNT(*) FROM workflow_status \
+                 WHERE claim_after <= {NOW} AND status = 'PENDING' AND serialization = ?",
+            ))
+            .bind(PY_PICKLE)
+            .fetch_one(&self.pool)
+            .await?;
+            u64::try_from(count).map_err(|_| Error::Corrupt(format!("count is negative: {count}")))
+        })
+        .await
     }
 
     pub async fn reclaim(

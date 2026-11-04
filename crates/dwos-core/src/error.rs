@@ -43,6 +43,8 @@ pub enum Error {
     ShuttingDown,
     #[error("{field} is longer than the 255 character limit")]
     NameTooLong { field: &'static str },
+    #[error("{field} contains a NUL character")]
+    ContainsNul { field: &'static str },
     #[error("value of {size} bytes is over the database limit of {limit} bytes")]
     ValueTooLarge { size: u64, limit: u64 },
     #[error("database operation timed out after {0:?}")]

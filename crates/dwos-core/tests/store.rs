@@ -367,6 +367,60 @@ all_dbs!(ids_with_trailing_spaces_are_separate, backend, {
     start(&store, &workflow("job ", LONG)).await;
 });
 
+all_dbs!(nul_in_ids_and_names_is_rejected, backend, {
+    let (_db, store) = setup(backend).await;
+    let error = store
+        .start_workflow(&workflow("a\0b", LONG))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::ContainsNul {
+                field: "workflow ID"
+            }
+        ),
+        "{error:?}"
+    );
+    let mut named = workflow("a", LONG);
+    named.name = "w\0f";
+    let error = store.start_workflow(&named).await.unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::ContainsNul {
+                field: "workflow name"
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(store.list_workflows().await.unwrap().is_empty());
+
+    let lease = start(&store, &workflow("a", LONG)).await;
+    let error = store
+        .save_step(&lease, 1, "s\0t", &output("1"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::ContainsNul { field: "step name" }),
+        "{error:?}"
+    );
+});
+
+all_dbs!(json_text_with_escaped_nul_round_trips, backend, {
+    let (_db, store) = setup(backend).await;
+    let mut new = workflow("a", LONG);
+    new.input = "\"a\\u0000b\"";
+    let lease = start(&store, &new).await;
+    store
+        .finish_workflow(&lease, &Outcome::Success("\"c\\u0000d\"".to_owned()))
+        .await
+        .unwrap();
+    let row = store.get_workflow("a").await.unwrap().unwrap();
+    assert_eq!(row.input, "\"a\\u0000b\"");
+    assert_eq!(row.output.as_deref(), Some("\"c\\u0000d\""));
+});
+
 all_dbs!(overlong_names_are_rejected, backend, {
     let (_db, store) = setup(backend).await;
     let long = "x".repeat(256);
@@ -1118,6 +1172,56 @@ all_dbs!(a_store_with_pickle_still_claims_json_workflows, backend, {
         .await
         .unwrap();
     assert_eq!(claims[0].serialization, dwos_core::PORTABLE_JSON);
+});
+
+all_dbs!(
+    due_pickled_workflows_are_counted_and_left_unclaimed,
+    backend,
+    {
+        let (_db, store) = setup(backend).await;
+        start(&store, &pickled("a", EXPIRED)).await;
+        start(&store, &workflow("b", EXPIRED)).await;
+        assert_eq!(store.count_due_pickled().await.unwrap(), 1);
+        let claims = store.reclaim(&names(), 10, LONG).await.unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].lease.workflow_id, "b");
+        assert_eq!(store.count_due_pickled().await.unwrap(), 1);
+        assert_eq!(
+            store
+                .get_workflow("a")
+                .await
+                .unwrap()
+                .unwrap()
+                .recovery_attempts,
+            1,
+            "no recovery attempt was used"
+        );
+    }
+);
+
+all_dbs!(read_only_connection_lists_without_writing, backend, {
+    let db = TestDb::create(backend).await;
+    let writer = db.open().await;
+    start(&writer, &workflow("a", LONG)).await;
+    let reader = Store::connect_read_only(&db.url).await.unwrap();
+    let rows = reader.list_workflows().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].workflow_id, "a");
+    start(&writer, &workflow("b", LONG)).await;
+    assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
+    if matches!(backend, Backend::Sqlite) {
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(writer.pool())
+            .await
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let error = reader
+            .start_workflow(&workflow("c", LONG))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::Database(_)), "{error:?}");
+        assert_eq!(reader.list_workflows().await.unwrap().len(), 2);
+    }
 });
 
 all_dbs!(an_unknown_format_is_never_claimed, backend, {

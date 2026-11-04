@@ -506,6 +506,56 @@ all_dbs!(an_interrupted_workflow_is_released_for_recovery, backend, {
     assert_eq!(engine.recover_now(&names()).await.unwrap().len(), 1);
 });
 
+all_dbs!(json_recovery_leaves_pickled_workflows_unclaimed, backend, {
+    let db = TestDb::create(backend).await;
+    let pickled = engine(
+        &db,
+        EngineConfig {
+            pickle: true,
+            lease: EXPIRED,
+            ..config()
+        },
+    )
+    .await;
+    begin_run(&pickled, "a").await;
+    let json = Engine::connect(
+        &db.url,
+        EngineConfig {
+            pickle: false,
+            run_migrations: false,
+            lease: EXPIRED,
+            ..config()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(json.recovery_tick(&names()).await.is_empty());
+    let state = json.get_status("a").await.unwrap();
+    assert_eq!(state.status, Status::Pending);
+    assert_eq!(state.recovery_attempts, 1, "no recovery attempt was used");
+    assert_eq!(json.store().count_due_pickled().await.unwrap(), 1);
+});
+
+all_dbs!(read_only_engine_can_list_an_existing_database, backend, {
+    let db = TestDb::create(backend).await;
+    let writer = engine(&db, config()).await;
+    begin_run(&writer, "a").await;
+    let reader = Engine::connect(
+        &db.url,
+        EngineConfig {
+            read_only: true,
+            run_migrations: false,
+            pickle: false,
+            ..config()
+        },
+    )
+    .await
+    .unwrap();
+    let rows = reader.list_workflows().await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].workflow_id, "a");
+});
+
 all_dbs!(an_ended_workflow_stores_its_outcome, backend, {
     let db = TestDb::create(backend).await;
     let engine = Engine::connect(&db.url, config()).await.unwrap();
