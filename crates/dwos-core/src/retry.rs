@@ -12,6 +12,10 @@ const CONNECTION_RETRY_WINDOW: Duration = Duration::from_secs(30);
 
 const ER_LOCK_WAIT_TIMEOUT: u16 = 1205;
 const ER_LOCK_DEADLOCK: u16 = 1213;
+// Postgres: serialization failure, deadlock, lock timeout.
+const PG_CONTENTION: [&str; 3] = ["40001", "40P01", "55P03"];
+// Postgres: server shutting down, crashing or starting. It sends these as ordinary errors.
+const PG_CONNECTION: [&str; 3] = ["57P01", "57P02", "57P03"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Kind {
@@ -25,13 +29,24 @@ fn classify(error: &Error) -> Kind {
         return Kind::Permanent;
     };
     match error {
-        sqlx::Error::Database(database) => match database
-            .try_downcast_ref::<MySqlDatabaseError>()
-            .map(|e| e.number())
-        {
-            Some(ER_LOCK_DEADLOCK | ER_LOCK_WAIT_TIMEOUT) => Kind::Contention,
-            _ => Kind::Permanent,
-        },
+        // Any passes the driver's own error through, so these checks still work.
+        sqlx::Error::Database(database) => {
+            if let Some(mysql) = database.try_downcast_ref::<MySqlDatabaseError>() {
+                return match mysql.number() {
+                    ER_LOCK_DEADLOCK | ER_LOCK_WAIT_TIMEOUT => Kind::Contention,
+                    _ => Kind::Permanent,
+                };
+            }
+            let code = database.code();
+            let code = code.as_deref().unwrap_or_default();
+            if PG_CONTENTION.contains(&code) {
+                Kind::Contention
+            } else if PG_CONNECTION.contains(&code) {
+                Kind::Connection
+            } else {
+                Kind::Permanent
+            }
+        }
         sqlx::Error::Io(_)
         | sqlx::Error::Tls(_)
         | sqlx::Error::Protocol(_)
