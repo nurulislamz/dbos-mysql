@@ -55,7 +55,7 @@ class Retention:
 
     @classmethod
     def delete_finished_workflows(cls, before_epoch_ms: int, *, batch: int = DEFAULT_DELETE_BATCH) -> int:
-        """Returns how many rows were deleted. Children of pending, cancelled or dead-lettered parents stay."""
+        """Returns how many rows were deleted. Children of pending, cancelled or dead-lettered parents stay. On MySQL a row another transaction holds can cut the count short, so call again."""
         instance = _dbos()._running()
         return instance._blocking(instance._engine.delete_finished_before, before_epoch_ms, batch)
 
