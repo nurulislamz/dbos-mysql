@@ -6,6 +6,7 @@ use super::{Store, check_name};
 use crate::Error;
 
 // A parent's replay starts a child again if the child's row is gone.
+// shortcut: only `parent_workflow_id` protects a child, so one attached to a second parent by explicit ID can be deleted and rerun; upgrade by indexing and checking `operation_outputs.child_workflow_id`.
 const RUNNING_PARENT: &str = "'PENDING'";
 // By age, also keep a child whose parent can still be resumed.
 const RESUMABLE_PARENT: &str = "'PENDING', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED'";

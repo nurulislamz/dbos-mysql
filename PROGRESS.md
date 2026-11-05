@@ -8,7 +8,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 
 "Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
 
-**Not usable yet.** Most features are built. What is left is 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+**Not usable yet.** Most features are built. What is left is proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
 
 ### Features in the minimum
 
@@ -26,7 +26,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | Cron schedules | Built | Prove: 33, 34 |
 | Schema upgrades that keep rows | Built | Prove: 33 |
 | Listing workflows and steps | Built | Prove: 33, 34 |
-| Deleting old workflows | Missing, so tables grow forever | Build: 29, 31 |
+| Deleting old workflows | Built | Prove: 33, 34 |
 
 ### Steps
 
@@ -37,9 +37,9 @@ Work from the top. Task numbers continue from the history table below.
 | 26 | Commit the current schedule work | done | user ok | Clean `git status`; focused schedule tests pass |
 | 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | done | | New Rust test on all 3: the owner keeps its lease and the row stays put |
 | 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | done | | New Rust test on all 3: no run after the change. Same cron still catches up |
-| 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING` | todo | | New Rust test on all 3: child rows go with the workflow; `PENDING` rows stay |
+| 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING`, and never a child a parent could replay | in progress | | Merged. `tests/retention.rs` (60) passed on all 3 on its branch. Left: rerun on merged code once test MySQL is healthy |
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | done | | New Rust test on all 3: the new limit applies to the next claim |
-| 31 | Python bindings for task 29 | todo | 29 | Connect-and-succeed test in `tests/test_core_endpoints.py` |
+| 31 | Python bindings for task 29 | in progress | 29 | `tests/test_retention.py` and endpoint tests pass on SQLite and Postgres. Left: MySQL once test MySQL is healthy |
 | 32 | Measure queue claims with a large backlog. Each slot re-scans pending rows while holding the queue row lock, which also blocks enqueues. Fix it only if too slow | todo | D4 | Numbers for 100k waiting and 100k finished rows, within the D4 limit |
 | 33 | Full Rust suite 3 times. Clippy and format | todo | 27-32 | Zero failures. Also the proof for the stress hang and MySQL row lock fixes |
 | 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
@@ -148,6 +148,10 @@ Core review found missing ownership checks before step execution decisions, a le
 
 ## Known problems
 
+- The test MySQL container hit its 2 GB memory cap and started swapping, after 25 hours of creating test databases. `CREATE TABLE` then took over 80 s and tests failed with `timed out creating a test database`. This is the test server, not the product, but full runs will hit it too.
+- A child attached to a second parent by explicit ID is not protected from deletion, and that parent's replay would rerun it. Read in the code, not tested.
+- On MySQL, deleting by age can wait on a locked parent of a candidate row, up to the 10 s lock timeout, then retries.
+- `register_queue` with no limit overwrites a stored limit with unlimited, for every process.
 - `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. `.worktrees/HANDOFF.md` traces this to a bug in the test, not the product, with the fix in `tests/queue_races.rs`. Task 33 proves it in full runs.
 - On MySQL, a queue claim could hold a live owner's row lock. `.worktrees/HANDOFF.md` reports this fixed by reading candidates first and then locking each row, with the queue race tests passing. Task 33 reruns them.
 - The SDK's sleep, timeouts, cancel, resume, events, messages and queues now have copied tests under `tests/upstream`. The handoff reports 141 focused tests passed, but the full Python suite has not passed yet. Task 34 covers it.

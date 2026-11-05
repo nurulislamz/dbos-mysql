@@ -16,6 +16,7 @@ use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
 
 mod events;
 mod queues;
+mod retention;
 mod schedules;
 mod sleep;
 mod workflow_management;

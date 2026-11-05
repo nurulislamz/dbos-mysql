@@ -29,6 +29,7 @@ from rust_dwos.errors import (
 )
 from rust_dwos.events import Events
 from rust_dwos.queues import Queue, Queues
+from rust_dwos.retention import Retention
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
 from rust_dwos.sleep import Sleep
@@ -313,7 +314,7 @@ class _DBOSMeta(type):
         return _current_step.get()
 
 
-class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, metaclass=_DBOSMeta):
+class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:

@@ -215,6 +215,15 @@ async def test_wake_queue(engine: _native.Engine) -> None:
     engine.wake_queue("q")
 
 
+async def test_delete_workflows(engine: _native.Engine) -> None:
+    await _run(engine, "pending")
+    assert await engine.delete_workflows(["pending"]) == []
+
+
+async def test_delete_finished_before(engine: _native.Engine) -> None:
+    assert await engine.delete_finished_before(0, 10) == 0
+
+
 async def test_schedule_arms_without_firing(engine: _native.Engine) -> None:
     await engine.ensure_queue("notifications", 1)
     await engine.ensure_schedule(
