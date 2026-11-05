@@ -16,6 +16,7 @@ use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
 
 mod events;
 mod queues;
+mod schedules;
 mod sleep;
 mod workflow_management;
 
@@ -691,6 +692,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBegun>()?;
     m.add_class::<PyStepReplay>()?;
     m.add_class::<PyClaim>()?;
+    m.add_class::<schedules::PyScheduleFire>()?;
     m.add_class::<PyActiveRun>()?;
     m.add_class::<PyStepPolicy>()?;
     m.add_class::<PyStepAttempts>()?;

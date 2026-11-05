@@ -215,6 +215,20 @@ async def test_wake_queue(engine: _native.Engine) -> None:
     engine.wake_queue("q")
 
 
+async def test_schedule_arms_without_firing(engine: _native.Engine) -> None:
+    await engine.ensure_queue("notifications", 1)
+    await engine.ensure_schedule(
+        "daily-job-digest",
+        "DispatchDailyDigestWorkflow",
+        "0 8 * * *",
+        "notifications",
+        "{}",
+        _native.PORTABLE_JSON,
+        None,
+    )
+    assert await engine.fire_schedules() == []
+
+
 def test_step_policy() -> None:
     policy = _native.StepPolicy(False, 0, 1, 1)
     assert policy.wraps_failures is False

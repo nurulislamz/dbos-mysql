@@ -14,6 +14,7 @@ mod events;
 mod leases;
 mod migrations;
 mod queues;
+mod schedules;
 mod sleep;
 mod steps;
 mod timeouts;
@@ -21,6 +22,7 @@ mod workflow_management;
 mod workflows;
 
 pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
+pub use schedules::{NewSchedule, ScheduleFire};
 
 const MAX_NAME_CHARS: usize = 255;
 const POOL_SIZE: u32 = 10;

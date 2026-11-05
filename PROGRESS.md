@@ -1,6 +1,6 @@
 # Progress
 
-Now: id reuse, child cancel, bulk resume onto a queue, and migrations 007–012 are on `main`. Queue rate limits, priorities and partitions are columns only. The Python SDK was restarted on 2026-11-05. See `.worktrees/HANDOFF.md` for the older next steps. Two things block readiness: the Postgres late-start incident is still unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
+Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Jobby workflow port has not started. Two things still block readiness: the Postgres late-start incident is unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -30,6 +30,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | 21 | Rust-only late-start reproduction | blocked | core | 8 | `tests/late_start_restart.rs` (ignored by default): 0 late starts in 45 restarts at real settings, cause unproven |
 | 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Existing Python tests pass. Id reuse, cancel children, bulk resume and `get_result(polling_interval_sec=)` have focused SQLite and MySQL tests. The full suite was not re-run |
 | 23 | Workflow id reuse, child cancel, queue resume, schema 007–012 | done | sdk | 22 | Focused Rust and Python tests on SQLite and MySQL. Postgres not run for this slice |
+| 24 | UTC cron schedules with skip-if-pending, schema 013 | done | sdk | 13, 22 | `tests/schedules.rs` (9) and `tests/test_schedules.py` (12) on SQLite, MySQL and Postgres. Cron unit tests pass. An empty database migrates to version 13. Clippy with warnings denied is clean |
 
 ## Verification
 
@@ -80,6 +81,7 @@ Core review found missing ownership checks before step execution decisions, a le
 - `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. It ran over 11 minutes, past its 90 s limit, with every thread idle. The cause is unknown and may be in the test or in the product.
 - On MySQL, a queue claim can hold a live owner's row lock. `finish` waited about 10 s in one run. No over-admission was seen, but a healthy short lease could expire during the wait. The statement that takes the lock is not known. See the `shortcut:` comment in `tests/queue_races.rs`.
 - The SDK's sleep, timeouts, cancel, resume, events, messages and queues have never run. The `sys.exit()` fix is also unproven.
+- A scheduled workflow takes no arguments. A cron that sets both a day of the month and a day of the week is rejected. A restart enqueues only the latest missed tick, not every one.
 - The bar "Python contains no step, result, or lease decisions" is not fully met. Still in `dbos.py`: a step called inside a step or outside a workflow just runs; a value that cannot be encoded becomes a failure; the retry loop sleeps and picks the exception type, with delays and limits from Rust; after a lost lease Python cancels the body and waits for the stored result.
 - `sys.exit()` inside a background workflow probably kills the `dbos-workflows` thread. Not tested or fixed.
 - Background recovery now waits one interval first. With the default one second, a restart recovers up to 1.5s later, and a backlog recovers at most one batch of 50 per interval.

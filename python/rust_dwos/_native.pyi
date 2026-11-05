@@ -75,6 +75,13 @@ class Claim:
     input: str
     recovery_attempts: int
 
+class ScheduleFire:
+    schedule_name: str
+    queue_name: str
+    workflow_id: str
+    scheduled_at_ms: int
+    started: bool
+
 class ActiveRun:
     def lost(self) -> asyncio.Future[str]: ...
     def wait_lost(self, seconds: float) -> str | None: ...
@@ -273,3 +280,16 @@ class Engine:
     def claim_queue(self, queue: str, names: list[str]) -> asyncio.Future[list[Claim]]: ...
     def wake_queue(self, queue: str) -> None: ...
     def wait_queue_claims(self, queue: str, names: list[str], interval_seconds: float) -> asyncio.Future[list[Claim]]: ...
+    def ensure_schedule(
+        self,
+        name: str,
+        workflow_name: str,
+        cron: str,
+        queue: str,
+        inputs: str,
+        serialization: str,
+        max_recovery_attempts: int | None = None,
+        *,
+        blocking: bool = False,
+    ) -> asyncio.Future[None] | None: ...
+    def fire_schedules(self, *, blocking: bool = False) -> asyncio.Future[list[ScheduleFire]] | list[ScheduleFire]: ...

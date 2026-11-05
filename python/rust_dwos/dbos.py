@@ -29,6 +29,7 @@ from rust_dwos.errors import (
 )
 from rust_dwos.events import Events
 from rust_dwos.queues import Queue, Queues
+from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
 from rust_dwos.sleep import Sleep
 from rust_dwos.timeouts import _timeout_override, timeout_start_args
@@ -312,7 +313,7 @@ class _DBOSMeta(type):
         return _current_step.get()
 
 
-class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
+class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
@@ -365,12 +366,17 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         options = {name: self._config[name] for name in _ENGINE_OPTIONS if name in self._config}
         try:
             self._engine = self._state.run(_call(_native.Engine.connect, self._config["system_database_url"], **options))
+            allow_pickle(self._engine.serialization == _native.PY_PICKLE)
+            flush_schedules(self)
         except BaseException:
+            if self._engine is not None:
+                self._engine.close()
+                self._engine = None
             self._workflows.stop()
             self._state.stop()
             raise
-        allow_pickle(self._engine.serialization == _native.PY_PICKLE)
         self._recovery = self._workflows.submit(self._recovery_loop())
+        self._schedules = self._workflows.submit(self._schedule_loop())
 
     def _blocking(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         # Waits on this thread with the GIL released. No event loop is involved, so a step pays no thread hops.
@@ -391,6 +397,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         _instance = None
         if destroy_registry:
             _registry.clear()
+            clear_schedules()
         if instance is not None and instance._engine is not None:
             instance._shutdown()
 
@@ -405,9 +412,10 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         if self._app_loop_watch is not None:
             _cancel_task(self._app_loop_watch)
         self._recovery.cancel()
+        self._schedules.cancel()
         for loop in self._queue_loops:
             loop.cancel()
-        concurrent.futures.wait([*active, self._recovery, *self._queue_loops], timeout=self._shutdown_timeout)
+        concurrent.futures.wait([*active, self._recovery, self._schedules, *self._queue_loops], timeout=self._shutdown_timeout)
         self._workflows.stop()
         self._state.stop()
         with self._active_lock:
@@ -816,6 +824,16 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                     self._resume(claim)
                 except Exception:  # noqa: BLE001
                     logger.exception(f"Could not resume workflow {claim.workflow_id}. It will be retried when its lease expires")
+
+    async def _schedule_loop(self) -> None:
+        while True:
+            try:
+                await self._engine.fire_schedules()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.exception("firing schedules failed, and will be tried again")
+            await asyncio.sleep(1)
 
     def _add_queue(self, queue: Queue) -> Queue:
         with self._active_lock:

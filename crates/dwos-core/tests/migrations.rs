@@ -91,7 +91,7 @@ fn current_init(backend: Backend) -> &'static str {
 }
 
 /// What 001 no longer holds, because a shipped file is never edited.
-fn files_after_init(backend: Backend) -> [&'static str; 6] {
+fn files_after_init(backend: Backend) -> [&'static str; 7] {
     match backend {
         Backend::Sqlite => [
             include_str!("../schema/sqlite/007_workflow_columns.sql"),
@@ -100,6 +100,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 6] {
             include_str!("../schema/sqlite/010_queue_columns.sql"),
             include_str!("../schema/sqlite/011_workflow_attributes.sql"),
             include_str!("../schema/sqlite/012_workflow_indexes.sql"),
+            include_str!("../schema/sqlite/013_workflow_schedules.sql"),
         ],
         Backend::MySql => [
             include_str!("../schema/mysql/007_workflow_columns.sql"),
@@ -108,6 +109,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 6] {
             include_str!("../schema/mysql/010_queue_columns.sql"),
             include_str!("../schema/mysql/011_workflow_attributes.sql"),
             include_str!("../schema/mysql/012_workflow_indexes.sql"),
+            include_str!("../schema/mysql/013_workflow_schedules.sql"),
         ],
         Backend::Postgres => [
             include_str!("../schema/postgres/007_workflow_columns.sql"),
@@ -116,15 +118,16 @@ fn files_after_init(backend: Backend) -> [&'static str; 6] {
             include_str!("../schema/postgres/010_queue_columns.sql"),
             include_str!("../schema/postgres/011_workflow_attributes.sql"),
             include_str!("../schema/postgres/012_workflow_indexes.sql"),
+            include_str!("../schema/postgres/013_workflow_schedules.sql"),
         ],
     }
 }
 
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12],
-        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12],
+        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13],
     }
 }
 
@@ -685,7 +688,7 @@ async fn recorded(pool: &AnyPool) -> Vec<i64> {
 
 /// The structure of the engine's tables, in a form a fresh database and an upgraded one can share.
 async fn fingerprint(pool: &AnyPool, backend: Backend) -> Vec<String> {
-    const TABLES: [&str; 9] = [
+    const TABLES: [&str; 10] = [
         "workflow_status",
         "operation_outputs",
         "notifications",
@@ -695,6 +698,7 @@ async fn fingerprint(pool: &AnyPool, backend: Backend) -> Vec<String> {
         "workflow_queues",
         "workflow_queue_entries",
         "workflow_attributes",
+        "workflow_schedules",
     ];
     let mut lines = Vec::new();
     match backend {
