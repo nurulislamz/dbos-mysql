@@ -23,6 +23,7 @@ Unknown keys raise `DBOSException`.
 | `serializer` | `"pickle"` | `"pickle"` or `"json"` |
 | `log_level` | `"INFO"` when logging is set up | Level for the `dbos` logger |
 | `console_log_level` | Same as `log_level` | Level for console output |
+| `executor_id` | `DBOS__VMID`, else `"local"` | Label for this process. See `DBOS.executor_id` below |
 
 ## Lifecycle
 
@@ -47,6 +48,7 @@ Unknown keys raise `DBOSException`.
 | `DBOS.workflow_id` | Current workflow ID, or `None` |
 | `DBOS.step_id` | Current step number, or `None` |
 | `DBOS.step_status` | `StepStatus` with `step_id`, `current_attempt`, `max_attempts` |
+| `DBOS.executor_id` | This process's label: config `executor_id`, else `DBOS__VMID`, else `"local"`. It does not decide ownership: the lease does, so copies with the same label both run workflows and a dead copy's work moves on when its lease runs out. The stored row does not record this label yet, so `WorkflowStatus.executor_id` is `None` |
 | `DBOS.logger` | The `dbos` logger |
 | `DBOS.heartbeat()` | Reports progress from inside a step |
 | `with SetWorkflowID(id, workflow_id_reuse_policy=None)` | Sets the ID of the next workflow. The policy is `"reject"` or `"return-existing"` |
@@ -62,6 +64,14 @@ Unknown keys raise `DBOSException`.
 | `DBOS.get_workflow_status(id)` | `WorkflowStatus`, or `None` if missing |
 
 Handles (`WorkflowHandle`, `WorkflowHandleAsync`) have `workflow_id`, `get_workflow_id()`, `get_result(polling_interval_sec=None)` and `get_status()`.
+
+| Call | Does |
+|---|---|
+| `DBOS.wait_first(handles, polling_interval_sec=1.0)` | Returns the first handle that finishes. Sync only: it refuses a running event loop, so use `wait_first_async` there |
+| `DBOS.run_step(opts, fn, *args, **kwargs)` | Runs `fn` as a step without a decorator. `opts` is a dict such as `{"name": ...}`, or `None`. Sync only, like `wait_first`; use `run_step_async` in async code |
+| `DBOS.reserve_step()` | Draws the next step ID now. `reservation.run(opts, fn, ...)` or `run_async` runs it once, later, in the same workflow run. A reservation that never runs leaves a gap in the step IDs |
+| `DBOS.asyncio_wait(fs, timeout=None, return_when=ALL_COMPLETED)` | A durable `asyncio.wait`: which tasks finished is saved, so replay agrees. Outside a workflow it is plain `asyncio.wait` |
+| `with DBOSContextEnsure() as ctx` | Uses the current DBOS context, or makes one for the block and clears it on exit. One instance cannot be entered twice |
 
 ## Queues
 
