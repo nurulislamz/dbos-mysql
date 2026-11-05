@@ -41,8 +41,8 @@ Work from the top. Task numbers continue from the history table below.
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | done | | New Rust test on all 3: the new limit applies to the next claim |
 | 31 | Python bindings for task 29 | done | 29 | `tests/test_retention.py` and endpoint delete tests pass on all 3 |
 | 32 | Measure queue claims with a large backlog, and fix them if too slow | done | | `tests/queue_backlog.rs`, numbers below. Postgres at 2,000 waiting went from 5.6 s to 51 ms. Worst claim is under 1 s at 100k waiting and 100k finished on all 3. Measured on a busy machine, load about 4 |
-| 33 | Full Rust suite 3 times. Clippy and format | todo | 27-32 | Zero failures. Also the proof for the stress hang and MySQL row lock fixes |
-| 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
+| 33 | Full Rust suite 3 times. Clippy and format | done | 27-32 | 950 passed, 6 ignored, 0 failed in 5.6 min, run side by side with the Python suite. Two earlier runs were clean too. Two timing tests failed under load and were widened: the outage test in `step_fencing.rs` and a deadline test in `events.rs`. Clippy and format clean |
+| 34 | Full Python suite. This finishes task 22 | done | 31 | 766 passed in 2.2 min with `-n 8 --dist=loadgroup`, on all 3 |
 | 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
 | 36 | Finish task 5: `kill -9` and every fault, on the newest code | todo | 33, 34, 35, D3 | Crash suite clean, including `db_restart` with several seeds |
 | 37 | Security: dependency audit and a TLS connection test | in progress | 33 | TLS tests pass on MySQL and on a throwaway Postgres with TLS. `rsa` RUSTSEC-2023-0071 is accepted and recorded in `.cargo/audit.toml`. `pip-audit` of the installed Python packages found nothing, though they have no lock file. Left: rerun both audits at the end |
@@ -70,6 +70,7 @@ These come later, and none of them block the minimum.
 - **Python extras:** `DBOSContextEnsure`, `DBOS.asyncio_wait`, OpenTelemetry, custom `Serializer` and the AI framework integrations. Also verifying `validate_args` and `log_level`.
 - **Full benchmark:** workflows per second, time per step, memory and connections.
 - **Moving Jobby:** this starts once the minimum is done.
+- **Coordinator, much later:** one copy, or later an optional service, does the scanning and wake-ups for the others. Only if the benchmark shows a need. It is only a shortcut: leases still protect every write, and copies fall back to polling if it dies.
 
 ### Queue backlog numbers
 
@@ -107,12 +108,24 @@ Median time for a claim of 10 slots, with worst enqueue during claims in bracket
 | 19 | Numbered schema migrations that keep existing rows | done | core | 8 | `tests/migrations.rs` (45 tests) from real historic schemas on all three databases |
 | 20 | Queue admission races: MySQL recovery mid-scan, oversized timeout | done | core | 13 | `tests/queue_races.rs` (74 tests). The stress test hung once on SQLite, see Known problems |
 | 21 | Rust-only late-start reproduction | blocked | core | 8 | `tests/late_start_restart.rs` (ignored by default): 0 late starts in 45 restarts at real settings, cause unproven |
-| 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Existing Python tests pass. Id reuse, cancel children, bulk resume and `get_result(polling_interval_sec=)` have focused SQLite and MySQL tests. The full suite was not re-run |
+| 22 | Python SDK on the core APIs | done | sdk | 8-13 | Full Python suite passes on all 3, see task 34 |
 | 23 | Workflow id reuse, child cancel, queue resume, schema 007–012 | done | sdk | 22 | Focused Rust and Python tests on SQLite and MySQL. Postgres not run for this slice |
 | 24 | UTC cron schedules with skip-if-pending, schema 013 | done | sdk | 13, 22 | `tests/schedules.rs` (9) and `tests/test_schedules.py` (12) on SQLite, MySQL and Postgres. Cron unit tests pass. An empty database migrates to version 13. Clippy with warnings denied is clean |
 | 25 | Per-user schedules: `delete_schedule` and schedule arguments | done | sdk | 24 | `tests/schedules.rs` (12) and `tests/test_schedules.py` plus the schedule endpoint test. Full suites not run, by user choice |
 
 ## Verification
+
+Latest, on 2026-11-05 after tasks 27 to 32: Rust **950 passed, 6 ignored, 0 failed** and Python **766 passed**, on SQLite, MySQL and Postgres. Both suites ran side by side in under 6 minutes. Run every check this way, with each run under 10 minutes:
+
+```sh
+cargo test -p dwos-core --no-fail-fast &
+.venv/bin/python -m pytest tests --ignore=tests/chaos -n 8 --dist=loadgroup &
+wait
+```
+
+The test servers need `compose.yml`'s raised connection limits for this. The defaults ran out of connections.
+
+Older:
 
 On 2026-11-05 the merged core passed **669 tests, 2 ignored, zero failures** in 2 of 3 full runs across SQLite, MySQL and Postgres. In the third run the SQLite stress test hung and was killed. The other 267 tests that had finished in that run passed. Clippy with warnings denied and formatting pass.
 
@@ -166,12 +179,12 @@ Core review found missing ownership checks before step execution decisions, a le
 - A child attached to a second parent by explicit ID is not protected from deletion, and that parent's replay would rerun it. Read in the code, not tested.
 - On MySQL, deleting by age can wait on a locked parent of a candidate row, up to the 10 s lock timeout, then retries.
 - The memory problem above comes back: one migrations run took the test MySQL from 0.8 GB to 1.9 GB, mostly memory MySQL's own accounting does not show.
-- `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. `.worktrees/HANDOFF.md` traces this to a bug in the test, not the product, with the fix in `tests/queue_races.rs`. Task 33 proves it in full runs.
-- On MySQL, a queue claim could hold a live owner's row lock. `.worktrees/HANDOFF.md` reports this fixed by reading candidates first and then locking each row, with the queue race tests passing. Task 33 reruns them.
-- The SDK's sleep, timeouts, cancel, resume, events, messages and queues now have copied tests under `tests/upstream`. The handoff reports 141 focused tests passed, but the full Python suite has not passed yet. Task 34 covers it.
+- The SQLite stress hang was a bug in the test. No hang in the full runs of task 33.
+- The MySQL queue claim no longer holds a live owner's row lock. The queue race tests pass in the task 33 runs.
+- The SDK's sleep, timeouts, cancel, resume, events, messages and queues pass their copied tests in the full Python suite.
 - `@DBOS.scheduled` passes no arguments; `register_schedule` does. A cron that sets both a day of the month and a day of the week is rejected. A restart enqueues only the latest missed tick, not every one.
 - The bar "Python contains no step, result, or lease decisions" is not fully met. Still in `dbos.py`: a step called inside a step or outside a workflow just runs; a value that cannot be encoded becomes a failure; the retry loop sleeps and picks the exception type, with delays and limits from Rust; after a lost lease Python cancels the body and waits for the stored result.
-- `sys.exit()` in a background workflow did not kill the suite in one run of `tests/test_sys_exit.py`, per the handoff. Task 34 reruns it.
+- `sys.exit()` in a background workflow does not kill the suite; `tests/test_sys_exit.py` passes in the full Python suite.
 - Background recovery now waits one interval first. With the default one second, a restart recovers up to 1.5s later, and a backlog recovers at most one batch of 50 per interval.
 - A real error raised during the shutdown window is no longer final. The workflow runs again after restart.
 - JSON values follow the DBOS `portable_json` shape, but reading rows across SDKs is untested.
