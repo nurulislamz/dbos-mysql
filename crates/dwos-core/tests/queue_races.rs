@@ -28,7 +28,6 @@ use common::*;
 const LOCK_QUEUE: &str = "SELECT concurrency FROM workflow_queues";
 const REVOKE: &str = "lease_token IS NOT NULL AND claim_after <=";
 const DEADLINE_CANCEL: &str = "WHERE status = 'PENDING' AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries";
-const NEXT_IN_FIFO: &str = "ORDER BY (SELECT sequence";
 const LOCK_CANDIDATE: &str = "AND lease_token IS NULL AND claim_after <=";
 const RENEW: &str = "SET claim_after = ";
 const RELEASE: &str = "recovery_attempts = recovery_attempts - 1";
@@ -307,7 +306,7 @@ async fn stop_after_count(db: &TestDb, backend: Backend, id: &str) -> AnyConnect
 async fn wait_after_count(db: &TestDb, backend: Backend) {
     let needle = match backend {
         Backend::MySql => "INSERT INTO workflow_timeouts",
-        _ => NEXT_IN_FIFO,
+        _ => LOCK_CANDIDATE,
     };
     wait_blocked(db, backend, needle).await;
 }
@@ -566,7 +565,7 @@ async fn mysql_recovery_scan_does_not_claim_a_queue_member_committed_after_its_r
              CREATE FUNCTION scan_gate() RETURNS INT NOT DETERMINISTIC NO SQL BEGIN \
              DECLARE ignored INT; SET ignored = GET_LOCK('{lock_name}', 30); \
              SET ignored = RELEASE_LOCK('{lock_name}'); RETURN 1; END; \
-             CREATE VIEW workflow_queue_entries AS SELECT sequence, workflow_uuid, queue_name, start_timeout_ms \
+             CREATE VIEW workflow_queue_entries AS SELECT * \
              FROM real_entries WHERE scan_gate() = 1"
         ),
     )
@@ -1580,16 +1579,7 @@ all_dbs!(
             enqueue(&engine, "q", &["next", "last"]).await;
             let mut lock = lock_row(&db, backend, "head").await;
             let claiming = claim(&engine, "q");
-            wait_blocked(
-                &db,
-                backend,
-                if matches!(backend, Backend::MySql) {
-                    LOCK_CANDIDATE
-                } else {
-                    NEXT_IN_FIFO
-                },
-            )
-            .await;
+            wait_blocked(&db, backend, LOCK_CANDIDATE).await;
             exec(
             &mut lock,
             if exhaust {

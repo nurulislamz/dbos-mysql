@@ -91,7 +91,7 @@ fn current_init(backend: Backend) -> &'static str {
 }
 
 /// What 001 no longer holds, because a shipped file is never edited.
-fn files_after_init(backend: Backend) -> [&'static str; 8] {
+fn files_after_init(backend: Backend) -> [&'static str; 9] {
     match backend {
         Backend::Sqlite => [
             include_str!("../schema/sqlite/007_workflow_columns.sql"),
@@ -102,6 +102,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 8] {
             include_str!("../schema/sqlite/012_workflow_indexes.sql"),
             include_str!("../schema/sqlite/013_workflow_schedules.sql"),
             include_str!("../schema/sqlite/014_workflow_completed_at.sql"),
+            include_str!("../schema/sqlite/015_workflow_lease_token.sql"),
         ],
         Backend::MySql => [
             include_str!("../schema/mysql/007_workflow_columns.sql"),
@@ -112,6 +113,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 8] {
             include_str!("../schema/mysql/012_workflow_indexes.sql"),
             include_str!("../schema/mysql/013_workflow_schedules.sql"),
             include_str!("../schema/mysql/014_workflow_completed_at.sql"),
+            include_str!("../schema/mysql/015_workflow_lease_token.sql"),
         ],
         Backend::Postgres => [
             include_str!("../schema/postgres/007_workflow_columns.sql"),
@@ -122,15 +124,16 @@ fn files_after_init(backend: Backend) -> [&'static str; 8] {
             include_str!("../schema/postgres/012_workflow_indexes.sql"),
             include_str!("../schema/postgres/013_workflow_schedules.sql"),
             include_str!("../schema/postgres/014_workflow_completed_at.sql"),
+            include_str!("../schema/postgres/015_workflow_lease_token.sql"),
         ],
     }
 }
 
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14],
+        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15],
     }
 }
 

@@ -40,7 +40,7 @@ Work from the top. Task numbers continue from the history table below.
 | 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING`, and never a child a parent could replay | done | | `tests/retention.rs` (60) and `tests/migrations.rs` (45) on all 3 on merged code |
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | done | | New Rust test on all 3: the new limit applies to the next claim |
 | 31 | Python bindings for task 29 | done | 29 | `tests/test_retention.py` and endpoint delete tests pass on all 3 |
-| 32 | Measure queue claims with a large backlog. Each slot re-scans pending rows while holding the queue row lock, which also blocks enqueues. Fix it only if too slow | todo | D4 | Numbers for 100k waiting and 100k finished rows, within the D4 limit |
+| 32 | Measure queue claims with a large backlog, and fix them if too slow | done | | `tests/queue_backlog.rs`, numbers below. Postgres at 2,000 waiting went from 5.6 s to 51 ms. Worst claim is under 1 s at 100k waiting and 100k finished on all 3. Measured on a busy machine, load about 4 |
 | 33 | Full Rust suite 3 times. Clippy and format | todo | 27-32 | Zero failures. Also the proof for the stress hang and MySQL row lock fixes |
 | 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
 | 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
@@ -55,7 +55,7 @@ Work from the top. Task numbers continue from the history table below.
 | D1 | Is the feature list above the right minimum? | Yes, unless your programs need something from the list below |
 | D2 | Must all 3 databases be ready, or can you start with one? | Start with MySQL. Its crash tests passed before the newest features, and this takes the Postgres incident out of the minimum. SQLite is for one machine only. Postgres then stays marked as not ready |
 | D3 | When can the Python crash tests resume? They are paused, and task 36 needs them | After tasks 33 and 34 |
-| D4 | What backlog speed is good enough for task 32? | I don't know yet. Measure first, then set the limit |
+| D4 | What backlog speed is good enough for task 32? | Set to a claim under 1 s at 100k waiting and 100k finished rows. Change it if you need more |
 
 ### Not needed to use it
 
@@ -70,6 +70,16 @@ These come later, and none of them block the minimum.
 - **Python extras:** `DBOSContextEnsure`, `DBOS.asyncio_wait`, OpenTelemetry, custom `Serializer` and the AI framework integrations. Also verifying `validate_args` and `log_level`.
 - **Full benchmark:** workflows per second, time per step, memory and connections.
 - **Moving Jobby:** this starts once the minimum is done.
+
+### Queue backlog numbers
+
+Median time for a claim of 10 slots, with worst enqueue during claims in brackets. From `tests/queue_backlog.rs`, one run on a busy machine.
+
+| Rows | MySQL | Postgres | SQLite |
+|---|---|---|---|
+| 100 waiting | 33 ms (65 ms) | 26 ms (33 ms) | 7 ms (37 ms) |
+| 100 waiting, 100k finished | 32 ms (48 ms) | 385 ms (415 ms) | 327 ms (432 ms) |
+| 100k waiting, 100k finished | 680 ms (779 ms) | 25 ms (25 ms) | 636 ms (632 ms) |
 
 ## Task history
 
@@ -150,6 +160,8 @@ Core review found missing ownership checks before step execution decisions, a le
 
 ## Known problems
 
+- Queue claims still walk finished rows or sort waiting rows, depending on the database's plan, so they slow down as rows grow. Deleting old workflows keeps the finished side small.
+- On SQLite, a nonstop claim loop with no pause and 200k rows made an enqueue fail with `database is locked` after its 30 s wait. With a 100 ms pause between claims it does not happen.
 - The test MySQL container hit its 2 GB memory cap and started swapping, after 25 hours of creating test databases. `CREATE TABLE` then took over 80 s and tests failed with `timed out creating a test database`. This is the test server, not the product, but full runs will hit it too.
 - A child attached to a second parent by explicit ID is not protected from deletion, and that parent's replay would rerun it. Read in the code, not tested.
 - On MySQL, deleting by age can wait on a locked parent of a candidate row, up to the 10 s lock timeout, then retries.

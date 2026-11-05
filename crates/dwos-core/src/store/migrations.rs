@@ -98,6 +98,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/014_workflow_completed_at.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_workflow_status_completed_at')",
     ),
+    plain(
+        15,
+        include_str!("../../schema/postgres/015_workflow_lease_token.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_workflow_status_lease_token')",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -182,6 +187,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/014_workflow_completed_at.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND INDEX_NAME = 'ix_workflow_status_completed_at')",
     ),
+    plain(
+        15,
+        include_str!("../../schema/mysql/015_workflow_lease_token.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND INDEX_NAME = 'ix_workflow_status_lease_token')",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -253,6 +263,11 @@ const SQLITE: &[Migration] = &[
         14,
         include_str!("../../schema/sqlite/014_workflow_completed_at.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_workflow_status_completed_at')",
+    ),
+    plain(
+        15,
+        include_str!("../../schema/sqlite/015_workflow_lease_token.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_workflow_status_lease_token')",
     ),
 ];
 

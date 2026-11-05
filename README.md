@@ -24,7 +24,7 @@ Crash detection uses leases that expire. A dead process loses the workflow, and 
 - A shutdown is not stored as a final error.
 - Python contains no step, result, or lease decisions.
 
-To learn and use it, read the [docs](docs/index.md). To browse them as a site, run `uv run --group docs mkdocs serve`. The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
+To learn and use it, read the [docs](docs/index.md). To browse them as a site, run `uvx --from mkdocs-material mkdocs serve`. The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
 
 ## Feature checklist
 
@@ -106,7 +106,7 @@ No benchmark exists in this repository, and nothing has been measured side by si
 | Workflows and steps per second | ✅ Vendor figure: about 1,000 per Postgres vCPU, 20K on 16 vCPU | ❓ Not measured |
 | Extra time per step | ❓ | ❓ Not measured |
 | Memory and connections per process | ❓ | ❓ Not measured |
-| Behaviour with a large backlog | ❓ | ❓ Not measured. Recovery takes at most 50 workflows per interval |
+| Behaviour with a large backlog | ❓ | 🚧 A claim of 10 queue slots takes under 1 s with 100k waiting and 100k finished rows, on a busy machine. Recovery takes at most 50 workflows per interval |
 | Wake on a message from the same engine | ❓ | ✅ About 10-17 ms |
 | Wake on a message from another process | ❓ | ✅ Within about 250 ms |
 | Queue enqueue to workflow start, same engine | ❓ | ✅ About 11 ms |

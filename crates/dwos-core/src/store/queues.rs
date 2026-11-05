@@ -383,63 +383,64 @@ impl Store {
         let slots = concurrency.saturating_sub(occupied).min(limit);
         let mut claimed = Vec::new();
         while claimed.len() < slots as usize {
-            let select_sql = self.sql(&format!(
-                "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
-                 FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NULL AND claim_after <= ? \
-                 AND serialization IN ({}) AND name IN ({}) AND workflow_uuid IN \
-                 (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?) \
-                 ORDER BY (SELECT sequence FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
-                 LIMIT 1 {}", self.readable_formats(), vec!["?"; names.len()].join(", "),
-                if self.dialect == Dialect::MySql { "" } else { self.dialect.lock_row() },
-            ));
-            let mut select = sqlx::query(select_sql).bind(cutoff);
-            for name in names {
-                select = select.bind(name.as_str());
-            }
-            let Some(row) = select.bind(queue).fetch_optional(&mut *tx).await? else {
-                break;
-            };
-            let workflow_id: String = row.try_get("workflow_uuid")?;
+            // The queue row lock already serializes claimers, so this read takes no row locks:
             // MySQL's ordered locking scan can keep unrelated live owners locked until commit.
-            let row = if self.dialect == Dialect::MySql {
-                let Some(locked) = sqlx::query(self.sql(
-                    "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
-                     FROM workflow_status WHERE workflow_uuid = ? AND status = 'PENDING' \
-                     AND lease_token IS NULL AND claim_after <= ? FOR UPDATE",
+            let read_sql = self.sql(&format!(
+                    "SELECT workflow_queue_entries.workflow_uuid FROM workflow_queue_entries \
+                     JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid \
+                     WHERE workflow_queue_entries.queue_name = ? AND workflow_status.status = 'PENDING' \
+                     AND workflow_status.lease_token IS NULL AND workflow_status.claim_after <= ? \
+                     AND workflow_status.serialization IN ({}) AND workflow_status.name IN ({}) \
+                     ORDER BY workflow_queue_entries.sequence LIMIT ?",
+                    self.readable_formats(),
+                    vec!["?"; names.len()].join(", "),
+                ));
+            let mut read = sqlx::query_scalar(read_sql).bind(queue).bind(cutoff);
+            for name in names {
+                read = read.bind(name.as_str());
+            }
+            let wanted = slots as usize - claimed.len();
+            let found: Vec<String> = read.bind(wanted as i64).fetch_all(&mut *tx).await?;
+            if found.is_empty() {
+                break;
+            }
+            for workflow_id in found {
+                let Some(row) = sqlx::query(self.sql(&format!(
+                "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
+                 FROM workflow_status WHERE workflow_uuid = ? AND status = 'PENDING' \
+                 AND lease_token IS NULL AND claim_after <= ? {}",
+                self.dialect.lock_row(),
+            )))
+            .bind(workflow_id.as_str())
+            .bind(cutoff)
+            .fetch_optional(&mut *tx)
+            .await? else {
+                continue;
+            };
+                let timeout: Option<i64> = sqlx::query_scalar(self.sql(
+                    "SELECT start_timeout_ms FROM workflow_queue_entries WHERE workflow_uuid = ?",
                 ))
                 .bind(workflow_id.as_str())
-                .bind(cutoff)
-                .fetch_optional(&mut *tx)
-                .await? else {
-                    continue;
-                };
-                locked
-            } else {
-                row
-            };
-            let timeout: Option<i64> = sqlx::query_scalar(self.sql(
-                "SELECT start_timeout_ms FROM workflow_queue_entries WHERE workflow_uuid = ?",
-            ))
-            .bind(workflow_id.as_str())
-            .fetch_one(&mut *tx)
-            .await?;
-            if let Some(timeout) = timeout {
-                let now: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
-                    .fetch_one(&mut *tx)
-                    .await?;
-                // Enqueue checked this against an earlier clock. An error here would stop the queue for good.
-                let deadline = now.saturating_add(timeout);
-                sqlx::query(self.sql(&format!(
+                .fetch_one(&mut *tx)
+                .await?;
+                if let Some(timeout) = timeout {
+                    let now: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
+                        .fetch_one(&mut *tx)
+                        .await?;
+                    // Enqueue checked this against an earlier clock. An error here would stop the queue for good.
+                    let deadline = now.saturating_add(timeout);
+                    sqlx::query(self.sql(&format!(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, ?, ?) {}", self.dialect.insert_if_absent(),
                 ))).bind(workflow_id.as_str()).bind(timeout).bind(deadline).execute(&mut *tx).await?;
-                sqlx::query(self.sql("UPDATE workflow_queue_entries SET start_timeout_ms = NULL WHERE workflow_uuid = ?"))
+                    sqlx::query(self.sql("UPDATE workflow_queue_entries SET start_timeout_ms = NULL WHERE workflow_uuid = ?"))
                     .bind(workflow_id.as_str()).execute(&mut *tx).await?;
-            }
-            if let Some(claim) = self
-                .claim_locked_row(&mut tx, &row, request_token, duration)
-                .await?
-            {
-                claimed.push(claim);
+                }
+                if let Some(claim) = self
+                    .claim_locked_row(&mut tx, &row, request_token, duration)
+                    .await?
+                {
+                    claimed.push(claim);
+                }
             }
         }
         tx.commit().await?;

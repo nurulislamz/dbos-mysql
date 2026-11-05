@@ -40,7 +40,7 @@ Connections apply bounded lock waits and strict settings. `EngineConfig::read_on
 | Postgres | Replaces the status CHECK | Blocks reads and writes on `workflow_status` during a scan of the table, with no rewrite. If it waits 10 seconds for the lock, the start fails and the next start retries |
 | SQLite | Rebuilds `workflow_status` in one transaction, with foreign keys off so that children survive | Blocks writers for the rebuild. Readers continue in WAL mode |
 
-On Postgres and SQLite, writes to `workflow_status` wait while migration 014 builds its index.
+On Postgres and SQLite, writes to `workflow_status` wait while migrations 014 and 015 build their indexes.
 
 Other starters wait for up to one hour for their turn. Upgrade a large MySQL database in a maintenance window: on MySQL 8.4.11 with other load running, one rebuild of an 824 MB, 400,000-row table took 59 seconds. A write made during it waited 57 seconds, and a read did not wait.
 
