@@ -14,3 +14,4 @@ log = "0.4"
 pyo3 = { version = "0.30", features = ["multiple-pymethods"] }
 pyo3-async-runtimes = { version = "0.30", features = ["tokio-runtime"] }
 pyo3-log = "0.13"
+tokio = { version = "1", features = ["time"] }

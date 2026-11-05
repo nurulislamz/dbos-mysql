@@ -9,6 +9,8 @@ from rust_dwos.dbos import (
     WorkflowStatus,
     WorkflowStatusString,
 )
+from rust_dwos.queues import Queue
+from rust_dwos.timeouts import SetWorkflowTimeout, assert_current_dbos_context, get_workflow_start_options
 from rust_dwos.errors import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -20,6 +22,7 @@ from rust_dwos.errors import (
     DBOSRecordedError,
     DBOSStepNondeterminismError,
     DBOSUnexpectedStepError,
+    DBOSWorkflowCancelledError,
     MaxRecoveryAttemptsExceededError,
 )
 
@@ -36,12 +39,17 @@ __all__ = [
     "DBOSRecordedError",
     "DBOSStepNondeterminismError",
     "DBOSUnexpectedStepError",
+    "DBOSWorkflowCancelledError",
     "MaxRecoveryAttemptsExceededError",
+    "Queue",
     "SetWorkflowID",
+    "SetWorkflowTimeout",
     "StepStatus",
     "StoreError",
     "WorkflowHandle",
     "WorkflowHandleAsync",
     "WorkflowStatus",
     "WorkflowStatusString",
+    "assert_current_dbos_context",
+    "get_workflow_start_options",
 ]

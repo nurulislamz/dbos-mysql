@@ -316,6 +316,7 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "pyo3-log",
+ "tokio",
 ]
 
 [[package]]

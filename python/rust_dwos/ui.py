@@ -75,7 +75,7 @@ class Viewer(ThreadingHTTPServer):
         self._url = url
         self._loop = _LoopThread("rust-dwos-ui")
         try:
-            self._engine = self._loop.run(_call(_native.Engine.connect, url, run_migrations=False))
+            self._engine = self._loop.run(_call(_native.Engine.connect, url, run_migrations=False, read_only=True))
             super().__init__((BIND_ADDRESS, port), _Handler)
         except BaseException:
             self._loop.stop()

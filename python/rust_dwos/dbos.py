@@ -23,13 +23,20 @@ from rust_dwos.errors import (
     DBOSException,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSWorkflowCancelledError,
 )
+from rust_dwos.events import Events
+from rust_dwos.queues import Queue, Queues
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
+from rust_dwos.sleep import Sleep
+from rust_dwos.timeouts import _timeout_override, timeout_start_args
+from rust_dwos.workflow_management import WorkflowManagement
 
 logger = logging.getLogger("dbos")
 
 _ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
 _PLAIN_CODEC = Codec(lambda: None)
+_SYSTEM_EXIT = object()
 
 
 class DBOSConfig(TypedDict):
@@ -66,6 +73,8 @@ class WorkflowStatus:
     created_at: int
     updated_at: int
     completed_at: int | None
+    workflow_timeout_ms: int | None = None
+    workflow_deadline_epoch_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +96,7 @@ class _Workflow:
 _current_run: contextvars.ContextVar[_native.Run | None] = contextvars.ContextVar("dbos_run", default=None)
 _current_step: contextvars.ContextVar[StepStatus | None] = contextvars.ContextVar("dbos_step", default=None)
 _next_workflow_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("dbos_next_id", default=None)
+_current_active: contextvars.ContextVar[_native.ActiveRun | None] = contextvars.ContextVar("dbos_active", default=None)
 
 
 class SetWorkflowID:
@@ -145,10 +155,12 @@ def _running() -> DBOS:
     return _instance
 
 
-def _bind_run(run: _native.Run) -> None:
+def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
     _current_run.set(run)
+    _current_active.set(active)
     _current_step.set(None)
     _next_workflow_id.set(None)
+    _timeout_override.set(None)
 
 
 async def _call(method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -165,9 +177,12 @@ class WorkflowHandle[T]:
 
     def get_result(self) -> T:
         if self._local is not None:
-            return self._local.result()
+            try:
+                return self._local.result()
+            except DBOSAwaitedWorkflowCancelledError:
+                pass  # It may have been resumed since, so the stored row decides.
         instance = _running()
-        return _decode_result(instance._blocking(instance._engine.await_result, self.workflow_id))
+        return _decode_result(instance._waiting(instance._engine.await_result, self.workflow_id))
 
     def get_status(self) -> WorkflowStatus:
         instance = _running()
@@ -184,11 +199,14 @@ class WorkflowHandleAsync[T]:
 
     async def get_result(self) -> T:
         local = self._local
-        if isinstance(local, asyncio.Task):
-            if local.get_loop() is asyncio.get_running_loop():
-                return await asyncio.shield(local)
-        elif local is not None:
-            return await asyncio.shield(asyncio.wrap_future(local))
+        try:
+            if isinstance(local, asyncio.Task):
+                if local.get_loop() is asyncio.get_running_loop():
+                    return await asyncio.shield(local)
+            elif local is not None:
+                return await asyncio.shield(asyncio.wrap_future(local))
+        except DBOSAwaitedWorkflowCancelledError:
+            pass  # It may have been resumed since, so the stored row decides.
         return _decode_result(await _running()._engine.await_result(self.workflow_id))
 
     async def get_status(self) -> WorkflowStatus:
@@ -211,7 +229,7 @@ class _DBOSMeta(type):
         return _current_step.get()
 
 
-class DBOS(metaclass=_DBOSMeta):
+class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
@@ -232,6 +250,9 @@ class DBOS(metaclass=_DBOSMeta):
         self._active_lock = threading.Lock()
         self._app_loop: asyncio.AbstractEventLoop | None = None
         self._app_loop_watch: asyncio.Task[Any] | None = None
+        self._queues: dict[str, Queue] = {}
+        self._queue_wakes: dict[str, asyncio.Event] = {}
+        self._queue_loops: list[concurrent.futures.Future[Any]] = []
 
     @classmethod
     def launch(cls) -> None:
@@ -260,7 +281,14 @@ class DBOS(metaclass=_DBOSMeta):
         allow_pickle(self._engine.serialization == _native.PY_PICKLE)
         self._recovery = self._workflows.submit(self._recovery_loop())
 
-    def _blocking(self, method: Callable[..., Any], *args: Any) -> Any:
+    def _blocking(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        # Waits on this thread with the GIL released. No event loop is involved, so a step pays no thread hops.
+        if self._state._closing:
+            raise DBOSException("DBOS was destroyed while this work was running")
+        return method(*args, blocking=True, **kwargs)
+
+    def _waiting(self, method: Callable[..., Any], *args: Any) -> Any:
+        # For a wait with no end of its own. Destroy cancels what runs on this loop, which wakes the caller.
         return self._state.run(_call(method, *args))
 
     @classmethod
@@ -286,7 +314,9 @@ class DBOS(metaclass=_DBOSMeta):
         if self._app_loop_watch is not None:
             _cancel_task(self._app_loop_watch)
         self._recovery.cancel()
-        concurrent.futures.wait([*active, self._recovery], timeout=self._shutdown_timeout)
+        for loop in self._queue_loops:
+            loop.cancel()
+        concurrent.futures.wait([*active, self._recovery, *self._queue_loops], timeout=self._shutdown_timeout)
         self._workflows.stop()
         self._state.stop()
         with self._active_lock:
@@ -307,7 +337,7 @@ class DBOS(metaclass=_DBOSMeta):
                 begun = instance._blocking(instance._engine.begin, *_begin_args(info, args, kwargs))
                 if begun.run is not None:
                     return instance._run_sync(info, begun.run, args, kwargs)
-                result = begun.result or instance._blocking(instance._engine.await_result, begun.workflow_id)
+                result = begun.result or instance._waiting(instance._engine.await_result, begun.workflow_id)
                 return _decode_result(result, info)
 
             @functools.wraps(function)
@@ -372,8 +402,8 @@ class DBOS(metaclass=_DBOSMeta):
                         continue
                     finally:
                         _current_step.reset(reset)
-                    return instance._state.run(instance._save_success(run, step_id, step_name, codec, value))
-                raise instance._state.run(instance._save_failure(run, step_id, step_name, failure(errors)))
+                    return instance._save_success_sync(run, step_id, step_name, codec, value)
+                raise instance._save_failure_sync(run, step_id, step_name, failure(errors))
 
             @functools.wraps(function)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -448,7 +478,7 @@ class DBOS(metaclass=_DBOSMeta):
     @classmethod
     def get_result(cls, workflow_id: str) -> Any:
         instance = _running()
-        return _decode_result(instance._blocking(instance._engine.await_result, workflow_id))
+        return _decode_result(instance._waiting(instance._engine.await_result, workflow_id))
 
     @classmethod
     async def get_result_async(cls, workflow_id: str) -> Any:
@@ -468,15 +498,6 @@ class DBOS(metaclass=_DBOSMeta):
             return _status_of(await _running()._engine.get_status(workflow_id))
         except DBOSNonExistentWorkflowError:
             return None
-
-    @classmethod
-    def list_workflows(cls) -> list[WorkflowStatus]:
-        instance = _running()
-        return [_status_of(row) for row in instance._blocking(instance._engine.list_workflows)]
-
-    @classmethod
-    async def list_workflows_async(cls) -> list[WorkflowStatus]:
-        return [_status_of(row) for row in await _running()._engine.list_workflows()]
 
     @classmethod
     def list_workflow_steps(cls, workflow_id: str) -> list[dict[str, Any]]:
@@ -545,8 +566,16 @@ class DBOS(metaclass=_DBOSMeta):
     async def _run_async(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         active = self._keep_lease(run)
         context = contextvars.copy_context()
-        context.run(_bind_run, run)
-        body = asyncio.get_running_loop().create_task(info.function(*args, **kwargs), context=context)
+        context.run(_bind_run, run, active)
+
+        async def guarded() -> Any:
+            try:
+                return await info.function(*args, **kwargs)
+            except SystemExit:
+                return _SYSTEM_EXIT
+
+        # SystemExit is caught inside the task, because asyncio would re-raise it into the workflows loop and end that thread.
+        body = asyncio.get_running_loop().create_task(guarded(), context=context)
         lost = asyncio.ensure_future(active.lost())
         try:
             await asyncio.wait({body, lost}, return_when=asyncio.FIRST_COMPLETED)
@@ -569,7 +598,15 @@ class DBOS(metaclass=_DBOSMeta):
             raise asyncio.CancelledError
         error = body.exception()
         if error is None:
-            return await self._finish_success(info, run, body.result())
+            value = body.result()
+            if value is _SYSTEM_EXIT:
+                logger.warning(f"Workflow {run.workflow_id} called sys.exit(), so it was released for recovery")
+                await self._engine.conclude(run)
+                return None
+            return await self._finish_success(info, run, value)
+        if isinstance(error, DBOSWorkflowCancelledError):
+            await self._engine.conclude(run)
+            return _decode_result(await self._engine.await_result(run.workflow_id), info)
         if isinstance(error, Exception):
             return await self._finish_error(info, run, error)
         await self._engine.conclude(run)
@@ -578,18 +615,50 @@ class DBOS(metaclass=_DBOSMeta):
     def _run_sync(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         active = self._keep_lease(run)
         context = contextvars.copy_context()
-        context.run(_bind_run, run)
+        context.run(_bind_run, run, active)
         try:
             value = context.run(info.function, *args, **kwargs)
+        except DBOSWorkflowCancelledError:
+            self._stop_keeper(active)
+            self._blocking(self._engine.conclude, run)
+            return _decode_result(self._waiting(self._engine.await_result, run.workflow_id), info)
         except Exception as error:  # noqa: BLE001
             self._stop_keeper(active)
-            return self._state.run(self._finish_error(info, run, error))
+            return self._finish_error_sync(info, run, error)
         except BaseException:
             self._stop_keeper(active)
             self._blocking(self._engine.conclude, run)
             raise
         self._stop_keeper(active)
-        return self._state.run(self._finish_success(info, run, value))
+        return self._finish_success_sync(info, run, value)
+
+    def _finish_success_sync(self, info: _Workflow, run: _native.Run, value: Any) -> Any:
+        try:
+            text = info.codec.encode_output(value, run.serialization)
+        except TypeError as error:
+            return self._finish_error_sync(info, run, error)
+        superseded = self._blocking(self._engine.conclude, run, output=text)
+        if superseded is not None:
+            return _decode_result(superseded, info)
+        return info.codec.decode_output(text, run.serialization)
+
+    def _finish_error_sync(self, info: _Workflow, run: _native.Run, error: BaseException) -> Any:
+        superseded = self._blocking(self._engine.conclude, run, error=encode_exception(error, run.serialization))
+        if superseded is not None:
+            return _decode_result(superseded, info)
+        raise error
+
+    def _save_success_sync(self, run: _native.Run, step_id: int, step_name: str, codec: Codec, value: Any) -> Any:
+        try:
+            text = codec.encode_output(value, run.serialization)
+        except TypeError as error:
+            raise self._save_failure_sync(run, step_id, step_name, error) from error
+        self._blocking(self._engine.save_step_output, run, step_id, step_name, text)
+        return codec.decode_output(text, run.serialization)
+
+    def _save_failure_sync(self, run: _native.Run, step_id: int, step_name: str, error: Exception) -> Exception:
+        self._blocking(self._engine.save_step_error, run, step_id, step_name, encode_exception(error, run.serialization))
+        return error
 
     async def _finish_success(self, info: _Workflow, run: _native.Run, value: Any) -> Any:
         try:
@@ -627,6 +696,50 @@ class DBOS(metaclass=_DBOSMeta):
                 except Exception:  # noqa: BLE001
                     logger.exception(f"Could not resume workflow {claim.workflow_id}. It will be retried when its lease expires")
 
+    def _add_queue(self, queue: Queue) -> Queue:
+        with self._active_lock:
+            known = self._queues.setdefault(queue.name, queue)
+            if known is queue:
+                self._queue_loops.append(self._workflows.submit(self._queue_loop(queue)))
+        return known
+
+    def _wake_queue(self, name: str) -> None:
+        wake = self._queue_wakes.get(name)
+        if wake is not None and not self._workflows._closing:
+            self._workflows._loop.call_soon_threadsafe(wake.set)
+
+    def _wake_queues(self) -> None:
+        for name in self._queue_wakes:
+            self._wake_queue(name)
+
+    async def _queue_loop(self, queue: Queue) -> None:
+        # Local enqueues and finishes wake this at once. The interval only matters for work from other processes.
+        wake = self._queue_wakes[queue.name] = asyncio.Event()
+        while True:
+            wake.clear()
+            try:
+                claims = await self._engine.claim_queue(queue.name, list(_registry))
+            except Exception:  # noqa: BLE001
+                logger.exception(f"Could not read queue {queue.name}. It will be tried again")
+                claims = []
+            for claim in claims:
+                try:
+                    self._launch_claim(queue, claim)
+                except Exception:  # noqa: BLE001
+                    logger.exception(f"Could not start workflow {claim.workflow_id}. It will be retried when its lease expires")
+            if claims:
+                continue
+            try:
+                await asyncio.wait_for(wake.wait(), queue.polling_interval_sec)
+            except TimeoutError:
+                pass
+
+    def _launch_claim(self, queue: Queue, claim: _native.Claim) -> None:
+        info = _registry[claim.name]
+        args, kwargs = info.codec.decode_input(claim.input, claim.run.serialization)
+        future = self._launch_run(info, claim.run, args, kwargs)
+        future.add_done_callback(lambda _: self._wake_queue(queue.name))
+
     def _resume(self, claim: _native.Claim) -> WorkflowHandle[Any]:
         info = _registry[claim.name]
         logger.info(f"Recovering workflow {claim.workflow_id}, attempt {claim.recovery_attempts}")
@@ -654,7 +767,7 @@ atexit.register(_at_exit)
 
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
     text = info.codec.encode_input(args, kwargs, _running()._engine.serialization)
-    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None)
+    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None, *timeout_start_args())
 
 
 def _info_of(function: Callable[..., Any]) -> _Workflow:
@@ -685,20 +798,22 @@ def _codec_for(name: str, info: _Workflow | None = None) -> Codec:
     return known.codec if known is not None else _PLAIN_CODEC
 
 
-def _status_of(row: _native.WorkflowRow) -> WorkflowStatus:
+def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output: bool = True) -> WorkflowStatus:
     return WorkflowStatus(
         workflow_id=row.workflow_id,
         status=row.status,
         name=row.name,
-        input=row.input,
-        output=_codec_for(row.name).decode_output(row.output, row.serialization) if row.output is not None else None,
-        error=decode_exception(row.error, row.serialization) if row.error is not None else None,
+        input=row.input if load_input else None,
+        output=_codec_for(row.name).decode_output(row.output, row.serialization) if load_output and row.output is not None else None,
+        error=decode_exception(row.error, row.serialization) if load_output and row.error is not None else None,
         recovery_attempts=row.recovery_attempts,
         max_recovery_attempts=row.max_recovery_attempts,
         parent_workflow_id=row.parent_workflow_id,
         created_at=row.created_at_ms,
         updated_at=row.updated_at_ms,
         completed_at=row.completed_at_ms,
+        workflow_timeout_ms=row.workflow_timeout_ms,
+        workflow_deadline_epoch_ms=row.workflow_deadline_epoch_ms,
     )
 
 

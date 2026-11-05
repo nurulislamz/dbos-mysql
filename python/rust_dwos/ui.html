@@ -19,6 +19,7 @@
   --success-bg: #dcefe0; --success-ink: #17542a;
   --error-bg: #f8dfdc; --error-ink: #8a1f16;
   --limit-bg: #f6e8c6; --limit-ink: #66470a;
+  --cancel-bg: #ecece7; --cancel-ink: #3f413c;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -33,6 +34,7 @@
     --success-bg: #173a22; --success-ink: #b5e5c3;
     --error-bg: #4a1f1b; --error-ink: #f9c6c0;
     --limit-bg: #453410; --limit-ink: #f3dc9f;
+    --cancel-bg: #2a2b28; --cancel-ink: #c8cbc3;
   }
 }
 * { box-sizing: border-box; }
@@ -96,6 +98,7 @@ tbody td { border-top: 1px solid var(--line); }
 .chip-SUCCESS { background: var(--success-bg); color: var(--success-ink); }
 .chip-ERROR { background: var(--error-bg); color: var(--error-ink); }
 .chip-MAX_RECOVERY_ATTEMPTS_EXCEEDED { background: var(--limit-bg); color: var(--limit-ink); }
+.chip-CANCELLED { background: var(--cancel-bg); color: var(--cancel-ink); }
 .back { display: inline-block; padding: 4px 0; }
 .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 24px; margin: 16px 0 0; }
 .facts dt { color: var(--muted); font-size: 13px; }
@@ -154,6 +157,7 @@ const LABELS = {
   SUCCESS: "Succeeded",
   ERROR: "Failed",
   MAX_RECOVERY_ATTEMPTS_EXCEEDED: "Recovery limit reached",
+  CANCELLED: "Cancelled",
 };
 const view = document.getElementById("view");
 const stamp = document.getElementById("stamp");
@@ -208,10 +212,12 @@ function finding(rows) {
   const noun = total === 1 ? "workflow" : "workflows";
   const failed = count("ERROR");
   const limited = count("MAX_RECOVERY_ATTEMPTS_EXCEEDED");
-  if (failed || limited) {
+  const cancelled = count("CANCELLED");
+  if (failed || limited || cancelled) {
     const parts = [];
     if (failed) parts.push(`${failed} failed`);
     if (limited) parts.push(`${limited} reached the recovery limit`);
+    if (cancelled) parts.push(`${cancelled} cancelled`);
     return `${parts.join(" and ")}, out of ${total} ${noun}.`;
   }
   const pending = count("PENDING");

@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,10 +8,16 @@ use dwos_core::{
     StepAttempts, StepDecision, StepPolicy, Workflow, WorkflowResult, pickle_from_serializer,
     recovery_limit, recovery_limit_of,
 };
+use pyo3::IntoPyObjectExt;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
+
+mod events;
+mod queues;
+mod sleep;
+mod workflow_management;
 
 create_exception!(_native, DBOSException, PyException);
 create_exception!(_native, StoreError, DBOSException);
@@ -19,8 +26,9 @@ create_exception!(_native, DBOSUnexpectedStepError, DBOSException);
 create_exception!(_native, DBOSStepNondeterminismError, DBOSException);
 create_exception!(_native, DBOSNonExistentWorkflowError, DBOSException);
 create_exception!(_native, DBOSLeaseLostError, DBOSException);
+create_exception!(_native, DBOSWorkflowCancelledError, DBOSException);
 
-fn to_py(error: Error) -> PyErr {
+pub(crate) fn to_py(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
         Error::ConflictingWorkflow { .. } => DBOSConflictingWorkflowError::new_err(message),
@@ -28,20 +36,42 @@ fn to_py(error: Error) -> PyErr {
             DBOSUnexpectedStepError::new_err(message)
         }
         Error::StepNondeterminism { .. } => DBOSStepNondeterminismError::new_err(message),
-        Error::WorkflowNotFound(_) => DBOSNonExistentWorkflowError::new_err(message),
+        Error::WorkflowNotFound(_) | Error::SendDestinationNotFound(_) => {
+            DBOSNonExistentWorkflowError::new_err(message)
+        }
+        Error::WorkflowCancelled(_) => DBOSWorkflowCancelledError::new_err(message),
         Error::LeaseLost(_) => DBOSLeaseLostError::new_err(message),
         Error::ShuttingDown => DBOSException::new_err(message),
         _ => StoreError::new_err(message),
     }
 }
 
-fn seconds(value: f64) -> PyResult<Duration> {
+/// Awaitable by default. `blocking` waits on this thread with the GIL released, which skips the
+/// event-loop thread hops a sync caller would otherwise pay on every call.
+pub(crate) fn dispatch<'py, T, F>(
+    py: Python<'py>,
+    blocking: bool,
+    future: F,
+) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<T>> + Send + 'static,
+    T: for<'a> IntoPyObject<'a> + Send + 'static,
+{
+    if blocking {
+        py.detach(|| get_runtime().block_on(future))?
+            .into_bound_py_any(py)
+    } else {
+        future_into_py(py, future)
+    }
+}
+
+pub(crate) fn seconds(value: f64) -> PyResult<Duration> {
     Duration::try_from_secs_f64(value)
         .map_err(|error| StoreError::new_err(format!("invalid duration: {error}")))
 }
 
 #[pyclass(name = "Run", frozen)]
-struct PyRun(Arc<Run>);
+pub(crate) struct PyRun(pub(crate) Arc<Run>);
 
 #[pymethods]
 impl PyRun {
@@ -54,10 +84,19 @@ impl PyRun {
     fn serialization(&self) -> &str {
         self.0.serialization()
     }
+
+    #[getter]
+    fn workflow_deadline_epoch_ms(&self) -> Option<i64> {
+        self.0.deadline_epoch_ms()
+    }
+
+    fn step_id_unless_in_step(&self, in_step: bool) -> Option<u32> {
+        self.0.step_id_unless_in_step(in_step)
+    }
 }
 
 #[pyclass(name = "WorkflowRow", frozen, get_all)]
-struct PyWorkflow {
+pub(crate) struct PyWorkflow {
     workflow_id: String,
     name: String,
     status: &'static str,
@@ -71,6 +110,8 @@ struct PyWorkflow {
     updated_at_ms: i64,
     completed_at_ms: Option<i64>,
     serialization: String,
+    workflow_timeout_ms: Option<i64>,
+    workflow_deadline_epoch_ms: Option<i64>,
 }
 
 impl From<Workflow> for PyWorkflow {
@@ -89,6 +130,8 @@ impl From<Workflow> for PyWorkflow {
             updated_at_ms: row.updated_at_ms,
             completed_at_ms: row.completed_at_ms,
             serialization: row.serialization,
+            workflow_timeout_ms: row.timeout_ms,
+            workflow_deadline_epoch_ms: row.deadline_epoch_ms,
         }
     }
 }
@@ -161,7 +204,7 @@ struct PyStepReplay {
 }
 
 #[pyclass(name = "Claim", frozen, get_all)]
-struct PyClaim {
+pub(crate) struct PyClaim {
     workflow_id: String,
     run: Py<PyRun>,
     name: String,
@@ -169,7 +212,7 @@ struct PyClaim {
     recovery_attempts: u32,
 }
 
-fn claims_to_py(claims: Vec<Claimed>) -> PyResult<Vec<PyClaim>> {
+pub(crate) fn claims_to_py(claims: Vec<Claimed>) -> PyResult<Vec<PyClaim>> {
     Python::attach(|py| {
         claims
             .into_iter()
@@ -178,7 +221,11 @@ fn claims_to_py(claims: Vec<Claimed>) -> PyResult<Vec<PyClaim>> {
                     workflow_id: claim.lease.workflow_id.clone(),
                     run: Py::new(
                         py,
-                        PyRun(Arc::new(Run::new(claim.lease, claim.serialization))),
+                        PyRun(Arc::new(Run::new(
+                            claim.lease,
+                            claim.serialization,
+                            claim.deadline_epoch_ms,
+                        ))),
                     )?,
                     name: claim.name,
                     input: claim.input,
@@ -204,6 +251,20 @@ impl PyActiveRun {
     fn lost<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let active = self.0.clone();
         future_into_py(py, async move { Ok(active.lost().await.as_str()) })
+    }
+
+    /// Waits up to `seconds` without the GIL. Returns why the lease was lost, or `None` if it was not.
+    fn wait_lost(&self, py: Python<'_>, seconds: f64) -> PyResult<Option<&'static str>> {
+        let wait = self::seconds(seconds)?;
+        let active = self.0.clone();
+        Ok(py.detach(|| {
+            get_runtime().block_on(async {
+                tokio::time::timeout(wait, active.lost())
+                    .await
+                    .ok()
+                    .map(|loss| loss.as_str())
+            })
+        }))
     }
 
     fn stop(&self) {
@@ -263,13 +324,13 @@ impl PyStepAttempts {
 }
 
 #[pyclass(name = "Engine", frozen)]
-struct PyEngine(Engine);
+pub(crate) struct PyEngine(pub(crate) Engine);
 
 #[pymethods]
 impl PyEngine {
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None))]
+    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, read_only=None))]
     fn connect(
         py: Python<'_>,
         url: String,
@@ -279,6 +340,7 @@ impl PyEngine {
         max_concurrent_recoveries: Option<u32>,
         run_migrations: Option<bool>,
         serializer: Option<String>,
+        read_only: Option<bool>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let mut config = EngineConfig::default();
         if let Some(value) = lease_seconds {
@@ -299,6 +361,9 @@ impl PyEngine {
         if let Some(value) = serializer {
             config.pickle = pickle_from_serializer(&value).map_err(to_py)?;
         }
+        if let Some(value) = read_only {
+            config.read_only = value;
+        }
         future_into_py(py, async move {
             let engine = Engine::connect(&url, config).await.map_err(to_py)?;
             Ok(PyEngine(engine))
@@ -314,7 +379,7 @@ impl PyEngine {
         self.0.close();
     }
 
-    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false))]
+    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn begin<'py>(
         &self,
@@ -325,6 +390,9 @@ impl PyEngine {
         workflow_id: Option<String>,
         parent: Option<PyRef<'py, PyRun>>,
         in_step: bool,
+        timeout_ms: Option<i64>,
+        ignore_propagated_deadline: bool,
+        blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         let parent = parent.map(|run| run.0.clone());
@@ -332,7 +400,7 @@ impl PyEngine {
         let parent_step_id = parent
             .as_ref()
             .and_then(|run| run.step_id_unless_in_step(in_step));
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
                 _ => None,
@@ -344,6 +412,8 @@ impl PyEngine {
                     max_recovery_attempts: recovery_limit(max_recovery_attempts),
                     workflow_id: workflow_id.as_deref(),
                     parent: parent_step,
+                    timeout_ms,
+                    ignore_propagated_deadline,
                 })
                 .await
                 .map_err(to_py)?;
@@ -369,17 +439,19 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (run, name, in_step, *, blocking=false))]
     fn begin_step<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         name: String,
         in_step: bool,
+        blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
         // Taken at the call, not in the future, so concurrent calls keep their call order.
         let step_id = run.step_id_unless_in_step(in_step);
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             let Some(step_id) = step_id else {
                 return Ok((None, None));
             };
@@ -402,6 +474,7 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (run, step_id, name, output, *, blocking=false))]
     fn save_step_output<'py>(
         &self,
         py: Python<'py>,
@@ -409,9 +482,10 @@ impl PyEngine {
         step_id: u32,
         name: String,
         output: String,
+        blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             engine
                 .save_step_output(&run, step_id, &name, output)
                 .await
@@ -419,6 +493,7 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (run, step_id, name, error, *, blocking=false))]
     fn save_step_error<'py>(
         &self,
         py: Python<'py>,
@@ -426,9 +501,10 @@ impl PyEngine {
         step_id: u32,
         name: String,
         error: String,
+        blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             engine
                 .save_step_error(&run, step_id, &name, error)
                 .await
@@ -436,13 +512,14 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (run, *, output=None, error=None))]
+    #[pyo3(signature = (run, *, output=None, error=None, blocking=false))]
     fn conclude<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         output: Option<String>,
         error: Option<String>,
+        blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
         let ended = match (output, error) {
@@ -455,7 +532,7 @@ impl PyEngine {
                 )));
             }
         };
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             let finished = engine.conclude(&run, ended).await.map_err(to_py)?;
             Ok(finished_to_py(finished))
         })
@@ -478,33 +555,43 @@ impl PyEngine {
         })
     }
 
-    fn get_status<'py>(&self, py: Python<'py>, workflow_id: String) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (workflow_id, *, blocking=false))]
+    fn get_status<'py>(
+        &self,
+        py: Python<'py>,
+        workflow_id: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             let row = engine.get_status(&workflow_id).await.map_err(to_py)?;
             Ok(PyWorkflow::from(row))
         })
     }
 
-    fn list_workflows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (workflow_id, *, blocking=false))]
+    fn list_steps<'py>(
+        &self,
+        py: Python<'py>,
+        workflow_id: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
-        future_into_py(py, async move {
-            let rows = engine.list_workflows().await.map_err(to_py)?;
-            Ok(rows.into_iter().map(PyWorkflow::from).collect::<Vec<_>>())
-        })
-    }
-
-    fn list_steps<'py>(&self, py: Python<'py>, workflow_id: String) -> PyResult<Bound<'py, PyAny>> {
-        let engine = self.0.clone();
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             let rows = engine.list_steps(&workflow_id).await.map_err(to_py)?;
             Ok(rows.into_iter().map(PyStep::from).collect::<Vec<_>>())
         })
     }
 
-    fn recover_now<'py>(&self, py: Python<'py>, names: Vec<String>) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (names, *, blocking=false))]
+    fn recover_now<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
-        future_into_py(py, async move {
+        dispatch(py, blocking, async move {
             claims_to_py(engine.recover_now(&names).await.map_err(to_py)?)
         })
     }
@@ -546,6 +633,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyActiveRun>()?;
     m.add_class::<PyStepPolicy>()?;
     m.add_class::<PyStepAttempts>()?;
+    m.add_class::<events::PyPoll>()?;
+    m.add_class::<events::PySendResult>()?;
+    m.add_class::<events::PyEventRow>()?;
     m.add(
         "DEFAULT_MAX_RECOVERY_ATTEMPTS",
         DEFAULT_MAX_RECOVERY_ATTEMPTS,
@@ -569,5 +659,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type::<DBOSNonExistentWorkflowError>(),
     )?;
     m.add("DBOSLeaseLostError", py.get_type::<DBOSLeaseLostError>())?;
+    m.add(
+        "DBOSWorkflowCancelledError",
+        py.get_type::<DBOSWorkflowCancelledError>(),
+    )?;
     Ok(())
 }
