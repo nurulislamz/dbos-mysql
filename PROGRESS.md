@@ -45,7 +45,7 @@ Work from the top. Task numbers continue from the history table below.
 | 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
 | 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
 | 36 | Finish task 5: `kill -9` and every fault, on the newest code | todo | 33, 34, 35, D3 | Crash suite clean, including `db_restart` with several seeds |
-| 37 | Security: dependency audit and a TLS connection test | todo | 33 | Audit clean or findings fixed; TLS test passes |
+| 37 | Security: dependency audit and a TLS connection test | in progress | 33 | TLS tests pass on MySQL and on a throwaway Postgres with TLS. The audit found one advisory, `rsa` RUSTSEC-2023-0071, with no upstream fix and its affected code not reached. Left: accept that risk, audit the Python dependencies, which have no lock file, and rerun the audit at the end |
 | 38 | Update the README marks and lift the "not production ready" warning | todo | 33-37 | Every mark matches a passing proof |
 
 ### Decisions for the user
