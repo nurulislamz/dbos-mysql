@@ -43,6 +43,56 @@ fn run(claimed: Claimed) -> Run {
     )
 }
 
+all_dbs!(queue_migration_applies_after_version_25, backend, {
+    let db = TestDb::migrated(backend).await;
+    let mut conn = sqlx::AnyConnection::connect(&db.url).await.unwrap();
+    sqlx::query("DROP TABLE workflow_queue_admissions")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM dwos_schema_migrations WHERE version = 20")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    engine.enqueue("q", begin("new")).await.unwrap();
+    assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+});
+
+all_dbs!(queued_attributes_are_atomic_and_not_overwritten, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    let first = WorkflowOptions {
+        attributes: Some(r#"{"owner":"first"}"#.into()),
+        ..Default::default()
+    };
+    engine.enqueue_with("q", begin("id"), &first).await.unwrap();
+    let second = WorkflowOptions {
+        attributes: Some(r#"{"owner":"second"}"#.into()),
+        ..Default::default()
+    };
+    engine
+        .enqueue_with("q", begin("id"), &second)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("id").await.unwrap().attributes.as_deref(),
+        first.attributes.as_deref()
+    );
+    let bad = WorkflowOptions {
+        attributes: Some("[]".into()),
+        ..Default::default()
+    };
+    assert!(engine.enqueue_with("q", begin("bad"), &bad).await.is_err());
+    assert!(matches!(
+        engine.get_status("bad").await,
+        Err(Error::WorkflowNotFound(_))
+    ));
+});
+
 all_dbs!(queue_claim_filters_application_identity, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;

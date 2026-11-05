@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSQueueDeduplicatedError, SetEnqueueOptions, StoreError
+from rust_dwos import DBOS, DBOSQueueDeduplicatedError, SetEnqueueOptions, SetWorkflowAttributes, StoreError
 
 
 def test_deduplication_connects_to_queue(dbos: DBOS) -> None:
@@ -88,4 +88,17 @@ def test_enqueue_partition(dbos: DBOS) -> None:
     queue = DBOS.register_queue("partitioned", partition_concurrency=1)
     with SetEnqueueOptions(queue_partition_key="customer"):
         handle = queue.enqueue(workflow)
+    assert handle.get_result() == "done"
+
+
+def test_queued_initial_attributes(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> str:
+        return "done"
+
+    queue = DBOS.register_queue("attributes")
+    with SetWorkflowAttributes({"team": "queues"}), SetEnqueueOptions(delay_seconds=60):
+        handle = queue.enqueue(workflow)
+    assert handle.get_status().attributes == {"team": "queues"}
+    DBOS.set_workflow_delay(handle.get_workflow_id(), delay_seconds=0)
     assert handle.get_result() == "done"

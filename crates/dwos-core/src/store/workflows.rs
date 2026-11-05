@@ -10,6 +10,20 @@ use crate::workflow::{
 pub(super) const START_COLUMNS: &str = "application_version, application_name, executor_id, schedule_name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles, attributes";
 pub(super) const START_VALUES: &str = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
 
+pub(super) fn validate_start_attributes(attributes: Option<&str>) -> Result<(), Error> {
+    if let Some(attributes) = attributes {
+        let parsed: serde_json::Value = serde_json::from_str(attributes).map_err(|error| {
+            Error::InvalidConfig(format!("invalid workflow attributes: {error}"))
+        })?;
+        if !parsed.is_object() {
+            return Err(Error::InvalidConfig(
+                "workflow attributes must be an object".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl Store {
     pub(super) fn bind_start_columns<'q>(
         &self,
@@ -57,16 +71,7 @@ impl Store {
         check_name("workflow ID", new.workflow_id)?;
         check_name("workflow name", new.name)?;
         self.check_size(&[Some(new.input), options.attributes.as_deref()])?;
-        if let Some(attributes) = &options.attributes {
-            let parsed: serde_json::Value = serde_json::from_str(attributes).map_err(|error| {
-                Error::InvalidConfig(format!("invalid workflow attributes: {error}"))
-            })?;
-            if !parsed.is_object() {
-                return Err(Error::InvalidConfig(
-                    "workflow attributes must be an object".into(),
-                ));
-            }
-        }
+        validate_start_attributes(options.attributes.as_deref())?;
         let token = new_token();
         self.attempt(|| self.start_workflow_once(new, options, &token))
             .await

@@ -353,6 +353,15 @@ async fn recorded_version(
     )
 }
 
+async fn queue_migration_recorded(conn: &mut AnyConnection) -> Result<bool, Error> {
+    Ok(count(
+        conn,
+        "SELECT COUNT(*) FROM dwos_schema_migrations WHERE version = 20",
+    )
+    .await?
+        > 0)
+}
+
 fn refuse_newer(found: i64, dialect: Dialect) -> Result<(), Error> {
     let supported = latest(dialect);
     if found > supported {
@@ -380,7 +389,9 @@ async fn apply(
     let found = recorded_version(conn, dialect).await?;
     if let Some(found) = found {
         refuse_newer(found, dialect)?;
-        if found >= migration.version {
+        if found >= migration.version
+            && (migration.version != 20 || queue_migration_recorded(conn).await?)
+        {
             return Ok(());
         }
     } else {
@@ -488,6 +499,11 @@ impl Store {
         if found < required {
             return Err(Error::SchemaOutdated { found, required });
         }
+        if !queue_migration_recorded(&mut conn).await? {
+            return Err(Error::Migration(
+                "queue migration 20 is missing; run migrations".to_owned(),
+            ));
+        }
         Ok(())
     }
 
@@ -499,7 +515,7 @@ impl Store {
             let mut conn = self.pool.acquire().await?;
             if let Some(found) = recorded_version(&mut conn, self.dialect).await? {
                 refuse_newer(found, self.dialect)?;
-                if found == latest(self.dialect) {
+                if found == latest(self.dialect) && queue_migration_recorded(&mut conn).await? {
                     return Ok(());
                 }
             }

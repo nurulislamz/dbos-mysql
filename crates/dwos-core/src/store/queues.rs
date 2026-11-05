@@ -450,7 +450,8 @@ impl Store {
                 "set a workflow timeout or a deadline, not both".to_owned(),
             ));
         }
-        self.check_size(&[Some(new.input)])?;
+        self.check_size(&[Some(new.input), options.attributes.as_deref()])?;
+        super::workflows::validate_start_attributes(options.attributes.as_deref())?;
         let token = new_token();
         self.attempt(|| self.enqueue_workflow_once(queue, new, options, &token))
             .await

@@ -4,6 +4,7 @@ import contextvars
 from typing import TYPE_CHECKING, Any
 
 from rust_dwos.errors import DBOSException
+from rust_dwos.attributes import _encode, start_attributes
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -161,13 +162,13 @@ class Queue:
     def enqueue(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
         dbos = _dbos()
         instance = dbos._running()
-        workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get())
+        workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get(), **start_attributes())
         return dbos.WorkflowHandle(workflow_id)
 
     async def enqueue_async(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
         dbos = _dbos()
         instance = dbos._running()
-        workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get())
+        workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get(), **start_attributes())
         return dbos.WorkflowHandleAsync(workflow_id)
 
 
@@ -179,7 +180,7 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
     from rust_dwos.serialization import Codec
 
     dbos = _dbos()
-    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key"}
+    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key", "attributes"}
     unknown = options.keys() - allowed
     if unknown:
         raise DBOSException(f"Unsupported enqueue options: {', '.join(sorted(unknown))}")
@@ -190,6 +191,7 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
     timeout_ms = int(timeout * 1000) if timeout is not None else None
     begin = (name, text, None, options.get("workflow_id", dbos._next_workflow_id.get()), dbos._current_run.get(), dbos._current_step.get() is not None, timeout_ms, False, options.get("workflow_id_reuse_policy", dbos._next_reuse_policy.get()))
     enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key")}
+    enqueue.update({"attributes": _encode(options["attributes"])} if "attributes" in options else start_attributes())
     return begin, queue, enqueue
 
 
