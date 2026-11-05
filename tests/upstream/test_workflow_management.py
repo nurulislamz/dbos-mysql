@@ -429,3 +429,23 @@ def test_list_metadata_filters(dbos: DBOS) -> None:
     assert DBOS.list_workflows(user="missing") == []
     assert DBOS.list_workflows(forked_from="missing") == []
     assert DBOS.list_queued_workflows() == []
+
+
+def test_list_step_options(dbos: DBOS) -> None:
+    @DBOS.step()
+    def step(value: int) -> int:
+        return value
+
+    @DBOS.workflow()
+    def workflow() -> None:
+        step(1)
+        step(2)
+
+    wfid = str(uuid.uuid4())
+    with SetWorkflowID(wfid):
+        workflow()
+    steps = DBOS.list_workflow_steps(wfid, limit=1, offset=1, load_output=False)
+    assert len(steps) == 1
+    assert steps[0]["function_id"] == 2
+    assert steps[0]["output"] is None
+    assert DBOS.list_workflow_steps(wfid, offset=1)[0]["output"] == 2

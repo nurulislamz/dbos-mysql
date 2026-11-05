@@ -654,16 +654,21 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (workflow_id, *, blocking=false))]
+    #[pyo3(signature = (workflow_id, *, limit=None, offset=None, blocking=false))]
     fn list_steps<'py>(
         &self,
         py: Python<'py>,
         workflow_id: String,
+        limit: Option<i64>,
+        offset: Option<i64>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
-            let rows = engine.list_steps(&workflow_id).await.map_err(to_py)?;
+            let rows = engine
+                .list_steps_page(&workflow_id, limit, offset)
+                .await
+                .map_err(to_py)?;
             Ok(rows.into_iter().map(PyStep::from).collect::<Vec<_>>())
         })
     }

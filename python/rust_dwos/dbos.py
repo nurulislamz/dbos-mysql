@@ -635,13 +635,17 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, meta
             return None
 
     @classmethod
-    def list_workflow_steps(cls, workflow_id: str) -> list[dict[str, Any]]:
+    def list_workflow_steps(cls, workflow_id: str, *, load_output: bool = True, limit: int | None = None, offset: int | None = None, shard_key: str | None = None) -> list[dict[str, Any]]:
         instance = _running()
-        return [_step_of(step) for step in instance._blocking(instance._engine.list_steps, workflow_id)]
+        if shard_key is not None:
+            raise ValueError("shard_key is not supported")
+        return [_step_of(step, load_output=load_output) for step in instance._blocking(instance._engine.list_steps, workflow_id, limit=limit, offset=offset)]
 
     @classmethod
-    async def list_workflow_steps_async(cls, workflow_id: str) -> list[dict[str, Any]]:
-        return [_step_of(step) for step in await _running()._engine.list_steps(workflow_id)]
+    async def list_workflow_steps_async(cls, workflow_id: str, *, load_output: bool = True, limit: int | None = None, offset: int | None = None, shard_key: str | None = None) -> list[dict[str, Any]]:
+        if shard_key is not None:
+            raise ValueError("shard_key is not supported")
+        return [_step_of(step, load_output=load_output) for step in await _running()._engine.list_steps(workflow_id, limit=limit, offset=offset)]
 
     @classmethod
     def _recover_pending_workflows(cls) -> list[WorkflowHandle[Any]]:
@@ -978,15 +982,16 @@ def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output
     )
 
 
-def _step_of(step: _native.StepRow) -> dict[str, Any]:
+def _step_of(step: _native.StepRow, *, load_output: bool = True) -> dict[str, Any]:
     return {
         "started_at_epoch_ms": step.started_at_epoch_ms,
         "completed_at_epoch_ms": step.completed_at_epoch_ms,
         "function_id": step.step_id,
         "function_name": step.step_name,
-        "output": _codec_for(step.step_name).decode_output(step.output, step.serialization) if step.output is not None else None,
-        "error": decode_exception(step.error, step.serialization) if step.error is not None else None,
+        "output": _codec_for(step.step_name).decode_output(step.output, step.serialization) if load_output and step.output is not None else None,
+        "error": decode_exception(step.error, step.serialization) if load_output and step.error is not None else None,
         "child_workflow_id": step.child_workflow_id,
+        "child_shard_key": None,
     }
 
 

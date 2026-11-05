@@ -74,3 +74,14 @@ impl Engine {
         Ok(claims)
     }
 }
+
+impl crate::Engine {
+    pub async fn list_steps_page(
+        &self,
+        workflow_id: &str,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Vec<crate::RecordedStep>, crate::Error> {
+        self.store.list_steps_page(workflow_id, limit, offset).await
+    }
+}

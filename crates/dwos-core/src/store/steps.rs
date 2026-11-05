@@ -182,11 +182,27 @@ impl Store {
     }
 
     pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
+        self.list_steps_page(workflow_id, None, None).await
+    }
+
+    pub async fn list_steps_page(
+        &self,
+        workflow_id: &str,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    ) -> Result<Vec<RecordedStep>, Error> {
+        if limit.is_some_and(|n| n < 0) || offset.is_some_and(|n| n < 0) {
+            return Err(Error::InvalidConfig(
+                "step list limit and offset must be zero or more".into(),
+            ));
+        }
         self.attempt(|| async {
             let rows = sqlx::query(self.sql(
-                "SELECT function_id, function_name, output, error, child_workflow_id, serialization, started_at_epoch_ms, completed_at_epoch_ms FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
+                "SELECT function_id, function_name, output, error, child_workflow_id, serialization, started_at_epoch_ms, completed_at_epoch_ms FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id LIMIT ? OFFSET ?",
             ))
             .bind(workflow_id)
+            .bind(limit.unwrap_or(i64::MAX))
+            .bind(offset.unwrap_or(0))
             .fetch_all(&self.pool)
             .await?;
             rows.iter()
