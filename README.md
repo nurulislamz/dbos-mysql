@@ -65,7 +65,8 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Step heartbeat (`DBOS.heartbeat()`) | ❌ | ✅ Separate from lease renewal |
 | Child workflows | ✅ | ✅ |
 | `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ `get_result(polling_interval_sec=)` sets the longest wait between polls. Omitting it keeps the 250 ms cap |
-| `list_workflows`, `list_workflow_steps` | ✅ | 🚧 Filters on queue, version, fork and auth fields are missing |
+| `list_workflows`, `list_workflow_steps` | ✅ | ✅ Queue, version, fork and user filters; step output and pagination options. No `shard_key` |
+| Workflow attributes | ✅ | 🚧 Direct starts, status reads and updates work; queued starts do not yet save initial attributes |
 | Crash recovery | ✅ | ✅ Crash tests pass on all 3 on the newest code |
 | Recovery attempt limit | ✅ | ✅ |
 
@@ -74,7 +75,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Feature | DBOS | rust-dwos |
 |---|---|---|
 | Durable sleep | ✅ | ✅ |
-| `send`, `recv` | ✅ | ✅ |
+| `send`, `recv`, `send_bulk` | ✅ | ✅ Bulk sends are atomic; sending to forks is not supported |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
 | Queues | ✅ | ✅ FIFO, with one global concurrency limit. The latest registration with a limit sets it, and registering with none keeps the stored limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |

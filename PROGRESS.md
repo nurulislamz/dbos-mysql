@@ -25,7 +25,9 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | Cancel and resume | Built. Resuming a live workflow onto a queue does nothing and raises no error | Prove: 33, 34 |
 | Cron schedules | Built | Prove: 33, 34 |
 | Schema upgrades that keep rows | Built | Prove: 33 |
-| Listing workflows and steps | Built | Prove: 33, 34 |
+| Listing workflows and steps | Built. Queue, version, fork and user filters; step output and pagination options | Prove: 33, 34 |
+| Workflow attributes | Direct starts and updates built; queued starts still need initial attributes | Add queued-start integration |
+| Bulk messaging | Built with atomic writes; sending to forks is unsupported | Prove: 33, 34 |
 | Deleting old workflows | Built | Prove: 33, 34 |
 
 ### Steps
