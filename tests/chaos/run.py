@@ -15,12 +15,13 @@ def main() -> int:
     parser.add_argument("--fault-seconds", type=float, default=15.0)
     parser.add_argument("--faults", default=",".join(ALL_FAULTS))
     parser.add_argument("--serializer", choices=["pickle", "json"], default="pickle")
+    parser.add_argument("--finish-deadline", type=float, default=100.0, help="Raise it when the machine is busy, so slowness is not reported as failure")
     args = parser.parse_args()
 
     seeds = [args.seed] if args.seed is not None else [random.randrange(2**31) for _ in range(args.runs)]  # noqa: S311
     failures = 0
     for number, seed in enumerate(seeds, start=1):
-        config = ChaosConfig(args.backend, seed, tuple(filter(None, args.faults.split(","))), workflows=args.workflows, fault_seconds=args.fault_seconds, serializer=args.serializer)
+        config = ChaosConfig(args.backend, seed, tuple(filter(None, args.faults.split(","))), workflows=args.workflows, fault_seconds=args.fault_seconds, serializer=args.serializer, finish_deadline_seconds=args.finish_deadline)
         result = run_chaos(config)
         summary = {key: value for key, value in dataclasses.asdict(result).items() if key != "violations"}
         print(f"run {number}/{len(seeds)} {'CLEAN' if not result.violations else 'FAILED'} {summary}", flush=True)

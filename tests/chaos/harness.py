@@ -215,6 +215,7 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
         result.recovered_workflows += int(attempts > 1)
         if status == "PENDING":
             violations.append(f"{workflow_id} is stuck in PENDING")
+            continue
         elif status == "MAX_RECOVERY_ATTEMPTS_EXCEEDED":
             if attempts <= max_attempts:
                 violations.append(f"{workflow_id} was dead-lettered at {attempts} of {max_attempts} attempts")
