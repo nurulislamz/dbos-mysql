@@ -1,8 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 from typing import Any, Callable
+
+
+def _no_running_loop(fn: str) -> None:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    raise RuntimeError(f"{fn}() was called while an event loop is running. Use await {fn}_async(...) instead.")
+
+
+def _internal_step(options: dict[str, Any], function: Callable[..., Any]) -> Callable[..., Any]:
+    # Built per call and never started as a workflow, so it stays out of DBOS's registry.
+    from rust_dwos.dbos import DBOS, _unregistered_step
+
+    token = _unregistered_step.set(True)
+    try:
+        return DBOS.step(**options)(function)
+    finally:
+        _unregistered_step.reset(token)
 
 
 class SDKCalls:
@@ -21,12 +41,11 @@ class SDKCalls:
     async def asyncio_wait(cls, fs: list[Any], *, timeout: float | None = None, return_when: str = asyncio.ALL_COMPLETED) -> tuple[set[Any], set[Any]]:
         tasks = [asyncio.ensure_future(f) for f in fs]
 
-        @cls.step(name="DBOS.asyncio_wait")
         async def wait() -> list[int]:
             done, _ = await asyncio.wait(tasks, timeout=timeout, return_when=return_when)
             return [i for i, task in enumerate(tasks) if task in done]
 
-        indices = set(await wait())
+        indices = set(await _internal_step({"name": "DBOS.asyncio_wait"}, wait)())
         done = {task for i, task in enumerate(tasks) if i in indices}
         pending = {task for i, task in enumerate(tasks) if i not in indices}
         if done:
@@ -35,18 +54,23 @@ class SDKCalls:
 
     @classmethod
     def run_step(cls, dbos_step_options: dict[str, Any] | None, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        _no_running_loop("run_step")
         options = {"name": func.__qualname__, **(dbos_step_options or {})}
         if inspect.iscoroutinefunction(func):
-            async def invoke() -> Any:
-                return await func(*args, **kwargs)
-            return asyncio.run(cls.step(**options)(invoke)())
-        return cls.step(**options)(func)(*args, **kwargs)
+            @functools.wraps(func)  # keeps func's annotations, which the step codec reads
+            async def invoke(*call_args: Any, **call_kwargs: Any) -> Any:
+                return await func(*call_args, **call_kwargs)
+            return asyncio.run(_internal_step(options, invoke)(*args, **kwargs))
+        return _internal_step(options, func)(*args, **kwargs)
 
     @classmethod
     async def run_step_async(cls, dbos_step_options: dict[str, Any] | None, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         options = {"name": func.__qualname__, **(dbos_step_options or {})}
         if inspect.iscoroutinefunction(func):
-            return await cls.step(**options)(func)(*args, **kwargs)
-        async def invoke() -> Any:
-            return await asyncio.to_thread(func, *args, **kwargs)
-        return await cls.step(**options)(invoke)()
+            return await _internal_step(options, func)(*args, **kwargs)
+
+        @functools.wraps(func)
+        async def invoke(*call_args: Any, **call_kwargs: Any) -> Any:
+            return await asyncio.to_thread(func, *call_args, **call_kwargs)
+
+        return await _internal_step(options, invoke)(*args, **kwargs)

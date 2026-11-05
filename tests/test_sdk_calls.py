@@ -1,4 +1,7 @@
 import asyncio
+import logging
+
+import pytest
 
 from rust_dwos import DBOS
 
@@ -34,3 +37,23 @@ async def test_asyncio_wait(dbos: DBOS) -> None:
         return done.pop().result()
 
     assert await workflow() == 3
+
+
+def test_repeated_run_step_does_not_reregister(dbos: DBOS, caplog: pytest.LogCaptureFixture) -> None:
+    def add(value: int) -> int:
+        return value + 1
+
+    @DBOS.workflow()
+    def workflow() -> list[int]:
+        return [DBOS.run_step({"name": "add_repeated"}, add, i) for i in range(3)]
+
+    with caplog.at_level(logging.WARNING, logger="dbos"):
+        assert workflow() == [1, 2, 3]
+    assert "Duplicate registration" not in caplog.text
+
+
+async def test_sync_calls_refuse_a_running_loop(dbos: DBOS) -> None:
+    with pytest.raises(RuntimeError, match="run_step_async"):
+        DBOS.run_step(None, lambda: 1)
+    with pytest.raises(RuntimeError, match="wait_first_async"):
+        DBOS.wait_first([])

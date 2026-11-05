@@ -138,6 +138,8 @@ _current_step: contextvars.ContextVar[StepStatus | None] = contextvars.ContextVa
 _next_workflow_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("dbos_next_id", default=None)
 _next_reuse_policy: contextvars.ContextVar[str | None] = contextvars.ContextVar("dbos_reuse_policy", default=None)
 _current_active: contextvars.ContextVar[_native.ActiveRun | None] = contextvars.ContextVar("dbos_active", default=None)
+# Set while run_step, asyncio_wait or wait_first build their step per call. Those are not user registrations.
+_unregistered_step: contextvars.ContextVar[bool] = contextvars.ContextVar("dbos_unregistered_step", default=False)
 
 
 class SetWorkflowID:
@@ -595,6 +597,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
                 raise await instance._save_failure(run, step_id, step_name, failure(errors, attempts))
 
             wrapper: Any = async_wrapper if is_async else sync_wrapper
+            if _unregistered_step.get():
+                return wrapper
             temp = _Workflow(f"<temp>.{step_name}", wrapper, codec, is_async, _native.DEFAULT_MAX_RECOVERY_ATTEMPTS)
             _registry[temp.name] = temp
             wrapper.__dbos_workflow__ = temp
