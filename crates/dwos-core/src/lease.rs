@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
-use tokio::time::{Instant, sleep, timeout_at};
+use tokio::time::{Instant, sleep_until, timeout_at};
 
 use crate::Error;
 
@@ -46,9 +46,14 @@ impl LeaseKeeper {
             let usable = lease.mul_f64(5.0 / 6.0);
             let mut last_renewed = started;
             loop {
-                sleep(lease / 3).await;
+                // Renewals that fail fast must still report the loss before the lease expires.
+                sleep_until((Instant::now() + lease / 3).min(last_renewed + usable)).await;
                 if started.elapsed() >= max_run {
                     notify.send_replace(Some(LeaseLoss::MaxRunExceeded));
+                    return;
+                }
+                if last_renewed.elapsed() >= usable {
+                    notify.send_replace(Some(LeaseLoss::Unrenewable));
                     return;
                 }
                 let requested_at = Instant::now();
@@ -60,10 +65,6 @@ impl LeaseKeeper {
                     }
                     Ok(Err(error)) => log::warn!("could not renew a workflow lease: {error}"),
                     Err(_) => log::warn!("renewing a workflow lease timed out"),
-                }
-                if last_renewed.elapsed() >= usable {
-                    notify.send_replace(Some(LeaseLoss::Unrenewable));
-                    return;
                 }
             }
         });
@@ -112,6 +113,8 @@ impl Drop for LeaseKeeper {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    use tokio::time::sleep;
 
     use super::*;
 
@@ -169,6 +172,17 @@ mod tests {
             Err(Error::Timeout(Duration::ZERO))
         });
         assert_eq!(lost(&keeper).await, LeaseLoss::Unrenewable);
+    }
+
+    #[tokio::test]
+    async fn fast_failures_report_the_loss_before_the_lease_expires() {
+        let lease = Duration::from_millis(1200);
+        let started = Instant::now();
+        let keeper = LeaseKeeper::spawn(lease, LONG, || async {
+            Err(Error::Timeout(Duration::ZERO))
+        });
+        assert_eq!(lost(&keeper).await, LeaseLoss::Unrenewable);
+        assert!(started.elapsed() < lease, "{:?}", started.elapsed());
     }
 
     #[tokio::test]
