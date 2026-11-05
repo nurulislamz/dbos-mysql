@@ -1,8 +1,77 @@
 # Progress
 
-Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Jobby workflow port has not started. Two things still block readiness: the Postgres late-start incident is unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
+Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Postgres late-start incident is unexplained and blocks readiness. Next is task 26 in "Minimum to use it" below.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
+
+## Minimum to use it
+
+"Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
+
+**Not usable yet.** Most features are built. What is left is 3 bug fixes, 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+
+### Features in the minimum
+
+| Feature | State | Left to do |
+|---|---|---|
+| Workflows, steps, replay of saved steps | Built | Prove: 33, 34 |
+| Crash recovery without repeating saved steps | Built, not proven on the newest code | Prove: 35, 36 |
+| One run per workflow ID | Built | Prove: 33, 34 |
+| Step retries and step timeouts | Built | Prove: 33, 34 |
+| Child workflows, `start_workflow`, handles | Built | Prove: 33, 34 |
+| Durable sleep and workflow timeouts | Built | Prove: 33, 34 |
+| `send`, `recv`, `set_event`, `get_event` | Built | Prove: 33, 34 |
+| FIFO queues with a concurrency limit | Built, with a bug, and the limit cannot change | Fix: 27, 30 |
+| Cancel and resume | Built, with a bug | Fix: 27 |
+| Cron schedules | Built, with a bug | Fix: 28 |
+| Schema upgrades that keep rows | Built | Prove: 33 |
+| Listing workflows and steps | Built | Prove: 33, 34 |
+| Deleting old workflows | Missing, so tables grow forever | Build: 29, 31 |
+
+### Steps
+
+Work from the top. Task numbers continue from the history table below.
+
+| # | Task | Status | Needs | Proof |
+|---|---|---|---|---|
+| 26 | Commit the current schedule work | todo | user ok | Clean `git status`; focused schedule tests pass |
+| 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | todo | | New Rust test on all 3: the owner keeps its lease and the row stays put |
+| 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | todo | | New Rust test on all 3: no run after the change. Same cron still catches up |
+| 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING` | todo | | New Rust test on all 3: child rows go with the workflow; `PENDING` rows stay |
+| 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | todo | | New Rust test on all 3: the new limit applies to the next claim |
+| 31 | Python bindings for task 29 | todo | 29 | Connect-and-succeed test in `tests/test_core_endpoints.py` |
+| 32 | Measure queue claims with a large backlog. Each slot re-scans pending rows while holding the queue row lock, which also blocks enqueues. Fix it only if too slow | todo | D4 | Numbers for 100k waiting and 100k finished rows, within the D4 limit |
+| 33 | Full Rust suite 3 times. Clippy and format | todo | 27-32 | Zero failures. Also the proof for the stress hang and MySQL row lock fixes |
+| 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
+| 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
+| 36 | Finish task 5: `kill -9` and every fault, on the newest code | todo | 33, 34, 35, D3 | Crash suite clean, including `db_restart` with several seeds |
+| 37 | Security: dependency audit and a TLS connection test | todo | 33 | Audit clean or findings fixed; TLS test passes |
+| 38 | Update the README marks and lift the "not production ready" warning | todo | 33-37 | Every mark matches a passing proof |
+
+### Decisions for the user
+
+| # | Question | Recommendation |
+|---|---|---|
+| D1 | Is the feature list above the right minimum? | Yes, unless your programs need something from the list below |
+| D2 | Must all 3 databases be ready, or can you start with one? | Start with MySQL. Its crash tests passed before the newest features, and this takes the Postgres incident out of the minimum. SQLite is for one machine only. Postgres then stays marked as not ready |
+| D3 | When can the Python crash tests resume? They are paused, and task 36 needs them | After tasks 33 and 34 |
+| D4 | What backlog speed is good enough for task 32? | I don't know yet. Measure first, then set the limit |
+
+### Not needed to use it
+
+These come later, and none of them block the minimum.
+
+- **Queue extras:** priorities, rate limits, partitions and deduplication. Without them, queues are plain FIFO.
+- **Other DBOS features:** fork and rewind, streams, debouncer, `run_step`, `wait_first`, `DBOSClient` and datasources.
+- **Patching:** changed code on a running workflow is detected on replay rather than handled.
+- **App version checks:** queue claims skip the check and enqueue does not save the version, but Python does not set a version today.
+- **More list filters:** queue, version, fork and auth.
+- **Moving the last decisions from `dbos.py` into Rust:** they work today, but `docs/PLAN.md` does not count as done until this is finished. See Known problems.
+- **Python extras:** `DBOSContextEnsure`, `DBOS.asyncio_wait`, OpenTelemetry, custom `Serializer` and the AI framework integrations. Also verifying `validate_args` and `log_level`.
+- **Full benchmark:** workflows per second, time per step, memory and connections.
+- **Moving Jobby:** this starts once the minimum is done.
+
+## Task history
 
 | # | Task | Status | Group | Needs | Proof |
 |---|---|---|---|---|---|
@@ -31,6 +100,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Existing Python tests pass. Id reuse, cancel children, bulk resume and `get_result(polling_interval_sec=)` have focused SQLite and MySQL tests. The full suite was not re-run |
 | 23 | Workflow id reuse, child cancel, queue resume, schema 007–012 | done | sdk | 22 | Focused Rust and Python tests on SQLite and MySQL. Postgres not run for this slice |
 | 24 | UTC cron schedules with skip-if-pending, schema 013 | done | sdk | 13, 22 | `tests/schedules.rs` (9) and `tests/test_schedules.py` (12) on SQLite, MySQL and Postgres. Cron unit tests pass. An empty database migrates to version 13. Clippy with warnings denied is clean |
+| 25 | Per-user schedules: `delete_schedule` and schedule arguments | done | sdk | 24 | `tests/schedules.rs` (12) and `tests/test_schedules.py` plus the schedule endpoint test. Full suites not run, by user choice |
 
 ## Verification
 
@@ -78,12 +148,12 @@ Core review found missing ownership checks before step execution decisions, a le
 
 ## Known problems
 
-- `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. It ran over 11 minutes, past its 90 s limit, with every thread idle. The cause is unknown and may be in the test or in the product.
-- On MySQL, a queue claim can hold a live owner's row lock. `finish` waited about 10 s in one run. No over-admission was seen, but a healthy short lease could expire during the wait. The statement that takes the lock is not known. See the `shortcut:` comment in `tests/queue_races.rs`.
-- The SDK's sleep, timeouts, cancel, resume, events, messages and queues have never run. The `sys.exit()` fix is also unproven.
-- A scheduled workflow takes no arguments. A cron that sets both a day of the month and a day of the week is rejected. A restart enqueues only the latest missed tick, not every one.
+- `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. `.worktrees/HANDOFF.md` traces this to a bug in the test, not the product, with the fix in `tests/queue_races.rs`. Task 33 proves it in full runs.
+- On MySQL, a queue claim could hold a live owner's row lock. `.worktrees/HANDOFF.md` reports this fixed by reading candidates first and then locking each row, with the queue race tests passing. Task 33 reruns them.
+- The SDK's sleep, timeouts, cancel, resume, events, messages and queues now have copied tests under `tests/upstream`. The handoff reports 141 focused tests passed, but the full Python suite has not passed yet. Task 34 covers it.
+- `@DBOS.scheduled` passes no arguments; `register_schedule` does. A cron that sets both a day of the month and a day of the week is rejected. A restart enqueues only the latest missed tick, not every one.
 - The bar "Python contains no step, result, or lease decisions" is not fully met. Still in `dbos.py`: a step called inside a step or outside a workflow just runs; a value that cannot be encoded becomes a failure; the retry loop sleeps and picks the exception type, with delays and limits from Rust; after a lost lease Python cancels the body and waits for the stored result.
-- `sys.exit()` inside a background workflow probably kills the `dbos-workflows` thread. Not tested or fixed.
+- `sys.exit()` in a background workflow did not kill the suite in one run of `tests/test_sys_exit.py`, per the handoff. Task 34 reruns it.
 - Background recovery now waits one interval first. With the default one second, a restart recovers up to 1.5s later, and a backlog recovers at most one batch of 50 per interval.
 - A real error raised during the shutdown window is no longer final. The workflow runs again after restart.
 - JSON values follow the DBOS `portable_json` shape, but reading rows across SDKs is untested.
