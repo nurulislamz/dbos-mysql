@@ -1,6 +1,6 @@
 # Progress
 
-Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Postgres late-start incident is unexplained and blocks readiness. Next is task 26 in "Minimum to use it" below.
+Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Postgres late-start incident is unexplained and blocks readiness. Next steps are in "Minimum to use it" below.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -8,7 +8,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 
 "Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
 
-**Not usable yet.** Most features are built. What is left is 3 bug fixes, 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+**Not usable yet.** Most features are built. What is left is 2 bug fixes, 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
 
 ### Features in the minimum
 
@@ -23,7 +23,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | `send`, `recv`, `set_event`, `get_event` | Built | Prove: 33, 34 |
 | FIFO queues with a concurrency limit | Built, with a bug, and the limit cannot change | Fix: 27, 30 |
 | Cancel and resume | Built, with a bug | Fix: 27 |
-| Cron schedules | Built, with a bug | Fix: 28 |
+| Cron schedules | Built | Prove: 33, 34 |
 | Schema upgrades that keep rows | Built | Prove: 33 |
 | Listing workflows and steps | Built | Prove: 33, 34 |
 | Deleting old workflows | Missing, so tables grow forever | Build: 29, 31 |
@@ -34,9 +34,9 @@ Work from the top. Task numbers continue from the history table below.
 
 | # | Task | Status | Needs | Proof |
 |---|---|---|---|---|
-| 26 | Commit the current schedule work | todo | user ok | Clean `git status`; focused schedule tests pass |
+| 26 | Commit the current schedule work | done | user ok | Clean `git status`; focused schedule tests pass |
 | 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | todo | | New Rust test on all 3: the owner keeps its lease and the row stays put |
-| 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | todo | | New Rust test on all 3: no run after the change. Same cron still catches up |
+| 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | done | | New Rust test on all 3: no run after the change. Same cron still catches up |
 | 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING` | todo | | New Rust test on all 3: child rows go with the workflow; `PENDING` rows stay |
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | todo | | New Rust test on all 3: the new limit applies to the next claim |
 | 31 | Python bindings for task 29 | todo | 29 | Connect-and-succeed test in `tests/test_core_endpoints.py` |
