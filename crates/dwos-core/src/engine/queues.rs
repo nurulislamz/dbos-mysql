@@ -6,6 +6,13 @@ use super::{Begin, Engine};
 use crate::{Claimed, Error, NewWorkflow, PartitionLimits, PartitionUpdate, WorkflowOptions};
 
 impl Engine {
+    pub async fn set_polling_interval(&self, name: &str, millis: i64) -> Result<(), Error> {
+        self.store.set_polling_interval(name, millis).await
+    }
+
+    pub async fn get_polling_interval(&self, name: &str) -> Result<Option<i64>, Error> {
+        self.store.get_polling_interval(name).await
+    }
     pub async fn get_partition_limits(&self, name: &str) -> Result<PartitionLimits, Error> {
         self.store.get_partition_limits(name).await
     }
@@ -35,6 +42,7 @@ impl Engine {
     ) -> Result<(), Error> {
         self.store.set_global_concurrency(name, limit).await
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn register_queue(
         &self,
         name: &str,
@@ -42,10 +50,11 @@ impl Engine {
         worker: Option<NonZeroU32>,
         limiter: Option<(NonZeroU32, i64)>,
         partition: PartitionLimits,
+        polling_ms: i64,
         update: bool,
     ) -> Result<(), Error> {
         self.store
-            .register_queue(name, global, worker, limiter, partition, update)
+            .register_queue(name, global, worker, limiter, partition, polling_ms, update)
             .await
     }
 

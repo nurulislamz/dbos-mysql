@@ -307,6 +307,7 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
             NonZeroU32::new(1),
             None,
             PartitionLimits::default(),
+            250,
             true,
         )
         .await
@@ -318,12 +319,17 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
             None,
             None,
             PartitionLimits::default(),
+            250,
             false,
         )
         .await
         .unwrap();
     assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 3);
     assert_eq!(engine.get_worker_concurrency("q").await.unwrap(), Some(1));
+    assert_eq!(engine.get_polling_interval("q").await.unwrap(), Some(250));
+    engine.set_polling_interval("q", 500).await.unwrap();
+    assert_eq!(engine.get_polling_interval("q").await.unwrap(), Some(500));
+    assert!(engine.set_polling_interval("q", 0).await.is_err());
     engine.enqueue("q", begin("waiting")).await.unwrap();
     engine.delete_queue("q").await.unwrap();
     assert!(engine.list_queues().await.unwrap().is_empty());
@@ -335,6 +341,7 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
             None,
             None,
             PartitionLimits::default(),
+            250,
             true,
         )
         .await
@@ -387,7 +394,7 @@ all_dbs!(queue_partitions_admit_other_keys, backend, {
         ..Default::default()
     };
     engine
-        .register_queue("q", NonZeroU32::new(4), None, None, limits, true)
+        .register_queue("q", NonZeroU32::new(4), None, None, limits, 250, true)
         .await
         .unwrap();
     assert!(engine.enqueue("q", begin("missing")).await.is_err());
@@ -423,6 +430,7 @@ all_dbs!(partition_runtime_limits_apply, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     queue(&engine, 4).await;
+    engine.enqueue("q", begin("unpartitioned")).await.unwrap();
     engine
         .update_partition_limits("q", PartitionUpdate::Concurrency(NonZeroU32::new(1)))
         .await
@@ -452,6 +460,7 @@ all_dbs!(partition_runtime_limits_apply, backend, {
         .unwrap()
         .pop()
         .unwrap();
+    assert_eq!(claim.lease.workflow_id, "a1");
     engine
         .finish(&run(claim), Outcome::Success("null".into()))
         .await

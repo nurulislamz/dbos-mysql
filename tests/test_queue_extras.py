@@ -66,6 +66,8 @@ def test_queue_management(dbos: DBOS) -> None:
     assert queue.global_concurrency == 3
     queue.set_global_concurrency(2)
     assert queue.global_concurrency == 2
+    queue.set_polling_interval_sec(0.5)
+    assert queue.polling_interval_sec == 0.5
     assert "management" in [item.name for item in DBOS.list_queues()]
     DBOS.delete_queue("management")
     assert DBOS.retrieve_queue("management") is None

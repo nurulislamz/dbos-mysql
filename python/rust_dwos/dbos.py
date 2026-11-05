@@ -30,7 +30,7 @@ from rust_dwos.errors import (
 )
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events
-from rust_dwos.queues import Queue, Queues
+from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from rust_dwos.retention import Retention
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
@@ -872,7 +872,12 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
 
     async def _queue_loop(self, queue: Queue) -> None:
         while True:
-            for claim in await self._engine.wait_queue_claims(queue.name, list(_registry), queue.polling_interval_sec):
+            try:
+                interval = await queue.get_polling_interval_sec_async()
+            except Exception:  # A deleted queue may be registered again later.
+                await asyncio.sleep(DEFAULT_QUEUE_POLLING_INTERVAL_SEC)
+                continue
+            for claim in await self._engine.wait_queue_claims(queue.name, list(_registry), interval):
                 try:
                     self._launch_claim(queue, claim)
                 except Exception:  # noqa: BLE001

@@ -12,7 +12,7 @@ from rust_dwos.dbos import (
 )
 from rust_dwos.attributes import SetWorkflowAttributes
 from rust_dwos.events import SendMessage, WorkflowSerializationFormat
-from rust_dwos.queues import Queue, SetEnqueueOptions
+from rust_dwos.queues import EnqueueOptions, Queue, QueueRateLimit, SetEnqueueOptions
 from rust_dwos.timeouts import SetWorkflowTimeout, assert_current_dbos_context, get_workflow_start_options
 from rust_dwos.errors import (
     DBOSAwaitedWorkflowCancelledError,
@@ -51,6 +51,8 @@ __all__ = [
     "DBOSWorkflowIDInUseError",
     "MaxRecoveryAttemptsExceededError",
     "Queue",
+    "QueueRateLimit",
+    "EnqueueOptions",
     "SendMessage",
     "WorkflowSerializationFormat",
     "SetWorkflowAttributes",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import contextvars
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 from rust_dwos.errors import DBOSException
 from rust_dwos.attributes import _encode, start_attributes
@@ -12,6 +12,26 @@ if TYPE_CHECKING:
     from rust_dwos.dbos import WorkflowHandle, WorkflowHandleAsync
 
 DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 0.25
+
+
+class QueueRateLimit(TypedDict):
+    limit: int
+    period: float
+
+
+class EnqueueOptions(TypedDict):
+    workflow_name: str
+    queue_name: str
+    workflow_id: NotRequired[str]
+    workflow_id_reuse_policy: NotRequired[str]
+    workflow_timeout: NotRequired[float]
+    deduplication_id: NotRequired[str]
+    duplication_policy: NotRequired[str]
+    priority: NotRequired[int]
+    delay_seconds: NotRequired[float]
+    app_version: NotRequired[str]
+    queue_partition_key: NotRequired[str]
+    attributes: NotRequired[dict[str, Any]]
 
 # DBOS's own queues are named under this prefix, so users may not claim it.
 RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
@@ -211,7 +231,23 @@ class Queue:
 
     @property
     def polling_interval_sec(self) -> float:
-        return self._polling_interval_sec
+        instance = _dbos()._running()
+        millis = instance._blocking(instance._engine.get_polling_interval, self.name)
+        return millis / 1000 if millis is not None else DEFAULT_QUEUE_POLLING_INTERVAL_SEC
+
+    def set_polling_interval_sec(self, value: float) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_polling_interval, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_polling_interval_sec_async(self, value: float) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_polling_interval(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_polling_interval_sec_async(self) -> float:
+        millis = await _dbos()._running()._engine.get_polling_interval(self.name)
+        return millis / 1000 if millis is not None else DEFAULT_QUEUE_POLLING_INTERVAL_SEC
 
     def enqueue(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
         dbos = _dbos()
@@ -314,7 +350,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None)
+        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None, polling_interval_sec)
         limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
@@ -340,7 +376,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None)
+        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None, polling_interval_sec)
         limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 

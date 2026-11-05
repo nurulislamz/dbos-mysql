@@ -42,6 +42,36 @@ fn parse_limiter(limit: Option<u32>, period: Option<f64>) -> PyResult<Option<(No
 
 #[pymethods]
 impl PyEngine {
+    #[pyo3(signature = (name, seconds, *, blocking=false))]
+    fn set_polling_interval<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        seconds: f64,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let millis = delay_ms(Some(seconds))?.expect("seconds supplied");
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .set_polling_interval(&name, millis)
+                .await
+                .map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn get_polling_interval<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.get_polling_interval(&name).await.map_err(to_py)
+        })
+    }
     #[pyo3(signature = (name, *, blocking=false))]
     fn get_partition_limits<'py>(
         &self,
@@ -129,7 +159,7 @@ impl PyEngine {
             engine.get_limiter(&name).await.map_err(to_py)
         })
     }
-    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, partition_concurrency=None, partition_worker_concurrency=None, partition_limit=None, partition_period=None, *, blocking=false))]
+    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, partition_concurrency=None, partition_worker_concurrency=None, partition_limit=None, partition_period=None, polling_interval=0.25, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn register_queue<'py>(
         &self,
@@ -144,6 +174,7 @@ impl PyEngine {
         partition_worker_concurrency: Option<u32>,
         partition_limit: Option<u32>,
         partition_period: Option<f64>,
+        polling_interval: f64,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let parse = |value: Option<u32>| {
@@ -165,10 +196,13 @@ impl PyEngine {
             worker_concurrency: parse(partition_worker_concurrency)?,
             limiter: parse_limiter(partition_limit, partition_period)?,
         };
+        let polling_ms = delay_ms(Some(polling_interval))?.expect("interval supplied");
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
             engine
-                .register_queue(&name, global, worker, limiter, partition, update)
+                .register_queue(
+                    &name, global, worker, limiter, partition, polling_ms, update,
+                )
                 .await
                 .map_err(to_py)
         })

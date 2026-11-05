@@ -61,6 +61,42 @@ fn partition_limits(row: &sqlx::any::AnyRow) -> Result<PartitionLimits, Error> {
 }
 
 impl Store {
+    pub async fn set_polling_interval(&self, name: &str, millis: i64) -> Result<(), Error> {
+        check_queue_name(name)?;
+        if millis <= 0 {
+            return Err(Error::InvalidConfig(
+                "polling interval must be positive".to_owned(),
+            ));
+        }
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            self.lock_queue(&mut tx, name).await?;
+            sqlx::query(
+                self.sql("UPDATE workflow_queues SET polling_interval_ms = ? WHERE name = ?"),
+            )
+            .bind(millis)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn get_polling_interval(&self, name: &str) -> Result<Option<i64>, Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            sqlx::query_scalar(self.sql(
+                "SELECT polling_interval_ms FROM workflow_queues WHERE name = ? AND deleted = 0",
+            ))
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::QueueNotFound(name.to_owned()))
+        })
+        .await
+    }
     pub async fn get_partition_limits(&self, name: &str) -> Result<PartitionLimits, Error> {
         check_queue_name(name)?;
         self.attempt(|| async {
@@ -143,6 +179,7 @@ impl Store {
             }
         }).await
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn register_queue(
         &self,
         name: &str,
@@ -150,10 +187,16 @@ impl Store {
         worker: Option<NonZeroU32>,
         limiter: Option<(NonZeroU32, i64)>,
         partition: PartitionLimits,
+        polling_ms: i64,
         update: bool,
     ) -> Result<(), Error> {
         check_queue_name(name)?;
         let global = global.unwrap_or(NonZeroU32::MAX);
+        if polling_ms <= 0 {
+            return Err(Error::InvalidConfig(
+                "polling interval must be positive".to_owned(),
+            ));
+        }
         if worker.is_some_and(|worker| worker > global) {
             return Err(Error::InvalidConfig(
                 "worker concurrency exceeds global concurrency".to_owned(),
@@ -180,13 +223,13 @@ impl Store {
                 Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
                 Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
             };
-            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency, rate_limit, rate_period_ms, partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) {conflict}")))
-                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).execute(&mut *tx).await?;
+            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency, rate_limit, rate_period_ms, partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms, polling_interval_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) {conflict}")))
+                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).bind(polling_ms).execute(&mut *tx).await?;
             sqlx::query(self.sql(&format!("SELECT name FROM workflow_queues WHERE name = ? {}", self.dialect.lock_row())))
                 .bind(name).fetch_one(&mut *tx).await?;
             if update {
-                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, rate_limit = ?, rate_period_ms = ?, partition_concurrency = ?, partition_worker_concurrency = ?, partition_rate_limit = ?, partition_rate_period_ms = ?, deleted = 0 WHERE name = ?"))
-                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).bind(name).execute(&mut *tx).await?;
+                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, rate_limit = ?, rate_period_ms = ?, partition_concurrency = ?, partition_worker_concurrency = ?, partition_rate_limit = ?, partition_rate_period_ms = ?, polling_interval_ms = ?, deleted = 0 WHERE name = ?"))
+                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).bind(polling_ms).bind(name).execute(&mut *tx).await?;
             } else {
                 sqlx::query(self.sql("UPDATE workflow_queues SET deleted = 0 WHERE name = ?"))
                     .bind(name).execute(&mut *tx).await?;
@@ -235,6 +278,19 @@ impl Store {
                     "worker concurrency exceeds global concurrency".to_owned(),
                 ));
             }
+            let partition_worker: Option<i64> = sqlx::query_scalar(
+                self.sql("SELECT partition_worker_concurrency FROM workflow_queues WHERE name = ?"),
+            )
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await?;
+            if limit.is_some_and(|limit| {
+                partition_worker.is_some_and(|part| part > i64::from(limit.get()))
+            }) {
+                return Err(Error::InvalidConfig(
+                    "worker concurrency is below partition worker concurrency".to_owned(),
+                ));
+            }
             sqlx::query(
                 self.sql("UPDATE workflow_queues SET worker_concurrency = ? WHERE name = ?"),
             )
@@ -258,13 +314,14 @@ impl Store {
             let mut tx = self.begin().await?;
             self.lock_queue(&mut tx, name).await?;
             let limit = limit.unwrap_or(NonZeroU32::MAX);
-            let worker: Option<i64> = sqlx::query_scalar(
-                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ?"),
-            )
+            let row = sqlx::query(self.sql("SELECT worker_concurrency, partition_concurrency, partition_worker_concurrency FROM workflow_queues WHERE name = ?"))
             .bind(name)
             .fetch_one(&mut *tx)
             .await?;
-            if worker.is_some_and(|worker| worker > i64::from(limit.get())) {
+            let worker: Option<i64> = row.try_get("worker_concurrency")?;
+            let partition: Option<i64> = row.try_get("partition_concurrency")?;
+            let partition_worker: Option<i64> = row.try_get("partition_worker_concurrency")?;
+            if [worker, partition, partition_worker].into_iter().flatten().any(|value| value > i64::from(limit.get())) {
                 return Err(Error::InvalidConfig(
                     "global concurrency is below worker concurrency".to_owned(),
                 ));
@@ -284,7 +341,7 @@ impl Store {
         check_queue_name(name)?;
         self.attempt(|| async {
             let value: Option<i64> = sqlx::query_scalar(
-                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ?"),
+                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ? AND deleted = 0"),
             )
             .bind(name)
             .fetch_optional(&self.pool)
@@ -850,6 +907,13 @@ impl Store {
                 last_sequence = candidate.try_get("sequence")?;
                 let workflow_id: String = candidate.try_get("workflow_uuid")?;
                 let key: Option<String> = candidate.try_get("partition_key")?;
+                if key.is_none()
+                    && (partition_limit.is_some()
+                        || partition_worker.is_some()
+                        || partition_rate.is_some())
+                {
+                    continue;
+                }
                 if let Some(key) = key {
                     if let Some(limit) = partition_limit {
                         let count: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ? AND partition_key = ?)"))
