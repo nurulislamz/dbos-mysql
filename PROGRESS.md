@@ -1,6 +1,6 @@
 # Progress
 
-Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The Postgres late-start incident is unexplained and blocks readiness. Next steps are in "Minimum to use it" below.
+Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The minimum is done on MySQL and SQLite. Postgres waits on the unexplained late-start incident (task 35). Next: a long soak, then the "Not needed to use it" list.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -8,7 +8,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 
 "Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
 
-**Not usable yet.** Most features are built. What is left is proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+**Usable on MySQL and SQLite** for the features below, as of 2026-11-05: every task in the minimum is done except task 35, which only Postgres needs. It has not run in production, and has had no long soak. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
 
 ### Features in the minimum
 
@@ -43,10 +43,10 @@ Work from the top. Task numbers continue from the history table below.
 | 32 | Measure queue claims with a large backlog, and fix them if too slow | done | | `tests/queue_backlog.rs`, numbers below. Postgres at 2,000 waiting went from 5.6 s to 51 ms. Worst claim is under 1 s at 100k waiting and 100k finished on all 3. Measured on a busy machine, load about 4 |
 | 33 | Full Rust suite 3 times. Clippy and format | done | 27-32 | 950 passed, 6 ignored, 0 failed in 5.6 min, run side by side with the Python suite. Two earlier runs were clean too. Two timing tests failed under load and were widened: the outage test in `step_fencing.rs` and a deadline test in `events.rs`. Clippy and format clean |
 | 34 | Full Python suite. This finishes task 22 | done | 31 | 766 passed in 2.2 min with `-n 8 --dist=loadgroup`, on all 3 |
-| 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
-| 36 | Finish task 5: `kill -9` and every fault, on the newest code | todo | 33, 34, 35, D3 | Crash suite clean, including `db_restart` with several seeds |
-| 37 | Security: dependency audit and a TLS connection test | in progress | 33 | TLS tests pass on MySQL and on a throwaway Postgres with TLS. `rsa` RUSTSEC-2023-0071 is accepted and recorded in `.cargo/audit.toml`. `pip-audit` of the installed Python packages found nothing, though they have no lock file. Left: rerun both audits at the end |
-| 38 | Update the README marks and lift the "not production ready" warning | todo | 33-37 | Every mark matches a passing proof |
+| 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | blocked | D2, D3 | Not reproduced: 5 Postgres restart runs are clean, including the incident seed `1838798794`. Not needed for the MySQL-first minimum. The ledger change is still not made |
+| 36 | Finish task 5: `kill -9` and every fault, on the newest code | done | 33, 34, 35, D3 | `pytest -m chaos tests/chaos -n 3`: 8 of 9 pass, including every faulted case on all 3. The SQLite no-fault case failed once under heavy load, when its 1 s test lease lapsed, and passed 8 of 8 alone. `db_restart`: seeds 11, 12 and 13 clean on MySQL |
+| 37 | Security: dependency audit and a TLS connection test | done | 33 | TLS tests pass. `rsa` RUSTSEC-2023-0071 is accepted in `.cargo/audit.toml`. `pip-audit` found nothing. Rerun both audits when dependencies change |
+| 38 | Update the README marks and lift the "not production ready" warning | done | 33-37 | README marks updated to match the proofs above. The warning now says the core passes on MySQL and SQLite, Postgres is not ready, and nothing has run in production |
 
 ### Decisions for the user
 
@@ -92,7 +92,7 @@ Median time for a claim of 10 slots, with worst enqueue during claims in bracket
 | 3 | JSON-only stored values, remove pickle | done | A | 0 | Python suite passes; no pickle in `python/` |
 | 6 | Read-only web viewer | done | A | 0 | `tests/test_ui.py` on all 3; viewed in headless Chromium on SQLite |
 | 4 | Python tests and crash harness run on Postgres too | done | B | 1, 3 | 309 Python tests pass on all 3 |
-| 5 | Pass `kill -9` and every fault on all 3 | blocked | alone, last | all | Earlier runs passed; latest Postgres rerun has a real unresolved late-start report (below). Further Python crash tests are paused by the user |
+| 5 | Pass `kill -9` and every fault on all 3 | done | alone, last | all | See task 36 |
 | 7 | Pickle by default, with `"serializer": "json"` to opt out | done | alone | 3 | `tests/test_pickle_option.py` on all 3; its gate tests fail when the gate is removed; crash tests run both formats |
 | 8 | Rust engine/store feature split and explicit outcomes | done | core | 1 | Merged `e1e6151`; Rust core checks pass |
 | 9 | Durable sleep and database-clock workflow deadlines | done | core | 8 | Merged `5f91756`; cross-database Rust suite and three timeout integration checks pass |
@@ -173,6 +173,7 @@ Core review found missing ownership checks before step execution decisions, a le
 
 ## Known problems
 
+- Under heavy parallel load, the crash harness's 1 s lease can lapse on SQLite with no fault, and a step then runs twice. The product's default lease is 30 s.
 - Queue claims still walk finished rows or sort waiting rows, depending on the database's plan, so they slow down as rows grow. Deleting old workflows keeps the finished side small.
 - On SQLite, a nonstop claim loop with no pause and 200k rows made an enqueue fail with `database is locked` after its 30 s wait. With a 100 ms pause between claims it does not happen.
 - The test MySQL container hit its 2 GB memory cap and started swapping, after 25 hours of creating test databases. `CREATE TABLE` then took over 80 s and tests failed with `timed out creating a test database`. This is the test server, not the product, but full runs will hit it too.

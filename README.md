@@ -2,7 +2,7 @@
 
 Durable workflows on Postgres, MySQL 8.4 and SQLite. A Rust core decides what runs. A thin Python layer only calls your function and returns the result. Finished steps are saved, so a crash resumes without repeating them.
 
-> **Unofficial and not production ready.** This project is not affiliated with DBOS, Inc. Do not run payment or email steps on it yet.
+> **Unofficial and early.** This project is not affiliated with DBOS, Inc. The core feature set passes its tests and crash tests on MySQL and SQLite. Postgres is not ready yet. Nothing has run in production, so give payment or email steps an idempotency key at the service.
 
 There is no extra server. A running copy of your program is the coordinator. When every copy is stopped, the rows wait until you start one again.
 
@@ -42,7 +42,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 | Feature | DBOS | rust-dwos |
 |---|---|---|
-| Postgres | ✅ | 🚧 Newest features not tested here. A restart incident is unexplained |
+| Postgres | ✅ | 🚧 Full tests and crash tests pass. An older restart incident is unexplained, though it did not come back in 5 restart runs |
 | SQLite | ✅ | ✅ One machine only |
 | MySQL 8.4 | ❌ | ✅ |
 
@@ -66,7 +66,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Child workflows | ✅ | ✅ |
 | `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ `get_result(polling_interval_sec=)` sets the longest wait between polls. Omitting it keeps the 250 ms cap |
 | `list_workflows`, `list_workflow_steps` | ✅ | 🚧 Filters on queue, version, fork and auth fields are missing |
-| Crash recovery | ✅ | 🚧 Crash tests last ran before the newest features |
+| Crash recovery | ✅ | ✅ Crash tests pass on all 3 on the newest code |
 | Recovery attempt limit | ✅ | ✅ |
 
 ### Coordination and control
@@ -129,11 +129,11 @@ No benchmark exists in this repository, and nothing has been measured side by si
 
 | Check | DBOS | rust-dwos |
 |---|---|---|
-| `kill -9`, pause and terminate tests | ❓ | 🚧 Passed on SQLite and MySQL before the newest features |
-| Database restart tests | ❓ | 🚧 Passed on MySQL. One Postgres rerun failed |
-| Long-running stress tests | ❓ | 🚧 One SQLite stress test hung in 1 of 3 runs. Cause unknown |
+| `kill -9`, pause and terminate tests | ❓ | ✅ Pass on all 3. Under heavy parallel load, SQLite's 1 s test lease can lapse with no fault |
+| Database restart tests | ❓ | ✅ 3 seeds clean on MySQL and 5 on Postgres. An older Postgres run failed and is unexplained |
+| Long-running stress tests | ❓ | 🚧 The stress tests pass. Nothing has run for hours or days |
 | DBOS's own tests | ✅ | 🚧 A subset is adapted, see [`MANIFEST.md`](tests/upstream/MANIFEST.md) |
-| Production use | ✅ | ❌ Not production ready |
+| Production use | ✅ | ❌ Not used in production yet |
 
 ### Operations
 
@@ -166,7 +166,7 @@ What this project rejects or does not run, so nothing fails silently.
 | Queue options that are not supported | `DBOSException` naming the options |
 | Using DBOS after `os.fork` | `DBOSException`. Call `DBOS.launch()` in the child |
 | MessagePack | Not built. The user deferred it |
-| Python chaos tests (`tests/chaos`) | Paused until the Postgres late-start incident is settled, so crash marks above are older than the newest features |
+| Python chaos tests (`tests/chaos`) | Not in the normal test run. See `PROGRESS.md` for how to run them |
 | Ignored tests | `cargo test` reports the ignored Rust tests. See `PROGRESS.md` |
 | Dropped upstream tests | Listed with reasons in [`MANIFEST.md`](tests/upstream/MANIFEST.md) |
 
