@@ -60,6 +60,7 @@ class SDKCalls:
             @functools.wraps(func)  # keeps func's annotations, which the step codec reads
             async def invoke(*call_args: Any, **call_kwargs: Any) -> Any:
                 return await func(*call_args, **call_kwargs)
+            # shortcut: each async call gets its own event loop, so loop-bound objects are not shared across steps, upgrade to DBOS's background loop if async steps need them.
             return asyncio.run(_internal_step(options, invoke)(*args, **kwargs))
         return _internal_step(options, func)(*args, **kwargs)
 
