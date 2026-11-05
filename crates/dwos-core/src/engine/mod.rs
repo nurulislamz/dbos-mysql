@@ -21,6 +21,7 @@ mod schedules;
 mod sleep;
 mod steps;
 mod timeouts;
+mod wait_first;
 mod wakeup;
 mod workflow_management;
 
@@ -607,6 +608,22 @@ mod tests {
         assert_eq!(run.step_id_unless_in_step(false), Some(1));
         assert_eq!(run.step_id_unless_in_step(true), None);
         assert_eq!(run.step_id_unless_in_step(false), Some(2));
+    }
+
+    #[test]
+    fn reserved_step_id_does_not_allocate_or_escape_a_step() {
+        let run = Run::new(
+            Lease {
+                workflow_id: "w".into(),
+                token: "t".into(),
+            },
+            PORTABLE_JSON.into(),
+            None,
+        );
+        let reserved = run.next_step_id();
+        assert_eq!(run.step_id_for_call(false, Some(reserved)), Some(1));
+        assert_eq!(run.step_id_for_call(true, Some(reserved)), None);
+        assert_eq!(run.step_id_for_call(false, None), Some(2));
     }
 
     #[test]

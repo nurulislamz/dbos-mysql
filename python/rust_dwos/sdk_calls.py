@@ -7,6 +7,17 @@ from typing import Any, Callable
 
 class SDKCalls:
     @classmethod
+    def reserve_step(cls) -> Any:
+        from rust_dwos.dbos import _current_run, _current_step
+        from rust_dwos.errors import DBOSException
+        from rust_dwos.step_reservation import StepReservation
+
+        run = _current_run.get()
+        if run is None or _current_step.get() is not None:
+            raise DBOSException("DBOS.reserve_step must be called from a workflow, outside a step")
+        return StepReservation(run, run.step_id_unless_in_step(False))
+
+    @classmethod
     async def asyncio_wait(cls, fs: list[Any], *, timeout: float | None = None, return_when: str = asyncio.ALL_COMPLETED) -> tuple[set[Any], set[Any]]:
         tasks = [asyncio.ensure_future(f) for f in fs]
 

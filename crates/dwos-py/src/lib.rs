@@ -20,6 +20,7 @@ mod queues;
 mod retention;
 mod schedules;
 mod sleep;
+mod wait_first;
 mod workflow_management;
 
 create_exception!(_native, DBOSException, PyException);
@@ -535,18 +536,19 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (run, name, in_step, *, blocking=false))]
+    #[pyo3(signature = (run, name, in_step, *, reserved_step_id=None, blocking=false))]
     fn begin_step<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         name: String,
         in_step: bool,
+        reserved_step_id: Option<u32>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
         // Taken at the call, not in the future, so concurrent calls keep their call order.
-        let step_id = run.step_id_unless_in_step(in_step);
+        let step_id = run.step_id_for_call(in_step, reserved_step_id);
         dispatch(py, blocking, async move {
             let Some(step_id) = step_id else {
                 return Ok((None, None));
