@@ -56,6 +56,8 @@ pub enum Error {
     },
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+    #[error("step reservation {0} can only be run once, by the workflow run that reserved it")]
+    StepReservationUsed(u32),
     #[error("this process no longer owns workflow {0}")]
     LeaseLost(String),
     #[error("DBOS was destroyed while this work was running")]

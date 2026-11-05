@@ -60,7 +60,7 @@ pub(crate) fn to_py(error: Error) -> PyErr {
         }
         Error::WorkflowCancelled(_) => DBOSWorkflowCancelledError::new_err(message),
         Error::LeaseLost(_) => DBOSLeaseLostError::new_err(message),
-        Error::ShuttingDown => DBOSException::new_err(message),
+        Error::ShuttingDown | Error::StepReservationUsed(_) => DBOSException::new_err(message),
         _ => StoreError::new_err(message),
     }
 }
@@ -116,6 +116,10 @@ impl PyRun {
 
     fn step_id_unless_in_step(&self, in_step: bool) -> Option<u32> {
         self.0.step_id_unless_in_step(in_step)
+    }
+
+    fn reserve_step_id(&self) -> u32 {
+        self.0.reserve_step_id()
     }
 }
 
@@ -553,7 +557,9 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
         // Taken at the call, not in the future, so concurrent calls keep their call order.
-        let step_id = run.step_id_for_call(in_step, reserved_step_id);
+        let step_id = run
+            .step_id_for_call(in_step, reserved_step_id)
+            .map_err(to_py)?;
         dispatch(py, blocking, async move {
             let Some(step_id) = step_id else {
                 return Ok((None, None));

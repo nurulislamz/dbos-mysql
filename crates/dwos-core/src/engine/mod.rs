@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -62,6 +62,8 @@ impl Default for EngineConfig {
 pub struct Run {
     lease: Lease,
     last_step_id: AtomicU32,
+    /// Step IDs drawn by `reserve_step_id` and not yet claimed by a run.
+    reserved_step_ids: Mutex<HashSet<u32>>,
     serialization: String,
     deadline_epoch_ms: Option<i64>,
 }
@@ -71,6 +73,7 @@ impl Run {
         Self {
             lease,
             last_step_id: AtomicU32::new(0),
+            reserved_step_ids: Mutex::new(HashSet::new()),
             serialization,
             deadline_epoch_ms,
         }
@@ -611,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn reserved_step_id_does_not_allocate_or_escape_a_step() {
+    fn a_reserved_step_id_is_claimed_once_and_never_escapes_a_step() {
         let run = Run::new(
             Lease {
                 workflow_id: "w".into(),
@@ -620,10 +623,17 @@ mod tests {
             PORTABLE_JSON.into(),
             None,
         );
-        let reserved = run.next_step_id();
-        assert_eq!(run.step_id_for_call(false, Some(reserved)), Some(1));
-        assert_eq!(run.step_id_for_call(true, Some(reserved)), None);
-        assert_eq!(run.step_id_for_call(false, None), Some(2));
+        let reserved = run.reserve_step_id();
+        assert_eq!(run.step_id_for_call(true, Some(reserved)).unwrap(), None);
+        assert_eq!(
+            run.step_id_for_call(false, Some(reserved)).unwrap(),
+            Some(1)
+        );
+        assert!(matches!(
+            run.step_id_for_call(false, Some(reserved)),
+            Err(Error::StepReservationUsed(1))
+        ));
+        assert_eq!(run.step_id_for_call(false, None).unwrap(), Some(2));
     }
 
     #[test]

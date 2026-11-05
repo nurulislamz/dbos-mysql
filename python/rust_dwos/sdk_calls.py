@@ -35,7 +35,7 @@ class SDKCalls:
         run = _current_run.get()
         if run is None or _current_step.get() is not None:
             raise DBOSException("DBOS.reserve_step must be called from a workflow, outside a step")
-        return StepReservation(run, run.step_id_unless_in_step(False))
+        return StepReservation(run, run.reserve_step_id())
 
     @classmethod
     async def asyncio_wait(cls, fs: list[Any], *, timeout: float | None = None, return_when: str = asyncio.ALL_COMPLETED) -> tuple[set[Any], set[Any]]:

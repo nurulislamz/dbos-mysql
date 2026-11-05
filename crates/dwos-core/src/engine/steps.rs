@@ -214,8 +214,38 @@ impl Run {
         self.last_step_id.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub fn step_id_for_call(&self, in_step: bool, reserved: Option<u32>) -> Option<u32> {
-        (!in_step).then(|| reserved.unwrap_or_else(|| self.next_step_id()))
+    /// Draws a step ID now, so a step can run at it later. Only `step_id_for_call` can claim it.
+    pub fn reserve_step_id(&self) -> u32 {
+        let id = self.next_step_id();
+        self.reserved_step_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id);
+        id
+    }
+
+    /// The step ID for a call, or `None` inside a step. A reserved ID is claimed here, so it runs once.
+    pub fn step_id_for_call(
+        &self,
+        in_step: bool,
+        reserved: Option<u32>,
+    ) -> Result<Option<u32>, Error> {
+        if in_step {
+            return Ok(None);
+        }
+        let Some(id) = reserved else {
+            return Ok(Some(self.next_step_id()));
+        };
+        let claimed = self
+            .reserved_step_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
+        if claimed {
+            Ok(Some(id))
+        } else {
+            Err(Error::StepReservationUsed(id))
+        }
     }
 }
 
