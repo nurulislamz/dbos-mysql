@@ -256,9 +256,8 @@ impl Store {
                 let now: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
                     .fetch_one(&mut *tx)
                     .await?;
-                let deadline = now.checked_add(timeout).ok_or_else(|| {
-                    Error::InvalidConfig("workflow timeout is too large".to_owned())
-                })?;
+                // Enqueue checked this against an earlier clock. An error here would stop the queue for good.
+                let deadline = now.saturating_add(timeout);
                 sqlx::query(self.sql(&format!(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, ?, ?) {}", self.dialect.insert_if_absent(),
                 ))).bind(workflow_id.as_str()).bind(timeout).bind(deadline).execute(&mut *tx).await?;
