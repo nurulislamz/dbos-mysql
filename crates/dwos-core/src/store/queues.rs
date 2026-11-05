@@ -251,25 +251,27 @@ impl Store {
         .await
     }
 
-    pub async fn list_queues(&self) -> Result<Vec<(String, u32)>, Error> {
-        self.list_queues_filtered(None).await
-    }
-
-    pub async fn list_queues_filtered(
+    /// `None` lists every queue. Queues with no owner always match. An empty list matches only those.
+    pub async fn list_queues(
         &self,
         applications: Option<&[String]>,
     ) -> Result<Vec<(String, u32)>, Error> {
         self.attempt(|| async {
-            let applications = applications.map(|values| values.iter().map(String::as_str).collect::<Vec<_>>())
-                .or_else(|| self.identity.application_name.as_deref().map(|name| vec![name]));
-            let condition = match &applications {
-                Some(names) if names.is_empty() => " AND application_name IS NULL".to_owned(),
-                Some(names) => format!(" AND (application_name IS NULL OR application_name IN ({}))", vec!["?"; names.len()].join(", ")),
+            let condition = match applications {
                 None => String::new(),
+                Some([]) => " AND application_name IS NULL".to_owned(),
+                Some(names) => format!(
+                    " AND (application_name IS NULL OR application_name IN ({}))",
+                    vec!["?"; names.len()].join(", ")
+                ),
             };
-            let sql = self.sql(&format!("SELECT name, concurrency FROM workflow_queues WHERE deleted = 0{condition} ORDER BY name"));
+            let sql = self.sql(&format!(
+                "SELECT name, concurrency FROM workflow_queues WHERE deleted = 0{condition} ORDER BY name"
+            ));
             let mut query = sqlx::query(sql);
-            if let Some(names) = applications { for name in names { query = query.bind(name); } }
+            for name in applications.unwrap_or_default() {
+                query = query.bind(name.as_str());
+            }
             let rows = query.fetch_all(&self.pool).await?;
             rows.iter()
                 .map(|row| Ok((row.try_get("name")?, get_u32(row, "concurrency")?)))

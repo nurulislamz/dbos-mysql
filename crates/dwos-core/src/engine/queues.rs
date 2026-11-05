@@ -62,16 +62,13 @@ impl Engine {
         self.store.delete_queue(name).await
     }
 
-    pub async fn list_queues(&self) -> Result<Vec<(String, u32)>, Error> {
-        self.store.list_queues().await
-    }
-
-    pub async fn list_queues_filtered(
+    pub async fn list_queues(
         &self,
         applications: Option<&[String]>,
     ) -> Result<Vec<(String, u32)>, Error> {
-        self.store.list_queues_filtered(applications).await
+        self.store.list_queues(applications).await
     }
+
     pub async fn set_worker_concurrency(
         &self,
         name: &str,

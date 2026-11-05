@@ -231,7 +231,7 @@ impl PyEngine {
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
             engine
-                .list_queues_filtered(applications.as_deref())
+                .list_queues(applications.as_deref())
                 .await
                 .map_err(to_py)
         })

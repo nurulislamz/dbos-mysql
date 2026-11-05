@@ -332,7 +332,7 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     assert!(engine.set_polling_interval("q", 0).await.is_err());
     engine.enqueue("q", begin("waiting")).await.unwrap();
     engine.delete_queue("q").await.unwrap();
-    assert!(engine.list_queues().await.unwrap().is_empty());
+    assert!(engine.list_queues(None).await.unwrap().is_empty());
     assert!(engine.claim_queue("q", &names()).await.is_err());
     engine
         .register_queue(
@@ -346,7 +346,10 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
         )
         .await
         .unwrap();
-    assert_eq!(engine.list_queues().await.unwrap(), [("q".to_string(), 2)]);
+    assert_eq!(
+        engine.list_queues(None).await.unwrap(),
+        [("q".to_string(), 2)]
+    );
     assert_eq!(
         engine.claim_queue("q", &names()).await.unwrap()[0]
             .lease
@@ -374,14 +377,14 @@ all_dbs!(
                 .unwrap();
         }
         conn.close().await.unwrap();
-        let names = engine
-            .list_queues_filtered(Some(&["app-a".into()]))
-            .await
-            .unwrap();
-        assert_eq!(
-            names.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
-            ["a", "unowned"]
-        );
+        let names =
+            |rows: Vec<(String, u32)>| rows.into_iter().map(|row| row.0).collect::<Vec<_>>();
+        let filtered = engine.list_queues(Some(&["app-a".into()])).await.unwrap();
+        assert_eq!(names(filtered), ["a", "unowned"]);
+        let none = engine.list_queues(Some(&[])).await.unwrap();
+        assert_eq!(names(none), ["unowned"]);
+        let all = engine.list_queues(None).await.unwrap();
+        assert_eq!(names(all), ["a", "b", "unowned"]);
     }
 );
 
