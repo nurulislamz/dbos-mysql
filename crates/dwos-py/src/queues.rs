@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use dwos_core::{Begin, Error, ParentStep, recovery_limit};
+use dwos_core::{Begin, Error, ParentStep, PartitionLimits, recovery_limit};
 
 use super::start_options;
 use pyo3::prelude::*;
@@ -70,7 +70,8 @@ impl PyEngine {
             engine.get_limiter(&name).await.map_err(to_py)
         })
     }
-    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, *, blocking=false))]
+    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, partition_concurrency=None, partition_worker_concurrency=None, partition_limit=None, partition_period=None, *, blocking=false))]
+    #[allow(clippy::too_many_arguments)]
     fn register_queue<'py>(
         &self,
         py: Python<'py>,
@@ -80,6 +81,10 @@ impl PyEngine {
         update: bool,
         limit: Option<u32>,
         period: Option<f64>,
+        partition_concurrency: Option<u32>,
+        partition_worker_concurrency: Option<u32>,
+        partition_limit: Option<u32>,
+        partition_period: Option<f64>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let parse = |value: Option<u32>| {
@@ -96,10 +101,15 @@ impl PyEngine {
         let global = parse(global)?;
         let worker = parse(worker)?;
         let limiter = parse_limiter(limit, period)?;
+        let partition = PartitionLimits {
+            concurrency: parse(partition_concurrency)?,
+            worker_concurrency: parse(partition_worker_concurrency)?,
+            limiter: parse_limiter(partition_limit, partition_period)?,
+        };
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
             engine
-                .register_queue(&name, global, worker, limiter, update)
+                .register_queue(&name, global, worker, limiter, partition, update)
                 .await
                 .map_err(to_py)
         })
@@ -234,7 +244,7 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, delay_seconds=None, app_version=None, blocking=false))]
+    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, delay_seconds=None, app_version=None, queue_partition_key=None, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn enqueue<'py>(
         &self,
@@ -254,6 +264,7 @@ impl PyEngine {
         priority: Option<i64>,
         delay_seconds: Option<f64>,
         app_version: Option<String>,
+        queue_partition_key: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -267,6 +278,7 @@ impl PyEngine {
         options.priority = priority;
         options.delay_ms = delay_ms(delay_seconds)?;
         options.application_version = app_version;
+        options.queue_partition_key = queue_partition_key;
         options.duplication_policy = duplication_policy
             .as_deref()
             .map(dwos_core::ReusePolicy::parse)

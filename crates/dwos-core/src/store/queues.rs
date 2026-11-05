@@ -20,6 +20,13 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PartitionLimits {
+    pub concurrency: Option<NonZeroU32>,
+    pub worker_concurrency: Option<NonZeroU32>,
+    pub limiter: Option<(NonZeroU32, i64)>,
+}
+
 impl Store {
     pub async fn set_limiter(
         &self,
@@ -69,6 +76,7 @@ impl Store {
         global: Option<NonZeroU32>,
         worker: Option<NonZeroU32>,
         limiter: Option<(NonZeroU32, i64)>,
+        partition: PartitionLimits,
         update: bool,
     ) -> Result<(), Error> {
         check_queue_name(name)?;
@@ -83,19 +91,29 @@ impl Store {
                 "limiter period must be positive".to_owned(),
             ));
         }
+        if partition.concurrency.is_some_and(|n| n > global)
+            || partition.worker_concurrency.is_some_and(|n| {
+                n > global
+                    || worker.is_some_and(|w| n > w)
+                    || partition.concurrency.is_some_and(|p| n > p)
+            })
+            || partition.limiter.is_some_and(|(_, period)| period <= 0)
+        {
+            return Err(Error::InvalidConfig("invalid partition limits".to_owned()));
+        }
         self.attempt(|| async {
             let mut tx = self.begin().await?;
             let conflict = match self.dialect {
                 Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
                 Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
             };
-            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency, rate_limit, rate_period_ms) VALUES (?, ?, ?, ?, ?) {conflict}")))
-                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).execute(&mut *tx).await?;
+            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency, rate_limit, rate_period_ms, partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) {conflict}")))
+                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).execute(&mut *tx).await?;
             sqlx::query(self.sql(&format!("SELECT name FROM workflow_queues WHERE name = ? {}", self.dialect.lock_row())))
                 .bind(name).fetch_one(&mut *tx).await?;
             if update {
-                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, rate_limit = ?, rate_period_ms = ?, deleted = 0 WHERE name = ?"))
-                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(name).execute(&mut *tx).await?;
+                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, rate_limit = ?, rate_period_ms = ?, partition_concurrency = ?, partition_worker_concurrency = ?, partition_rate_limit = ?, partition_rate_period_ms = ?, deleted = 0 WHERE name = ?"))
+                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(partition.concurrency.map(|n| i64::from(n.get()))).bind(partition.worker_concurrency.map(|n| i64::from(n.get()))).bind(partition.limiter.map(|(n, _)| i64::from(n.get()))).bind(partition.limiter.map(|(_, period)| period)).bind(name).execute(&mut *tx).await?;
             } else {
                 sqlx::query(self.sql("UPDATE workflow_queues SET deleted = 0 WHERE name = ?"))
                     .bind(name).execute(&mut *tx).await?;
@@ -411,6 +429,14 @@ impl Store {
                 "duplication_policy requires a deduplication ID".to_owned(),
             ));
         }
+        if let Some(key) = &options.queue_partition_key {
+            check_name("queue partition key", key)?;
+            if options.deduplication_id.is_some() {
+                return Err(Error::InvalidConfig(
+                    "partition keys cannot be combined with deduplication".to_owned(),
+                ));
+            }
+        }
         if let Some(parent) = new.parent_workflow_id {
             check_name("parent workflow ID", parent)?;
         }
@@ -439,6 +465,13 @@ impl Store {
     ) -> Result<String, Error> {
         let mut tx = self.begin().await?;
         self.lock_queue(&mut tx, queue).await?;
+        let partitioned: i64 = sqlx::query_scalar(self.sql("SELECT CASE WHEN partition_concurrency IS NOT NULL OR partition_worker_concurrency IS NOT NULL OR partition_rate_limit IS NOT NULL THEN 1 ELSE 0 END FROM workflow_queues WHERE name = ?"))
+            .bind(queue).fetch_one(&mut *tx).await?;
+        if (partitioned != 0) != options.queue_partition_key.is_some() {
+            return Err(Error::InvalidConfig(
+                "partition key is required exactly when the queue is partitioned".to_owned(),
+            ));
+        }
         // The temporary token distinguishes insertion from an existing unowned row on every backend.
         let insert = sqlx::query(self.sql(&format!(
             "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, recovery_attempts, max_recovery_attempts, parent_workflow_id, serialization, created_at, updated_at, {}) \
@@ -503,9 +536,9 @@ impl Store {
                 None
             };
             sqlx::query(self.sql(
-                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority, delay_until_ms) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority, delay_until_ms, partition_key) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ))
-            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).bind(options.priority.unwrap_or(0)).bind(delay_until).execute(&mut *tx).await?;
+            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).bind(options.priority.unwrap_or(0)).bind(delay_until).bind(options.queue_partition_key.as_deref()).execute(&mut *tx).await?;
             if let Some(deadline) = new.deadline_epoch_ms {
                 sqlx::query(self.sql(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, NULL, ?)",
@@ -689,34 +722,85 @@ impl Store {
         } else if rate.is_some() || period.is_some() {
             return Err(Error::Corrupt("invalid queue limiter".to_owned()));
         }
+        let partition_row = sqlx::query(self.sql("SELECT partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms FROM workflow_queues WHERE name = ?"))
+            .bind(queue).fetch_one(&mut *tx).await?;
+        let partition_limit: Option<i64> = partition_row.try_get("partition_concurrency")?;
+        let partition_worker: Option<i64> =
+            partition_row.try_get("partition_worker_concurrency")?;
+        let partition_rate: Option<i64> = partition_row.try_get("partition_rate_limit")?;
+        let partition_period: Option<i64> = partition_row.try_get("partition_rate_period_ms")?;
         let mut claimed = Vec::new();
+        let (mut last_priority, mut last_sequence) = (-1_i64, 0_i64);
         let (compatible, binds) = self.compatible_clause();
         while claimed.len() < slots as usize {
             // The queue row lock already serializes claimers, so this read takes no row locks:
             // MySQL's ordered locking scan can keep unrelated live owners locked until commit.
             let read_sql = self.sql(&format!(
-                    "SELECT workflow_queue_entries.workflow_uuid FROM workflow_queue_entries \
+                    "SELECT workflow_queue_entries.workflow_uuid, workflow_queue_entries.priority, workflow_queue_entries.sequence, workflow_queue_entries.partition_key FROM workflow_queue_entries \
                      JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid \
                      WHERE workflow_queue_entries.queue_name = ? AND workflow_status.status = 'PENDING' \
                      AND workflow_status.lease_token IS NULL AND workflow_status.claim_after <= ? \
                      AND workflow_status.serialization IN ({}) AND workflow_status.name IN ({}){compatible} \
+                     AND (workflow_queue_entries.priority > ? OR (workflow_queue_entries.priority = ? AND workflow_queue_entries.sequence > ?)) \
                      ORDER BY workflow_queue_entries.priority, workflow_queue_entries.sequence LIMIT ?",
                     self.readable_formats(),
                     vec!["?"; names.len()].join(", "),
                 ));
-            let mut read = sqlx::query_scalar(read_sql).bind(queue).bind(cutoff);
+            let mut read = sqlx::query(read_sql).bind(queue).bind(cutoff);
             for name in names {
                 read = read.bind(name.as_str());
             }
             for bind in &binds {
                 read = read.bind(*bind);
             }
-            let wanted = slots as usize - claimed.len();
-            let found: Vec<String> = read.bind(wanted as i64).fetch_all(&mut *tx).await?;
+            let wanted = if partition_limit.is_some()
+                || partition_worker.is_some()
+                || partition_rate.is_some()
+            {
+                (slots as usize - claimed.len()).max(50)
+            } else {
+                slots as usize - claimed.len()
+            };
+            let found = read
+                .bind(last_priority)
+                .bind(last_priority)
+                .bind(last_sequence)
+                .bind(wanted as i64)
+                .fetch_all(&mut *tx)
+                .await?;
             if found.is_empty() {
                 break;
             }
-            for workflow_id in found {
+            for candidate in found {
+                last_priority = candidate.try_get("priority")?;
+                last_sequence = candidate.try_get("sequence")?;
+                let workflow_id: String = candidate.try_get("workflow_uuid")?;
+                let key: Option<String> = candidate.try_get("partition_key")?;
+                if let Some(key) = key {
+                    if let Some(limit) = partition_limit {
+                        let count: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ? AND partition_key = ?)"))
+                            .bind(queue).bind(key.as_str()).fetch_one(&mut *tx).await?;
+                        if count >= limit {
+                            continue;
+                        }
+                    }
+                    if let (Some(limit), Some(worker)) =
+                        (partition_worker, self.identity.executor_id.as_deref())
+                    {
+                        let count: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL AND executor_id = ? AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ? AND partition_key = ?)"))
+                            .bind(worker).bind(queue).bind(key.as_str()).fetch_one(&mut *tx).await?;
+                        if count >= limit {
+                            continue;
+                        }
+                    }
+                    if let (Some(limit), Some(period)) = (partition_rate, partition_period) {
+                        let count: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_queue_admissions WHERE queue_name = ? AND partition_key = ? AND admitted_at_ms > ?"))
+                            .bind(queue).bind(key.as_str()).bind(cutoff.saturating_sub(period)).fetch_one(&mut *tx).await?;
+                        if count >= limit {
+                            continue;
+                        }
+                    }
+                }
                 let Some(row) = sqlx::query(self.sql(&format!(
                 "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
                  FROM workflow_status WHERE workflow_uuid = ? AND status = 'PENDING' \
@@ -756,6 +840,9 @@ impl Store {
                     sqlx::query(self.sql("UPDATE workflow_queue_entries SET admitted_at_ms = {NOW} WHERE workflow_uuid = ?"))
                         .bind(workflow_id.as_str()).execute(&mut *tx).await?;
                     claimed.push(claim);
+                    if claimed.len() == slots as usize {
+                        break;
+                    }
                 }
             }
         }

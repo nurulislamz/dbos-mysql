@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use super::wakeup::WakeKey;
 use super::{Begin, Engine};
-use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
+use crate::{Claimed, Error, NewWorkflow, PartitionLimits, WorkflowOptions};
 
 impl Engine {
     pub async fn set_limiter(
@@ -30,10 +30,11 @@ impl Engine {
         global: Option<NonZeroU32>,
         worker: Option<NonZeroU32>,
         limiter: Option<(NonZeroU32, i64)>,
+        partition: PartitionLimits,
         update: bool,
     ) -> Result<(), Error> {
         self.store
-            .register_queue(name, global, worker, limiter, update)
+            .register_queue(name, global, worker, limiter, partition, update)
             .await
     }
 

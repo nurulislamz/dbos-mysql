@@ -78,3 +78,14 @@ def test_limiter_setting(dbos: DBOS) -> None:
     assert queue.limiter == {"limit": 2, "period": 30}
     queue.set_limiter(None)
     assert queue.limiter is None
+
+
+def test_enqueue_partition(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> str:
+        return "done"
+
+    queue = DBOS.register_queue("partitioned", partition_concurrency=1)
+    with SetEnqueueOptions(queue_partition_key="customer"):
+        handle = queue.enqueue(workflow)
+    assert handle.get_result() == "done"

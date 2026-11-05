@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use dwos_core::{
-    Begin, Begun, Claimed, Engine, EngineConfig, Error, Identity, Outcome, ParentStep, ReusePolicy,
-    Run, Status, StepDecision, Store, WorkflowOptions,
+    Begin, Begun, Claimed, Engine, EngineConfig, Error, Identity, Outcome, ParentStep,
+    PartitionLimits, ReusePolicy, Run, Status, StepDecision, Store, WorkflowOptions,
 };
 use sqlx::Connection;
 
@@ -250,11 +250,25 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     engine
-        .register_queue("q", NonZeroU32::new(3), NonZeroU32::new(1), None, true)
+        .register_queue(
+            "q",
+            NonZeroU32::new(3),
+            NonZeroU32::new(1),
+            None,
+            PartitionLimits::default(),
+            true,
+        )
         .await
         .unwrap();
     engine
-        .register_queue("q", NonZeroU32::new(4), None, None, false)
+        .register_queue(
+            "q",
+            NonZeroU32::new(4),
+            None,
+            None,
+            PartitionLimits::default(),
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 3);
@@ -264,7 +278,14 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     assert!(engine.list_queues().await.unwrap().is_empty());
     assert!(engine.claim_queue("q", &names()).await.is_err());
     engine
-        .register_queue("q", NonZeroU32::new(2), None, None, true)
+        .register_queue(
+            "q",
+            NonZeroU32::new(2),
+            None,
+            None,
+            PartitionLimits::default(),
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(engine.list_queues().await.unwrap(), [("q".to_string(), 2)]);
@@ -305,6 +326,46 @@ all_dbs!(queue_rate_limit_counts_starts_across_workers, backend, {
         .unwrap();
     connection.close().await.unwrap();
     assert_eq!(second.claim_queue("q", &names()).await.unwrap().len(), 1);
+});
+
+all_dbs!(queue_partitions_admit_other_keys, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    let limits = PartitionLimits {
+        concurrency: NonZeroU32::new(1),
+        ..Default::default()
+    };
+    engine
+        .register_queue("q", NonZeroU32::new(4), None, None, limits, true)
+        .await
+        .unwrap();
+    assert!(engine.enqueue("q", begin("missing")).await.is_err());
+    for (id, key) in [("a1", "a"), ("a2", "a"), ("b1", "b")] {
+        let options = WorkflowOptions {
+            queue_partition_key: Some(key.into()),
+            ..Default::default()
+        };
+        engine.enqueue_with("q", begin(id), &options).await.unwrap();
+    }
+    let claims = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(
+        claims
+            .iter()
+            .map(|claim| claim.lease.workflow_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a1", "b1"]
+    );
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    engine
+        .finish(&run(claims[0].clone()), Outcome::Success("null".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.claim_queue("q", &names()).await.unwrap()[0]
+            .lease
+            .workflow_id,
+        "a2"
+    );
 });
 
 async fn queue(engine: &Engine, concurrency: u32) {

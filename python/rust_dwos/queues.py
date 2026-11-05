@@ -23,8 +23,8 @@ _enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVa
 
 
 class SetEnqueueOptions:
-    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None, app_version: str | None = None) -> None:
-        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds, "app_version": app_version}
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None, app_version: str | None = None, queue_partition_key: str | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds, "app_version": app_version, "queue_partition_key": queue_partition_key}
         self._token: contextvars.Token[dict[str, Any]] | None = None
 
     def __enter__(self) -> SetEnqueueOptions:
@@ -179,7 +179,7 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
     from rust_dwos.serialization import Codec
 
     dbos = _dbos()
-    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version"}
+    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key"}
     unknown = options.keys() - allowed
     if unknown:
         raise DBOSException(f"Unsupported enqueue options: {', '.join(sorted(unknown))}")
@@ -189,7 +189,7 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
     timeout = options.get("workflow_timeout")
     timeout_ms = int(timeout * 1000) if timeout is not None else None
     begin = (name, text, None, options.get("workflow_id", dbos._next_workflow_id.get()), dbos._current_run.get(), dbos._current_step.get() is not None, timeout_ms, False, options.get("workflow_id_reuse_policy", dbos._next_reuse_policy.get()))
-    enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version")}
+    enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key")}
     return begin, queue, enqueue
 
 
@@ -244,6 +244,9 @@ class Queues:
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
         limiter: dict[str, Any] | None = None,
+        partition_concurrency: int | None = None,
+        partition_worker_concurrency: int | None = None,
+        partition_limiter: dict[str, Any] | None = None,
         on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
@@ -255,7 +258,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None)
+        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None)
         limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
@@ -267,6 +270,9 @@ class Queues:
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
         limiter: dict[str, Any] | None = None,
+        partition_concurrency: int | None = None,
+        partition_worker_concurrency: int | None = None,
+        partition_limiter: dict[str, Any] | None = None,
         on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
@@ -278,7 +284,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None)
+        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None)
         limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
