@@ -5,10 +5,36 @@ use super::workflow_management::in_clause;
 use super::{Store, check_name};
 use crate::Error;
 
+// A parent's replay starts a child again if the child's row is gone.
+const RUNNING_PARENT: &str = "'PENDING'";
+// By age, also keep a child whose parent can still be resumed.
+const RESUMABLE_PARENT: &str = "'PENDING', 'CANCELLED', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED'";
+
+/// For a read of `workflow_status`. MySQL refuses this form in a DELETE (error 1093).
+fn parent_not_in(statuses: &str) -> String {
+    format!(
+        " AND NOT EXISTS (SELECT 1 FROM workflow_status AS parent \
+         WHERE parent.workflow_uuid = workflow_status.parent_workflow_id AND parent.status IN ({statuses}))"
+    )
+}
+
+/// Binds `count` ids twice. The DISTINCT makes MySQL materialize the derived table, which 1093 allows.
+fn delete_stopped_sql(age_check: &str, statuses: &str, count: usize) -> String {
+    format!(
+        "DELETE FROM workflow_status WHERE {age_check}status <> 'PENDING'{} AND workflow_uuid NOT IN \
+         (SELECT kept FROM (SELECT DISTINCT child.workflow_uuid AS kept FROM workflow_status AS child \
+         JOIN workflow_status AS parent ON parent.workflow_uuid = child.parent_workflow_id \
+         WHERE parent.status IN ({statuses}){}) AS kept_rows)",
+        in_clause("workflow_uuid", count),
+        in_clause("child.workflow_uuid", count),
+    )
+}
+
 impl Store {
-    /// Deletes these rows and returns the ids actually deleted. A PENDING row stays and a missing
-    /// id is skipped. With `delete_children`, also deletes finished descendants.
-    /// Deleting a workflow lets its ID run again.
+    /// Deletes these rows and returns the ids actually deleted. A PENDING row, a row whose parent
+    /// is PENDING and a missing id are left out. With `delete_children`, also deletes finished
+    /// descendants, and does not walk below a PENDING row. Deleting a workflow lets its ID run again.
+    /// A child of a CANCELLED or dead-lettered parent can still be deleted, and resuming that parent reruns it.
     pub async fn delete_workflows(
         &self,
         workflow_ids: &[String],
@@ -31,14 +57,30 @@ impl Store {
 
     /// Deepest first: a call that fails midway can run again and still reach what is left.
     async fn with_descendants(&self, roots: &[String]) -> Result<Vec<String>, Error> {
+        let mut pending: HashSet<String> = HashSet::new();
+        for chunk in roots.chunks(RECHECK_CHUNK) {
+            let sql = format!(
+                "SELECT workflow_uuid FROM workflow_status WHERE status = 'PENDING'{}",
+                in_clause("workflow_uuid", chunk.len())
+            );
+            let mut query = sqlx::query_scalar(self.sql(&sql));
+            for id in chunk {
+                query = query.bind(id.as_str());
+            }
+            pending.extend(query.fetch_all(&self.pool).await?);
+        }
         let mut seen: HashSet<String> = roots.iter().cloned().collect();
         let mut all = roots.to_vec();
-        let mut frontier = roots.to_vec();
+        let mut frontier: Vec<String> = roots
+            .iter()
+            .filter(|id| !pending.contains(*id))
+            .cloned()
+            .collect();
         while !frontier.is_empty() {
             let mut children = Vec::new();
             for chunk in frontier.chunks(RECHECK_CHUNK) {
                 let sql = format!(
-                    "SELECT workflow_uuid FROM workflow_status WHERE 1 = 1{}",
+                    "SELECT workflow_uuid FROM workflow_status WHERE status <> 'PENDING'{}",
                     in_clause("parent_workflow_id", chunk.len())
                 );
                 let mut query = sqlx::query_scalar(self.sql(&sql));
@@ -57,8 +99,10 @@ impl Store {
 
     async fn delete_finished(&self, ids: &[String]) -> Result<Vec<String>, Error> {
         let mut tx = self.begin().await?;
+        // The lock clause covers these rows, not the parents the subquery reads.
         let sql = format!(
-            "SELECT workflow_uuid FROM workflow_status WHERE status <> 'PENDING'{} {}",
+            "SELECT workflow_uuid FROM workflow_status WHERE status <> 'PENDING'{}{} {}",
+            parent_not_in(RUNNING_PARENT),
             in_clause("workflow_uuid", ids.len()),
             self.dialect.lock_row(),
         );
@@ -68,12 +112,9 @@ impl Store {
         }
         let finished: Vec<String> = select.fetch_all(&mut *tx).await?;
         if !finished.is_empty() {
-            let sql = format!(
-                "DELETE FROM workflow_status WHERE status <> 'PENDING'{}",
-                in_clause("workflow_uuid", finished.len())
-            );
+            let sql = delete_stopped_sql("", RUNNING_PARENT, finished.len());
             let mut delete = sqlx::query(self.sql(&sql));
-            for id in &finished {
+            for id in finished.iter().chain(&finished) {
                 delete = delete.bind(id.as_str());
             }
             delete.execute(&mut *tx).await?;
@@ -83,7 +124,8 @@ impl Store {
     }
 
     /// Deletes rows that finished before the cutoff, at most `batch` per transaction, and returns
-    /// the total. A batch above 200 uses 200, to bound the binds in one statement.
+    /// the total. A batch above 200 uses 200, to bound the binds in one statement. A row whose
+    /// parent is PENDING, CANCELLED or dead-lettered stays until that parent changes or is gone.
     /// Deleting a workflow lets its ID run again.
     pub async fn delete_finished_before(
         &self,
@@ -114,25 +156,26 @@ impl Store {
     }
 
     // A plain read: MySQL's locking scan could keep unrelated live rows locked.
+    // Kept rows are filtered here, so they cannot fill a batch and hide the rows behind them.
     async fn finished_before(&self, cutoff: i64, limit: usize) -> Result<Vec<String>, Error> {
-        Ok(sqlx::query_scalar(self.sql(
-            "SELECT workflow_uuid FROM workflow_status WHERE completed_at < ? AND status <> 'PENDING' \
+        let sql = format!(
+            "SELECT workflow_uuid FROM workflow_status WHERE completed_at < ? AND status <> 'PENDING'{} \
              ORDER BY completed_at LIMIT ?",
-        ))
-        .bind(cutoff)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?)
+            parent_not_in(RESUMABLE_PARENT)
+        );
+        Ok(sqlx::query_scalar(self.sql(&sql))
+            .bind(cutoff)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?)
     }
 
-    // Checks the row again: a resume can make a candidate PENDING after the read.
-    async fn delete_candidates(&self, ids: &[String], cutoff: i64) -> Result<u64, Error> {
-        let sql = format!(
-            "DELETE FROM workflow_status WHERE completed_at < ? AND status <> 'PENDING'{}",
-            in_clause("workflow_uuid", ids.len())
-        );
+    /// Checks each row and its parent again: a resume can change either after the read. For tests, public.
+    #[doc(hidden)]
+    pub async fn delete_candidates(&self, ids: &[String], cutoff: i64) -> Result<u64, Error> {
+        let sql = delete_stopped_sql("completed_at < ? AND ", RESUMABLE_PARENT, ids.len());
         let mut delete = sqlx::query(self.sql(&sql)).bind(cutoff);
-        for id in ids {
+        for id in ids.iter().chain(ids) {
             delete = delete.bind(id.as_str());
         }
         Ok(delete.execute(&self.pool).await?.rows_affected())

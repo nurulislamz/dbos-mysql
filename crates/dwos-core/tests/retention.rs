@@ -2,7 +2,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use dwos_core::{
-    Begin, Begun, Engine, EngineConfig, Error, Outcome, PORTABLE_JSON, Run, Status, Store,
+    Begin, Begun, Engine, EngineConfig, Error, FinalOutcome, Outcome, PORTABLE_JSON, ParentStep,
+    Run, Status, Store,
 };
 use sqlx::AssertSqlSafe;
 
@@ -287,7 +288,7 @@ all_dbs!(a_live_owner_keeps_its_row_and_can_finish, backend, {
     );
 });
 
-all_dbs!(delete_children_keeps_a_pending_child, backend, {
+all_dbs!(delete_children_stops_at_a_pending_child, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let store = engine.store().clone();
@@ -302,13 +303,198 @@ all_dbs!(delete_children_keeps_a_pending_child, backend, {
         .delete_workflows(&ids(&["root"]), true)
         .await
         .unwrap();
-    assert_eq!(
-        sorted(deleted),
-        ids(&["done", "done-done", "root", "running-done"])
-    );
+    assert_eq!(sorted(deleted), ids(&["done", "done-done", "root"]));
     assert!(exists(&store, "running").await);
+    // Its parent's replay still needs it.
+    assert!(exists(&store, "running-done").await);
     assert!(exists(&store, "unrelated").await);
 });
+
+all_dbs!(a_pending_root_keeps_its_children_when_named, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_pending(&store, "root", None).await;
+    start_finished(&store, "child", Some("root")).await;
+    assert!(
+        engine
+            .delete_workflows(&ids(&["root"]), true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        engine
+            .delete_workflows(&ids(&["child"]), false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(exists(&store, "child").await);
+});
+
+all_dbs!(a_child_of_a_stopped_parent_can_be_deleted_by_id, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_pending(&store, "cancelled", None).await;
+    start_finished(&store, "child", Some("cancelled")).await;
+    engine.cancel_workflow("cancelled").await.unwrap();
+    assert_eq!(
+        engine
+            .delete_workflows(&ids(&["child"]), false)
+            .await
+            .unwrap(),
+        ids(&["child"])
+    );
+});
+
+all_dbs!(a_pending_parent_replays_its_kept_child, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let Begun::Run(parent) = engine.begin(begin("parent")).await.unwrap() else {
+        panic!("expected to run");
+    };
+    let mut child = begin("");
+    child.workflow_id = None;
+    child.parent = Some(ParentStep {
+        run: &parent,
+        step_id: 1,
+    });
+    let Begun::Run(child_run) = engine.begin(child).await.unwrap() else {
+        panic!("expected the child to run");
+    };
+    let child_id = child_run.workflow_id().to_owned();
+    engine
+        .finish(&child_run, Outcome::Success("\"child\"".to_owned()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        engine.delete_finished_before(i64::MAX, 10).await.unwrap(),
+        0
+    );
+    assert!(
+        engine
+            .delete_workflows(std::slice::from_ref(&child_id), false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    engine.release(&parent).await.unwrap();
+    let claimed = engine.recover_now(&names()).await.unwrap().pop().unwrap();
+    assert_eq!(claimed.lease.workflow_id, "parent");
+    let replay = Run::new(
+        claimed.lease,
+        claimed.serialization,
+        claimed.deadline_epoch_ms,
+    );
+    let mut child = begin("");
+    child.workflow_id = None;
+    child.parent = Some(ParentStep {
+        run: &replay,
+        step_id: 1,
+    });
+    match engine.begin(child).await.unwrap() {
+        Begun::Stored(result) => {
+            assert_eq!(result.workflow_id, child_id);
+            assert_eq!(
+                result.outcome,
+                FinalOutcome::Success("\"child\"".to_owned())
+            );
+        }
+        other => panic!("the child's body must not start again, got {other:?}"),
+    }
+});
+
+all_dbs!(age_keeps_a_child_of_a_resumable_parent, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_pending(&store, "cancelled", None).await;
+    engine.cancel_workflow("cancelled").await.unwrap();
+    let mut dead = workflow("dead", EXPIRED);
+    dead.max_recovery_attempts = 1;
+    start(&store, &dead).await;
+    store.reclaim(&names(), 10, EXPIRED).await.unwrap();
+    store.reclaim(&names(), 10, EXPIRED).await.unwrap();
+    assert_eq!(
+        store.get_workflow("dead").await.unwrap().unwrap().status,
+        Status::MaxRecoveryAttemptsExceeded
+    );
+    start_finished(&store, "of-cancelled", Some("cancelled")).await;
+    start_finished(&store, "of-dead", Some("dead")).await;
+    // Only the children are old enough, so the cutoff cannot take the parents.
+    execute(
+        &store,
+        "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid IN ('of-cancelled', 'of-dead')"
+            .to_owned(),
+    )
+    .await;
+
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 0);
+    assert!(exists(&store, "of-cancelled").await);
+    assert!(exists(&store, "of-dead").await);
+
+    engine
+        .delete_workflows(&ids(&["cancelled", "dead"]), false)
+        .await
+        .unwrap();
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 2);
+});
+
+all_dbs!(age_keeps_a_child_of_a_pending_parent_only, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_pending(&store, "running", None).await;
+    start_finished(&store, "of-running", Some("running")).await;
+    start_finished(&store, "done", None).await;
+    start_finished(&store, "of-done", Some("done")).await;
+    execute(
+        &store,
+        "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid IN ('of-running', 'of-done')"
+            .to_owned(),
+    )
+    .await;
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 1);
+    assert!(exists(&store, "of-running").await);
+    assert!(!exists(&store, "of-done").await);
+});
+
+all_dbs!(
+    kept_rows_sorted_first_do_not_hide_a_deletable_row,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db).await;
+        let store = engine.store().clone();
+        start_pending(&store, "running", None).await;
+        for id in ["kept-1", "kept-2", "kept-3"] {
+            start_finished(&store, id, Some("running")).await;
+        }
+        execute(
+            &store,
+            "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid LIKE 'kept-%'"
+                .to_owned(),
+        )
+        .await;
+        seed_finished(&store, "old", 2, 150).await;
+        // A loop that read the kept rows would never finish, or would stop before the old ones.
+        let deleted = tokio::time::timeout(
+            Duration::from_secs(30),
+            engine.delete_finished_before(200, 1),
+        )
+        .await
+        .expect("the batch loop did not end")
+        .unwrap();
+        assert_eq!(deleted, 2);
+        assert!(exists(&store, "kept-1").await);
+        assert!(!exists(&store, "old0").await);
+        assert!(!exists(&store, "old1").await);
+    }
+);
 
 all_dbs!(without_delete_children_a_child_stays, backend, {
     let db = TestDb::migrated(backend).await;
@@ -430,7 +616,28 @@ all_dbs!(bad_input_is_refused_before_anything_is_deleted, backend, {
     assert!(engine.delete_workflows(&[], true).await.unwrap().is_empty());
 });
 
-all_dbs!(deleting_by_age_does_not_wait_for_a_live_row, backend, {
+all_dbs!(the_delete_checks_the_parent_again, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_pending(&store, "cancelled", None).await;
+    engine.cancel_workflow("cancelled").await.unwrap();
+    start_finished(&store, "kept", Some("cancelled")).await;
+    start_finished(&store, "done", None).await;
+    start_finished(&store, "gone", Some("done")).await;
+    // As if the read saw these before the parent changed.
+    assert_eq!(
+        store
+            .delete_candidates(&ids(&["kept", "gone"]), i64::MAX)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(exists(&store, "kept").await);
+    assert!(!exists(&store, "gone").await);
+});
+
+all_dbs!(deleting_does_not_wait_for_a_live_row, backend, {
     // SQLite has no row locks to test.
     if backend == Backend::Sqlite {
         return;
@@ -439,6 +646,15 @@ all_dbs!(deleting_by_age_does_not_wait_for_a_live_row, backend, {
     let engine = engine(&db).await;
     let store = engine.store().clone();
     start_pending(&store, "live", None).await;
+    start_finished(&store, "of-live", Some("live")).await;
+    start_finished(&store, "done", None).await;
+    start_finished(&store, "of-done", Some("done")).await;
+    execute(
+        &store,
+        "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid IN ('of-live', 'of-done')"
+            .to_owned(),
+    )
+    .await;
     seed_finished(&store, "old", 5, 100).await;
     let mut holder = store.pool().begin().await.unwrap();
     sqlx::query(
@@ -453,9 +669,18 @@ all_dbs!(deleting_by_age_does_not_wait_for_a_live_row, backend, {
         engine.delete_finished_before(200, 2),
     )
     .await
-    .expect("the delete waited for a live row's lock")
+    .expect("the age delete waited for a live row's lock")
     .unwrap();
-    assert_eq!(deleted, 5);
+    assert_eq!(deleted, 6);
+    let by_id = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.delete_workflows(&ids(&["of-live"]), false),
+    )
+    .await
+    .expect("the delete by id waited for a live parent's lock")
+    .unwrap();
+    assert!(by_id.is_empty());
     holder.rollback().await.unwrap();
     assert!(exists(&store, "live").await);
+    assert!(exists(&store, "of-live").await);
 });
