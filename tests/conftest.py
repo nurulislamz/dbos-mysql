@@ -12,12 +12,49 @@ from typing import Any
 import psycopg
 import pymysql
 import pytest
+from _pytest.nodeid import NodeId
 
 from rust_dwos import DBOS, DBOSConfig
 
 MYSQL_PORT = int(os.environ.get("DBOS_TEST_DB_PORT", "13307"))
 MYSQL_PASSWORD = "dbos-test-root"
 POSTGRES_PORT = int(os.environ.get("DBOS_TEST_PG_PORT", "13309"))
+
+
+# silence_logs() turns Rust logging off for the rest of that worker. The log
+# check has to run first on the same worker. Bridge schemas are per worker
+# (dbos_bridge_gwN), so the other bridge tests are not in this group.
+_NATIVE_LOG_GROUP = "native_endpoints"
+_LOG_CHECK = "test_rust_logs_reach_python_logging"
+_LOG_SHUTDOWN = "test_silence_logs"
+
+
+def _test_name(item: pytest.Item) -> str:
+    return getattr(item, "originalname", None) or item.name
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Iterator[None]:
+    for item in items:
+        if _test_name(item) in {_LOG_CHECK, _LOG_SHUTDOWN}:
+            item.add_marker(pytest.mark.xdist_group(_NATIVE_LOG_GROUP))
+    log_at = next((index for index, item in enumerate(items) if _test_name(item) == _LOG_CHECK), None)
+    silence_at = next((index for index, item in enumerate(items) if _test_name(item) == _LOG_SHUTDOWN), None)
+    if log_at is not None and silence_at is not None and log_at > silence_at:
+        items.insert(silence_at, items.pop(log_at))
+    yield
+    # pytest-xdist 3.8.0 never applies this mark: WorkerInteractor.pytest_collection_modifyitems
+    # has no @pytest.hookimpl, and it writes item._nodeid, which pytest 9 does not read.
+    # LoadGroupScheduling groups whatever follows the last '@' in the collected node id.
+    if getattr(config.option, "dist", "no") != "loadgroup":
+        return
+    suffix = f"@{_NATIVE_LOG_GROUP}"
+    for item in items:
+        if _test_name(item) not in {_LOG_CHECK, _LOG_SHUTDOWN}:
+            continue
+        nodeid = item.nodeid
+        if not nodeid.endswith(suffix):
+            item._id = NodeId.parse(f"{nodeid}{suffix}")  # noqa: SLF001
 
 
 def _mysql_connection(database: str | None = None) -> pymysql.Connection:

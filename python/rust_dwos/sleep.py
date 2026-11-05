@@ -19,18 +19,20 @@ class Sleep:
             return
         instance = _running()
         remaining = instance._blocking(instance._engine.sleep, run, seconds, False)
-        # Waits on the lease keeper, so a cancelled workflow wakes up without polling.
-        if _current_active.get().wait_lost(remaining) is not None:
+        if instance._blocking(instance._engine.wait_sleep, run, _current_active.get(), remaining) is not None:
             raise DBOSLeaseLostError(f"this process no longer owns workflow {run.workflow_id}")
 
     @classmethod
     async def sleep_async(cls, seconds: float) -> None:
         if seconds <= 0:
             return
-        from rust_dwos.dbos import _current_run, _current_step, _running
+        from rust_dwos.dbos import _current_active, _current_run, _current_step, _running
 
         run = _current_run.get()
         if run is None or _current_step.get() is not None:
             await asyncio.sleep(seconds)
             return
-        await asyncio.sleep(await _running()._engine.sleep(run, seconds, False))
+        instance = _running()
+        remaining = await instance._engine.sleep(run, seconds, False)
+        if await instance._engine.wait_sleep(run, _current_active.get(), remaining) is not None:
+            raise DBOSLeaseLostError(f"this process no longer owns workflow {run.workflow_id}")

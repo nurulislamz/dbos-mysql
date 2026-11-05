@@ -44,6 +44,19 @@ impl Store {
             .await
     }
 
+    /// The same test as `renew_lease`, without the write.
+    pub async fn holds_lease(&self, lease: &Lease) -> Result<bool, Error> {
+        let row = sqlx::query(self.sql(
+            "SELECT 1 FROM workflow_status \
+             WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'",
+        ))
+        .bind(lease.workflow_id.as_str())
+        .bind(lease.token.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     async fn record_sleep_once(
         &self,
         lease: &Lease,
@@ -70,6 +83,7 @@ impl Store {
             return Ok(remaining(wake_ms, now_ms, deadline));
         }
 
+        tx = self.live_transaction(tx, lease).await?;
         let wake_ms = now_ms.saturating_add(seconds_to_ms(seconds));
         let output = wake_ms.to_string();
         sqlx::query(self.sql(

@@ -9,13 +9,16 @@ Results come from 3 full runs against SQLite and MySQL 8.4. `pass/fail` in a res
 - **rewritten**: written again in pytest from the upstream scenario.
 - **dropped**: not carried over.
 
-Counts: adapted: 19, dropped: 5, passing: 16, rewritten: 11. Every test that was not dropped passes on both backends.
+Counts: adapted: 34, dropped: 5, passing: 16, rewritten: 11. Every test that was not dropped passes on both backends. The workflow-management rows were run once, on SQLite, MySQL and Postgres.
 
 | Test | Source | Commit | Status | SQLite | MySQL | Reason |
 |---|---|---|---|---|---|---|
 | `test_async_completed_replay_no_hook_rerun` | dbos-transact-py `tests/test_async.py` | 236142b | passing | pass | pass |  |
 | `test_async_step` | dbos-transact-py `tests/test_async.py` | 236142b | passing | pass | pass |  |
 | `test_async_workflow` | dbos-transact-py `tests/test_async.py` | 236142b | passing | pass | pass |  |
+| `test_cancel_after_final_step` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_cancel_resume` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_cancel_workflow_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
 | `test_child_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |
 | `test_child_workflow_assigned_id` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |
 | `test_child_workflow_async` | dbos-transact-py `tests/test_async.py` | 236142b | passing | pass | pass |  |
@@ -25,6 +28,15 @@ Counts: adapted: 19, dropped: 5, passing: 16, rewritten: 11. Every test that was
 | `test_dead_letter_queue_scenario` | dbos-transact-ts `tests/recovery.test.ts` dead-letter-queue | 306b732 | rewritten | pass | pass | Rewritten in pytest. Resume section removed: out of scope for 0.1. |
 | `test_duplicate_registration` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |
 | `test_exception_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |
+| `test_list_workflow` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflow_completed_at` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflow_limit` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflow_prefix` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflow_start_end_times` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflow_steps_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflows_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflows_by_parent` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_list_workflows_has_parent` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
 | `test_local_recovery` | dbos-transact-ts `tests/recovery.test.ts` local-recovery | 306b732 | rewritten | pass | pass | Rewritten in pytest. Authenticated user removed: out of scope for 0.1. |
 | `test_nested_steps` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |
 | `test_nondeterministic_workflow` | dbos-transact-py `tests/test_failures.py` | 236142b | adapted | pass | pass | `fork_workflow` replaced with lease expiry and recovery: fork is out of scope for 0.1. Same assertion. |
@@ -36,6 +48,9 @@ Counts: adapted: 19, dropped: 5, passing: 16, rewritten: 11. Every test that was
 | `test_recovery_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_recovery_workflow_step` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_reject_name_mismatch_throws_in_use` | dbos-transact-ts `tests/oaoo.test.ts` reject-name-mismatch-throws-in-use | 306b732 | rewritten | pass | pass | Rewritten in pytest. Reuse policy is out of scope, so this checks the default conflict error, which still names the recorded workflow. |
+| `test_resume_nonexistent_workflow` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_resume_nonexistent_workflow_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
+| `test_resume_workflow_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
 | `test_retrieve_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | `dbos.sleep` replaced with `time.sleep`: durable sleep is out of scope for 0.1. |
 | `test_retrieve_workflow_async` | dbos-transact-py `tests/test_async.py` | 236142b | adapted | pass | pass | `DBOS.sleep_async` replaced with `asyncio.sleep`: durable sleep is out of scope for 0.1. |
 | `test_simple_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | passing | pass | pass |  |

@@ -30,7 +30,8 @@ async fn create_scratch(pool: &AnyPool) {
 }
 
 // Holds an open transaction with one uncommitted row, as a workflow write in flight would.
-async fn hold_uncommitted_row(store: &Store, hold: Duration) {
+// Signals once the insert has happened, then stays open until the task is aborted.
+async fn hold_uncommitted_row(store: &Store, inserted: tokio::sync::oneshot::Sender<()>) {
     let begin = if store.backend() == "sqlite" {
         "BEGIN IMMEDIATE"
     } else {
@@ -41,8 +42,35 @@ async fn hold_uncommitted_row(store: &Store, hold: Duration) {
         .execute(&mut *tx)
         .await
         .unwrap();
-    tokio::time::sleep(hold).await;
-    tx.commit().await.unwrap();
+    let _ = inserted.send(());
+    std::future::pending::<()>().await;
+    drop(tx);
+}
+
+async fn wait_until_blocked(pool: &AnyPool, backend: &str) {
+    let sql = match backend {
+        "mysql" => {
+            "SELECT COUNT(*) FROM performance_schema.data_lock_waits w \
+             JOIN performance_schema.data_locks l ON w.REQUESTING_ENGINE_LOCK_ID = l.ENGINE_LOCK_ID \
+             WHERE l.OBJECT_SCHEMA = DATABASE()"
+        }
+        "postgres" => {
+            "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+        }
+        other => panic!("no lock wait view for {other}"),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let waiting: i64 = sqlx::query_scalar(sql).fetch_one(pool).await.unwrap();
+        if waiting > 0 {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the saver never blocked on the lock"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 all_dbs!(new_workflow_is_owned_and_pending, backend, {
@@ -454,8 +482,7 @@ all_dbs!(renewing_repeatedly_keeps_ownership, backend, {
 });
 
 all_dbs!(concurrent_starts_of_one_id_have_one_owner, backend, {
-    let db = Arc::new(TestDb::create(backend).await);
-    db.open().await;
+    let db = Arc::new(TestDb::migrated(backend).await);
     let mut starts = Vec::new();
     for _ in 0..8 {
         let db = db.clone();
@@ -475,7 +502,7 @@ all_dbs!(concurrent_starts_of_one_id_have_one_owner, backend, {
 });
 
 all_dbs!(concurrent_saves_of_one_step_keep_one_result, backend, {
-    let db = Arc::new(TestDb::create(backend).await);
+    let db = Arc::new(TestDb::migrated(backend).await);
     let store = db.open().await;
     let lease = start(&store, &workflow("a", LONG)).await;
     let mut saves = Vec::new();
@@ -499,7 +526,7 @@ all_dbs!(concurrent_saves_of_one_step_keep_one_result, backend, {
 });
 
 all_dbs!(racing_processes_never_claim_the_same_workflow, backend, {
-    let db = Arc::new(TestDb::create(backend).await);
+    let db = Arc::new(TestDb::migrated(backend).await);
     let store = db.open().await;
     for index in 0..50 {
         start(&store, &workflow(&format!("wf-{index}"), EXPIRED)).await;
@@ -536,7 +563,7 @@ all_dbs!(
     two_copies_racing_for_one_expired_workflow_have_one_owner,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let first = db.open().await;
         let second = db.open().await;
         let names = names();
@@ -563,9 +590,9 @@ all_dbs!(dropping_an_operation_rolls_back_its_transaction, backend, {
     let (_db, store) = setup(backend).await;
     create_scratch(store.pool()).await;
     let holder = store.clone();
-    let task =
-        tokio::spawn(async move { hold_uncommitted_row(&holder, Duration::from_secs(60)).await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (inserted, inserted_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move { hold_uncommitted_row(&holder, inserted).await });
+    inserted_rx.await.unwrap();
     task.abort();
     let _ = task.await;
     let mut rows = 1;
@@ -574,13 +601,13 @@ all_dbs!(dropping_an_operation_rolls_back_its_transaction, backend, {
         if rows == 0 {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     assert_eq!(rows, 0);
 });
 
 all_dbs!(contending_workers_finish_everything_once, backend, {
-    let db = Arc::new(TestDb::create(backend).await);
+    let db = Arc::new(TestDb::migrated(backend).await);
     let store = db.open().await;
     for index in 0..100 {
         start(&store, &workflow(&format!("wf-{index}"), EXPIRED)).await;
@@ -629,7 +656,7 @@ all_dbs!(contending_workers_finish_everything_once, backend, {
 });
 
 all_dbs!(state_survives_reopening_the_database, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     {
         let store = db.open().await;
         let lease = start(&store, &workflow("a", EXPIRED)).await;
@@ -687,13 +714,14 @@ async fn crash_child() {
         .unwrap();
     create_scratch(store.pool()).await;
     let holder = store.clone();
-    tokio::spawn(async move { hold_uncommitted_row(&holder, Duration::from_secs(60)).await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (inserted, inserted_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move { hold_uncommitted_row(&holder, inserted).await });
+    inserted_rx.await.unwrap();
     std::process::abort();
 }
 
 all_dbs!(crash_keeps_committed_state_and_drops_the_rest, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["crash_child", "--exact", "--ignored", "--nocapture"])
         .env("DBOS_CRASH_URL", &db.url)
@@ -713,7 +741,7 @@ all_dbs!(crash_keeps_committed_state_and_drops_the_rest, backend, {
         if rows == 0 {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         rows = scratch_rows(store.pool()).await;
     }
     assert_eq!(rows, 0);
@@ -783,33 +811,53 @@ mod mysql_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lease_renewal_is_not_starved_by_busy_work() {
-        let (_db, store) = setup(Backend::MySql).await;
+        let (db, store) = setup(Backend::MySql).await;
         let lease = start(&store, &workflow("a", LONG)).await;
         let mut holders = Vec::new();
         for _ in 0..12 {
             let holder = store.clone();
             holders.push(tokio::spawn(async move {
-                sqlx::query("SELECT SLEEP(1.5)")
+                sqlx::query("SELECT SLEEP(0.5)")
                     .execute(holder.pool())
                     .await
             }));
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut watcher = MySqlConnection::connect(&db.url).await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let busy: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.processlist WHERE db = DATABASE() AND info LIKE 'SELECT SLEEP%'",
+            )
+            .fetch_one(&mut watcher)
+            .await
+            .unwrap();
+            if busy >= 10 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pool never filled with SLEEP queries ({busy})"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         let started = std::time::Instant::now();
         store.renew_lease(&lease, LONG).await.unwrap();
         assert!(
-            started.elapsed() < Duration::from_millis(800),
+            started.elapsed() < Duration::from_millis(200),
             "took {:?}",
             started.elapsed()
         );
+        for holder in &holders {
+            holder.abort();
+        }
         for holder in holders {
-            holder.await.unwrap().unwrap();
+            let _ = holder.await;
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_real_deadlock_is_retried() {
-        let db = TestDb::create(Backend::MySql).await;
+        let db = TestDb::migrated(Backend::MySql).await;
         let store = db.open().await;
         let lease = start(&store, &workflow("a", LONG)).await;
 
@@ -834,7 +882,7 @@ mod mysql_only {
         let saver = store.clone();
         let saving =
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_until_blocked(store.pool(), store.backend()).await;
 
         sqlx::query("SELECT 1 FROM workflow_status WHERE workflow_uuid = 'a' FOR UPDATE")
             .fetch_optional(&mut blocker)
@@ -855,7 +903,7 @@ mod mysql_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn step_save_waits_for_a_takeover_in_progress() {
-        let db = TestDb::create(Backend::MySql).await;
+        let db = TestDb::migrated(Backend::MySql).await;
         let store = db.open().await;
         let stale = start(&store, &workflow("a", LONG)).await;
 
@@ -870,7 +918,7 @@ mod mysql_only {
         let lease = stale.clone();
         let saving =
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_until_blocked(store.pool(), store.backend()).await;
 
         sqlx::query(
             "UPDATE workflow_status SET lease_token = 'new-owner' WHERE workflow_uuid = 'a'",
@@ -890,7 +938,7 @@ mod mysql_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn killed_connections_are_replaced() {
-        let db = TestDb::create(Backend::MySql).await;
+        let db = TestDb::migrated(Backend::MySql).await;
         let store = db.open().await;
         start(&store, &workflow("a", LONG)).await;
 
@@ -965,7 +1013,7 @@ mod postgres_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn postgresql_scheme_is_accepted() {
-        let db = TestDb::create(Backend::Postgres).await;
+        let db = TestDb::migrated(Backend::Postgres).await;
         let url = db.url.replacen("postgres://", "postgresql://", 1);
         let store = Store::connect(&url).await.unwrap();
         assert_eq!(store.backend(), "postgres");
@@ -1005,33 +1053,53 @@ mod postgres_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lease_renewal_is_not_starved_by_busy_work() {
-        let (_db, store) = setup(Backend::Postgres).await;
+        let (db, store) = setup(Backend::Postgres).await;
         let lease = start(&store, &workflow("a", LONG)).await;
         let mut holders = Vec::new();
         for _ in 0..12 {
             let holder = store.clone();
             holders.push(tokio::spawn(async move {
-                sqlx::query("SELECT 1 FROM (SELECT pg_sleep(1.5)) AS slept")
+                sqlx::query("SELECT 1 FROM (SELECT pg_sleep(0.5)) AS slept")
                     .execute(holder.pool())
                     .await
             }));
         }
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut watcher = PgConnection::connect(&db.url).await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let busy: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND query LIKE 'SELECT 1 FROM (SELECT pg_sleep%'",
+            )
+            .fetch_one(&mut watcher)
+            .await
+            .unwrap();
+            if busy >= 10 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pool never filled with pg_sleep queries ({busy})"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         let started = std::time::Instant::now();
         store.renew_lease(&lease, LONG).await.unwrap();
         assert!(
-            started.elapsed() < Duration::from_millis(800),
+            started.elapsed() < Duration::from_millis(200),
             "took {:?}",
             started.elapsed()
         );
+        for holder in &holders {
+            holder.abort();
+        }
         for holder in holders {
-            holder.await.unwrap().unwrap();
+            let _ = holder.await;
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_real_deadlock_is_retried() {
-        let db = TestDb::create(Backend::Postgres).await;
+        let db = TestDb::migrated(Backend::Postgres).await;
         let store = db.open().await;
         let lease = start(&store, &workflow("a", LONG)).await;
 
@@ -1049,7 +1117,7 @@ mod postgres_only {
         let saver = store.clone();
         let saving =
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_until_blocked(store.pool(), store.backend()).await;
 
         // The saver holds the row and waits on the blocker's insert; now the blocker waits on the
         // row. The saver has waited longest, so its deadlock check fires first and it is the one
@@ -1073,7 +1141,7 @@ mod postgres_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn step_save_waits_for_a_takeover_in_progress() {
-        let db = TestDb::create(Backend::Postgres).await;
+        let db = TestDb::migrated(Backend::Postgres).await;
         let store = db.open().await;
         let stale = start(&store, &workflow("a", LONG)).await;
 
@@ -1088,7 +1156,7 @@ mod postgres_only {
         let lease = stale.clone();
         let saving =
             tokio::spawn(async move { saver.save_step(&lease, 1, "step", &output("1")).await });
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_until_blocked(store.pool(), store.backend()).await;
 
         sqlx::query(
             "UPDATE workflow_status SET lease_token = 'new-owner' WHERE workflow_uuid = 'a'",
@@ -1108,7 +1176,7 @@ mod postgres_only {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn killed_connections_are_replaced() {
-        let db = TestDb::create(Backend::Postgres).await;
+        let db = TestDb::migrated(Backend::Postgres).await;
         let store = db.open().await;
         start(&store, &workflow("a", LONG)).await;
 
@@ -1206,7 +1274,7 @@ all_dbs!(
 );
 
 all_dbs!(read_only_connection_lists_without_writing, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let writer = db.open().await;
     start(&writer, &workflow("a", LONG)).await;
     let reader = Store::connect_read_only(&db.url).await.unwrap();

@@ -51,7 +51,7 @@ async fn queue(engine: &Engine, concurrency: u32) {
 }
 
 all_dbs!(fifo_and_identity_survive_duplicate_enqueue, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     queue(&engine, 3).await;
     queue(&engine, 3).await;
@@ -110,7 +110,7 @@ all_dbs!(
     ordinary_recovery_and_resume_cannot_bypass_admission,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, config()).await;
         queue(&engine, 1).await;
         engine.enqueue("q", begin("queued")).await.unwrap();
@@ -166,7 +166,7 @@ all_dbs!(
     global_capacity_counts_unsupported_owners_and_serializes_workers,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let producer = engine(
             &db,
             EngineConfig {
@@ -213,7 +213,7 @@ all_dbs!(
     expired_owners_are_fenced_and_dead_letters_do_not_block_fifo,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(
             &db,
             EngineConfig {
@@ -257,13 +257,13 @@ all_dbs!(
 );
 
 all_dbs!(relative_timeout_starts_on_first_admission, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     queue(&engine, 1).await;
     let mut timed = begin("timed");
     timed.timeout_ms = Some(100);
     engine.enqueue("q", timed).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
     let waiting = engine.get_status("timed").await.unwrap();
     assert_eq!(waiting.status, Status::Pending);
     assert_eq!(waiting.deadline_epoch_ms, None);
@@ -277,7 +277,7 @@ all_dbs!(
     queued_children_replay_ids_and_follow_deadline_policy,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, config()).await;
         queue(&engine, 2).await;
         let mut parent_begin = begin("parent");
@@ -322,7 +322,10 @@ all_dbs!(
                 .deadline_epoch_ms,
             None
         );
-        tokio::time::sleep(Duration::from_millis(550)).await;
+        let deadline = parent.deadline_epoch_ms().expect("parent has a deadline");
+        let now = engine.store().now_ms().await.unwrap();
+        let remaining = deadline.saturating_sub(now).saturating_add(50) as u64;
+        tokio::time::sleep(Duration::from_millis(remaining)).await;
         assert_eq!(
             engine.get_status("explicit-child").await.unwrap().status,
             Status::Cancelled
@@ -334,7 +337,7 @@ all_dbs!(
 );
 
 all_dbs!(local_active_runs_bound_queue_batches, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(
         &db,
         EngineConfig {
@@ -352,4 +355,94 @@ all_dbs!(local_active_runs_bound_queue_batches, backend, {
     assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
     drop(active);
     assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+});
+
+// Far longer than any test, so only a wake can end a wait with this interval.
+const NO_TIMER: Duration = Duration::from_secs(3600);
+const BOUND: Duration = Duration::from_secs(30);
+
+fn spawn_claims(engine: &Engine, interval: Duration) -> tokio::task::JoinHandle<Vec<Claimed>> {
+    let engine = engine.clone();
+    tokio::spawn(async move {
+        loop {
+            let claims = engine.wait_queue_claims("q", &names(), interval).await;
+            if !claims.is_empty() {
+                return claims;
+            }
+        }
+    })
+}
+
+async fn claims_in_time(waiter: tokio::task::JoinHandle<Vec<Claimed>>) -> Vec<Claimed> {
+    tokio::time::timeout(BOUND, waiter)
+        .await
+        .expect("the queue wait did not end in time")
+        .unwrap()
+}
+
+all_dbs!(every_enqueue_wakes_a_queue_wait, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1000).await;
+    // Each round races the enqueue against the claim. A lost wakeup hangs on NO_TIMER.
+    for round in 0..30 {
+        let id = format!("queued-{round}");
+        let waiter = spawn_claims(&engine, NO_TIMER);
+        engine.enqueue("q", begin(&id)).await.unwrap();
+        let claims = claims_in_time(waiter).await;
+        assert_eq!(claims[0].lease.workflow_id, id);
+    }
+    assert_eq!(engine.waiting_keys(), 0);
+});
+
+all_dbs!(a_freed_slot_wakes_a_queue_wait, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    engine.enqueue("q", begin("first")).await.unwrap();
+    engine.enqueue("q", begin("second")).await.unwrap();
+    let claimed = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(claimed.len(), 1);
+    let waiter = spawn_claims(&engine, NO_TIMER);
+    let first = run(claimed.into_iter().next().unwrap());
+    engine
+        .finish(&first, Outcome::Success("1".to_owned()))
+        .await
+        .unwrap();
+    engine.wake_queue("q");
+    let claims = claims_in_time(waiter).await;
+    assert_eq!(claims[0].lease.workflow_id, "second");
+});
+
+all_dbs!(a_second_engine_enqueue_is_seen_at_the_interval, backend, {
+    let db = TestDb::migrated(backend).await;
+    let (waiting, enqueuing) = (engine(&db, config()).await, engine(&db, config()).await);
+    queue(&waiting, 1000).await;
+    let waiter = spawn_claims(&waiting, Duration::from_millis(20));
+    enqueuing.enqueue("q", begin("queued")).await.unwrap();
+    let claims = claims_in_time(waiter).await;
+    assert_eq!(claims[0].lease.workflow_id, "queued");
+    assert_eq!(waiting.wakeups_received(), 0);
+});
+
+all_dbs!(an_empty_or_unreadable_queue_waits_its_interval, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    let interval = Duration::from_millis(50);
+    for name in ["q", ""] {
+        assert_eq!(
+            engine.claim_queue(name, &names()).await.is_err(),
+            name.is_empty()
+        );
+        let started = std::time::Instant::now();
+        assert!(
+            engine
+                .wait_queue_claims(name, &names(), interval)
+                .await
+                .is_empty()
+        );
+        assert!(started.elapsed() >= interval);
+    }
+    assert_eq!(engine.waiting_keys(), 0);
 });

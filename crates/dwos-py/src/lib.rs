@@ -5,8 +5,8 @@ use std::time::Duration;
 use dwos_core::{
     ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Ended, Engine, EngineConfig,
     Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, Run,
-    StepAttempts, StepDecision, StepPolicy, Workflow, WorkflowResult, pickle_from_serializer,
-    recovery_limit, recovery_limit_of,
+    StepAttempts, StepDecision, StepExpiry, StepPolicy, StepWatch, Workflow, WorkflowResult,
+    pickle_from_serializer, recovery_limit, recovery_limit_of,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3::create_exception;
@@ -244,7 +244,7 @@ fn finished_to_py(finished: Finished) -> Option<PyResult_> {
 }
 
 #[pyclass(name = "ActiveRun", frozen)]
-struct PyActiveRun(Arc<ActiveRun>);
+pub(crate) struct PyActiveRun(pub(crate) Arc<ActiveRun>);
 
 #[pymethods]
 impl PyActiveRun {
@@ -278,11 +278,14 @@ struct PyStepPolicy(StepPolicy);
 #[pymethods]
 impl PyStepPolicy {
     #[new]
+    #[pyo3(signature = (retries_allowed, interval_seconds, max_attempts, backoff_rate, timeout_seconds=None, heartbeat_timeout_seconds=None))]
     fn new(
         retries_allowed: bool,
         interval_seconds: f64,
         max_attempts: u32,
         backoff_rate: f64,
+        timeout_seconds: Option<f64>,
+        heartbeat_timeout_seconds: Option<f64>,
     ) -> PyResult<Self> {
         StepPolicy::new(
             retries_allowed,
@@ -290,6 +293,7 @@ impl PyStepPolicy {
             max_attempts,
             backoff_rate,
         )
+        .and_then(|policy| policy.with_timeouts(timeout_seconds, heartbeat_timeout_seconds))
         .map(Self)
         .map_err(to_py)
     }
@@ -307,6 +311,33 @@ impl PyStepPolicy {
     fn attempts(&self) -> PyStepAttempts {
         PyStepAttempts(self.0.attempts())
     }
+
+    fn watch(&self) -> Option<PyStepWatch> {
+        self.0.watch().map(|watch| PyStepWatch(Arc::new(watch)))
+    }
+}
+
+/// `beat` and `finish` return why the attempt expired, or `None` if it has not.
+#[pyclass(name = "StepWatch", frozen)]
+struct PyStepWatch(Arc<StepWatch>);
+
+#[pymethods]
+impl PyStepWatch {
+    fn beat(&self) -> Option<&'static str> {
+        self.0.beat().err().map(StepExpiry::as_str)
+    }
+
+    fn finish(&self) -> Option<&'static str> {
+        self.0.finish().err().map(StepExpiry::as_str)
+    }
+
+    #[pyo3(signature = (*, blocking=false))]
+    fn expired<'py>(&self, py: Python<'py>, blocking: bool) -> PyResult<Bound<'py, PyAny>> {
+        let watch = self.0.clone();
+        dispatch(py, blocking, async move {
+            Ok(watch.expired().await.map(StepExpiry::as_str))
+        })
+    }
 }
 
 #[pyclass(name = "StepAttempts")]
@@ -318,8 +349,14 @@ impl PyStepAttempts {
         self.0.status()
     }
 
-    fn failed(&mut self) -> Option<f64> {
-        self.0.failed().map(|delay| delay.as_secs_f64())
+    #[getter]
+    fn wraps_failures(&self) -> bool {
+        self.0.wraps_failures()
+    }
+
+    #[pyo3(signature = (retryable=true))]
+    fn failed(&mut self, retryable: bool) -> Option<f64> {
+        self.0.failed(retryable).map(|delay| delay.as_secs_f64())
     }
 }
 
@@ -633,6 +670,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyActiveRun>()?;
     m.add_class::<PyStepPolicy>()?;
     m.add_class::<PyStepAttempts>()?;
+    m.add_class::<PyStepWatch>()?;
     m.add_class::<events::PyPoll>()?;
     m.add_class::<events::PySendResult>()?;
     m.add_class::<events::PyEventRow>()?;

@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use std::time::Duration;
 
 use dwos_core::{Begin, Error, ParentStep, recovery_limit};
 use pyo3::prelude::*;
@@ -8,6 +9,23 @@ use super::{PyEngine, PyRun, claims_to_py, dispatch, to_py};
 
 #[pymethods]
 impl PyEngine {
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn get_queue<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .get_queue(&name)
+                .await
+                .map(|queue| queue.map(NonZeroU32::get))
+                .map_err(to_py)
+        })
+    }
+
     /// `None` means no limit, which the core stores as the largest concurrency.
     #[pyo3(signature = (name, concurrency=None, *, blocking=false))]
     fn ensure_queue<'py>(
@@ -85,6 +103,25 @@ impl PyEngine {
         let engine = self.0.clone();
         future_into_py(py, async move {
             claims_to_py(engine.claim_queue(&queue, &names).await.map_err(to_py)?)
+        })
+    }
+
+    fn wake_queue(&self, queue: &str) {
+        self.0.wake_queue(queue);
+    }
+
+    fn wait_queue_claims<'py>(
+        &self,
+        py: Python<'py>,
+        queue: String,
+        names: Vec<String>,
+        interval_seconds: f64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // A positive interval too large for a Duration only ever means "wait as long as possible".
+        let interval = Duration::try_from_secs_f64(interval_seconds).unwrap_or(Duration::MAX);
+        let engine = self.0.clone();
+        future_into_py(py, async move {
+            claims_to_py(engine.wait_queue_claims(&queue, &names, interval).await)
         })
     }
 }

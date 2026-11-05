@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
     from rust_dwos.dbos import WorkflowHandle, WorkflowHandleAsync
 
-DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
+DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 0.25
 
 # DBOS's own queues are named under this prefix, so users may not claim it.
 RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
@@ -85,14 +85,12 @@ class Queue:
         dbos = _dbos()
         instance = dbos._running()
         workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs))
-        instance._wake_queue(self.name)
         return dbos.WorkflowHandle(workflow_id)
 
     async def enqueue_async(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
         dbos = _dbos()
         instance = dbos._running()
         workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs))
-        instance._wake_queue(self.name)
         return dbos.WorkflowHandleAsync(workflow_id)
 
 
@@ -133,12 +131,25 @@ class Queues:
 
     @classmethod
     def retrieve_queue(cls, name: str) -> Queue | None:
-        # shortcut: finds queues registered in this process only, because the core has no read for a queue. Upgrade when it does.
-        return _dbos()._running()._queues.get(name)
+        instance = _dbos()._running()
+        known = instance._queues.get(name)
+        if known is not None:
+            return known
+        concurrency = instance._blocking(instance._engine.get_queue, name)
+        if concurrency is None:
+            return None
+        return Queue(name, None if concurrency == 2**32 - 1 else concurrency, token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod
     async def retrieve_queue_async(cls, name: str) -> Queue | None:
-        return cls.retrieve_queue(name)
+        instance = _dbos()._running()
+        known = instance._queues.get(name)
+        if known is not None:
+            return known
+        concurrency = await instance._engine.get_queue(name)
+        if concurrency is None:
+            return None
+        return Queue(name, None if concurrency == 2**32 - 1 else concurrency, token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod
     def enqueue_workflow(cls, queue_name: str, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:

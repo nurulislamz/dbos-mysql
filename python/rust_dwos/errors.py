@@ -37,6 +37,18 @@ class DBOSMaxStepRetriesExceeded(DBOSException):
         return (self.__class__, (self.step_name, self.max_retries, self.errors))
 
 
+class DBOSStepTimeoutError(DBOSException):
+    """One step attempt ran past its deadline or missed its heartbeat. Retried like any other failure."""
+
+    def __init__(self, step_name: str, reason: str) -> None:
+        self.step_name = step_name
+        self.reason = reason
+        super().__init__(f"An attempt of step {step_name} expired: {reason}")
+
+    def __reduce__(self) -> tuple[type[DBOSStepTimeoutError], tuple[str, str]]:
+        return (self.__class__, (self.step_name, self.reason))
+
+
 class MaxRecoveryAttemptsExceededError(DBOSException):
     def __init__(self, workflow_id: str, max_retries: int) -> None:
         self.workflow_id = workflow_id
@@ -103,6 +115,7 @@ __all__ = [
     "DBOSNonExistentWorkflowError",
     "DBOSRecordedError",
     "DBOSStepNondeterminismError",
+    "DBOSStepTimeoutError",
     "DBOSUnexpectedStepError",
     "DBOSWorkflowCancelledError",
     "MaxRecoveryAttemptsExceededError",

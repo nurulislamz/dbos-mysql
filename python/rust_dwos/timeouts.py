@@ -4,6 +4,8 @@ import contextvars
 from dataclasses import dataclass
 from typing import Any
 
+from rust_dwos.errors import DBOSException
+
 _timeout_override: contextvars.ContextVar[tuple[int | None, bool] | None] = contextvars.ContextVar("dbos_timeout", default=None)
 
 
@@ -31,6 +33,8 @@ class SetWorkflowTimeout:
         self._token: contextvars.Token[tuple[int | None, bool] | None] | None = None
 
     def __enter__(self) -> SetWorkflowTimeout:
+        if self._token is not None:
+            raise DBOSException(f"This {type(self).__name__} is already in use; create a new one for each with block.")
         self._token = _timeout_override.set((self.workflow_timeout_ms, True))
         return self
 

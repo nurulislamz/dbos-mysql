@@ -905,14 +905,18 @@ async fn wait_for_waiters(pool: &AnyPool, backend: Backend, waiters: i64) {
              AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
         }
     };
-    for _ in 0..600 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
         let count: i64 = sqlx::query_scalar(sql).fetch_one(pool).await.unwrap();
         if count == waiters {
             return;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{waiters} starters never waited for the migration lock"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    panic!("{waiters} starters never waited for the migration lock");
 }
 
 async fn race_starters(backend: Backend, url: &str, pool: &AnyPool) {

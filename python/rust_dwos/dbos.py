@@ -11,8 +11,8 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, NotRequired, TypedDict
 
@@ -21,8 +21,10 @@ from rust_dwos.errors import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
     DBOSException,
+    DBOSLeaseLostError,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSStepTimeoutError,
     DBOSWorkflowCancelledError,
 )
 from rust_dwos.events import Events
@@ -37,6 +39,9 @@ logger = logging.getLogger("dbos")
 _ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
 _PLAIN_CODEC = Codec(lambda: None)
 _SYSTEM_EXIT = object()
+# This process writes the row just before its body finishes, and a poll can land in between.
+# shortcut: a body hung past a row another run finished delays get_result by this, upgrade if conclude can signal handles.
+_BODY_SETTLE_SECONDS = 1.0
 
 
 class DBOSConfig(TypedDict):
@@ -82,6 +87,8 @@ class StepStatus:
     step_id: int
     current_attempt: int | None
     max_attempts: int | None
+    _name: str = field(default="", repr=False, compare=False)
+    _watch: _native.StepWatch | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -167,6 +174,11 @@ async def _call(method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return await method(*args, **kwargs)
 
 
+def _retrieve_exception(future: asyncio.Future[Any]) -> None:
+    if not future.cancelled():
+        future.exception()
+
+
 class WorkflowHandle[T]:
     def __init__(self, workflow_id: str, local: concurrent.futures.Future[T] | None = None) -> None:
         self.workflow_id = workflow_id
@@ -177,12 +189,35 @@ class WorkflowHandle[T]:
 
     def get_result(self) -> T:
         if self._local is not None:
+            result = self._row_before_body(self._local)
+            if result is not None:
+                return _decode_result(result)
             try:
                 return self._local.result()
             except DBOSAwaitedWorkflowCancelledError:
                 pass  # It may have been resumed since, so the stored row decides.
         instance = _running()
         return _decode_result(instance._waiting(instance._engine.await_result, self.workflow_id))
+
+    def _row_before_body(self, local: concurrent.futures.Future[T]) -> _native.WorkflowResult | None:
+        # None means the body answers: it finished, or no row can be read.
+        if local.done():
+            return None
+        try:
+            instance = _running()
+            stored = instance._state.submit(_call(instance._engine.await_result, self.workflow_id))
+        except DBOSException:
+            return None
+        try:
+            concurrent.futures.wait([local, stored], return_when=concurrent.futures.FIRST_COMPLETED)
+            if local.done() or stored.cancelled() or stored.exception() is not None:
+                return None
+            result = stored.result()
+            if result.kind != "cancelled":
+                concurrent.futures.wait([local], timeout=_BODY_SETTLE_SECONDS)
+            return None if local.done() else result
+        finally:
+            stored.cancel()  # An abandoned await_result would poll in Rust until the row is final.
 
     def get_status(self) -> WorkflowStatus:
         instance = _running()
@@ -199,15 +234,37 @@ class WorkflowHandleAsync[T]:
 
     async def get_result(self) -> T:
         local = self._local
-        try:
-            if isinstance(local, asyncio.Task):
-                if local.get_loop() is asyncio.get_running_loop():
-                    return await asyncio.shield(local)
-            elif local is not None:
-                return await asyncio.shield(asyncio.wrap_future(local))
-        except DBOSAwaitedWorkflowCancelledError:
-            pass  # It may have been resumed since, so the stored row decides.
+        if isinstance(local, asyncio.Task) and local.get_loop() is not asyncio.get_running_loop():
+            local = None
+        if local is not None:
+            watched = local if isinstance(local, asyncio.Task) else asyncio.wrap_future(local)
+            watched.add_done_callback(_retrieve_exception)
+            result = None if local.done() else await self._row_before_body(watched)
+            if result is not None:
+                return _decode_result(result)
+            try:
+                return await asyncio.shield(watched)
+            except DBOSAwaitedWorkflowCancelledError:
+                pass  # It may have been resumed since, so the stored row decides.
         return _decode_result(await _running()._engine.await_result(self.workflow_id))
+
+    async def _row_before_body(self, watched: asyncio.Future[T]) -> _native.WorkflowResult | None:
+        # None means the body answers: it finished, or no row can be read.
+        try:
+            stored = asyncio.ensure_future(_running()._engine.await_result(self.workflow_id))
+        except DBOSException:
+            return None
+        stored.add_done_callback(_retrieve_exception)
+        try:
+            await asyncio.wait({watched, stored}, return_when=asyncio.FIRST_COMPLETED)
+            if watched.done() or stored.cancelled() or stored.exception() is not None:
+                return None
+            result = stored.result()
+            if result.kind != "cancelled":
+                await asyncio.wait({watched}, timeout=_BODY_SETTLE_SECONDS)
+            return None if watched.done() else result
+        finally:
+            stored.cancel()  # An abandoned await_result would poll in Rust until the row is final.
 
     async def get_status(self) -> WorkflowStatus:
         return _status_of(await _running()._engine.get_status(self.workflow_id))
@@ -251,7 +308,6 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         self._app_loop: asyncio.AbstractEventLoop | None = None
         self._app_loop_watch: asyncio.Task[Any] | None = None
         self._queues: dict[str, Queue] = {}
-        self._queue_wakes: dict[str, asyncio.Event] = {}
         self._queue_loops: list[concurrent.futures.Future[Any]] = []
 
     @classmethod
@@ -364,15 +420,18 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         interval_seconds: float = 1.0,
         max_attempts: int = 3,
         backoff_rate: float = 2.0,
+        should_retry: Callable[[BaseException], bool | Awaitable[bool]] | None = None,
+        timeout_seconds: float | None = None,
+        heartbeat_timeout_seconds: float | None = None,
     ) -> Callable[..., Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             step_name = name or function.__qualname__
             codec = Codec(function)
-            policy = _native.StepPolicy(retries_allowed, interval_seconds, max_attempts, backoff_rate)
+            policy = _native.StepPolicy(retries_allowed, interval_seconds, max_attempts, backoff_rate, timeout_seconds, heartbeat_timeout_seconds)
             is_async = inspect.iscoroutinefunction(function)
 
-            def failure(errors: list[Exception]) -> Exception:
-                if not policy.wraps_failures:
+            def failure(errors: list[Exception], attempts: _native.StepAttempts) -> Exception:
+                if not attempts.wraps_failures:
                     return errors[-1]
                 return DBOSMaxStepRetriesExceeded(step_name, policy.max_attempts, errors)
 
@@ -381,6 +440,8 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                 run = _current_run.get()
                 if run is None:
                     return function(*args, **kwargs)
+                if should_retry is not None and inspect.iscoroutinefunction(should_retry):
+                    raise DBOSException(f"Step {step_name} is sync but should_retry is async. Use an async step to pair with an async validator.")
                 instance = _running()
                 step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name, _current_step.get() is not None)
                 if step_id is None:
@@ -390,12 +451,18 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                 errors: list[Exception] = []
                 attempts = policy.attempts()
                 while True:
-                    reset = _current_step.set(StepStatus(step_id, *attempts.status()))
+                    watch = policy.watch()
+                    reset = _current_step.set(StepStatus(step_id, *attempts.status(), step_name, watch))
                     try:
-                        value = function(*args, **kwargs)
+                        value = function(*args, **kwargs) if watch is None else _call_watched(instance, watch, step_name, function, args, kwargs)
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
-                        delay = attempts.failed()
+                        retryable = should_retry(error) if should_retry is not None and policy.wraps_failures else True
+                        if inspect.isawaitable(retryable):
+                            if inspect.iscoroutine(retryable):
+                                retryable.close()
+                            raise DBOSException(f"Step {step_name} is sync but should_retry is async. Use an async step to pair with an async validator.")
+                        delay = attempts.failed(bool(retryable))
                         if delay is None:
                             break
                         time.sleep(delay)
@@ -403,7 +470,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                     finally:
                         _current_step.reset(reset)
                     return instance._save_success_sync(run, step_id, step_name, codec, value)
-                raise instance._save_failure_sync(run, step_id, step_name, failure(errors))
+                raise instance._save_failure_sync(run, step_id, step_name, failure(errors, attempts))
 
             @functools.wraps(function)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -419,12 +486,16 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                 errors: list[Exception] = []
                 attempts = policy.attempts()
                 while True:
-                    reset = _current_step.set(StepStatus(step_id, *attempts.status()))
+                    watch = policy.watch()
+                    reset = _current_step.set(StepStatus(step_id, *attempts.status(), step_name, watch))
                     try:
-                        value = await function(*args, **kwargs)
+                        value = await function(*args, **kwargs) if watch is None else await _await_watched(watch, step_name, function(*args, **kwargs))
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
-                        delay = attempts.failed()
+                        retryable = should_retry(error) if should_retry is not None and policy.wraps_failures else True
+                        if inspect.isawaitable(retryable):
+                            retryable = await retryable
+                        delay = attempts.failed(bool(retryable))
                         if delay is None:
                             break
                         await asyncio.sleep(delay)
@@ -432,7 +503,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                     finally:
                         _current_step.reset(reset)
                     return await instance._save_success(run, step_id, step_name, codec, value)
-                raise await instance._save_failure(run, step_id, step_name, failure(errors))
+                raise await instance._save_failure(run, step_id, step_name, failure(errors, attempts))
 
             wrapper: Any = async_wrapper if is_async else sync_wrapper
             temp = _Workflow(f"<temp>.{step_name}", wrapper, codec, is_async, _native.DEFAULT_MAX_RECOVERY_ATTEMPTS)
@@ -445,6 +516,14 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
             return wrapper
 
         return decorate
+
+    @classmethod
+    def heartbeat(cls) -> None:
+        step = _current_step.get()
+        if step is None:
+            raise DBOSException("DBOS.heartbeat() must be called from inside a step")
+        if step._watch is not None and (reason := step._watch.beat()) is not None:
+            raise DBOSStepTimeoutError(step._name, reason)
 
     @classmethod
     def start_workflow(cls, function: Callable[..., Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
@@ -604,7 +683,8 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
                 await self._engine.conclude(run)
                 return None
             return await self._finish_success(info, run, value)
-        if isinstance(error, DBOSWorkflowCancelledError):
+        # A lost lease may still look owned in the row, so its error must not be offered as the result.
+        if isinstance(error, DBOSWorkflowCancelledError | DBOSLeaseLostError):
             await self._engine.conclude(run)
             return _decode_result(await self._engine.await_result(run.workflow_id), info)
         if isinstance(error, Exception):
@@ -618,7 +698,8 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         context.run(_bind_run, run, active)
         try:
             value = context.run(info.function, *args, **kwargs)
-        except DBOSWorkflowCancelledError:
+        # A lost lease may still look owned in the row, so its error must not be offered as the result.
+        except (DBOSWorkflowCancelledError, DBOSLeaseLostError):
             self._stop_keeper(active)
             self._blocking(self._engine.conclude, run)
             return _decode_result(self._waiting(self._engine.await_result, run.workflow_id), info)
@@ -704,35 +785,19 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         return known
 
     def _wake_queue(self, name: str) -> None:
-        wake = self._queue_wakes.get(name)
-        if wake is not None and not self._workflows._closing:
-            self._workflows._loop.call_soon_threadsafe(wake.set)
+        self._engine.wake_queue(name)
 
     def _wake_queues(self) -> None:
-        for name in self._queue_wakes:
+        for name in list(self._queues):
             self._wake_queue(name)
 
     async def _queue_loop(self, queue: Queue) -> None:
-        # Local enqueues and finishes wake this at once. The interval only matters for work from other processes.
-        wake = self._queue_wakes[queue.name] = asyncio.Event()
         while True:
-            wake.clear()
-            try:
-                claims = await self._engine.claim_queue(queue.name, list(_registry))
-            except Exception:  # noqa: BLE001
-                logger.exception(f"Could not read queue {queue.name}. It will be tried again")
-                claims = []
-            for claim in claims:
+            for claim in await self._engine.wait_queue_claims(queue.name, list(_registry), queue.polling_interval_sec):
                 try:
                     self._launch_claim(queue, claim)
                 except Exception:  # noqa: BLE001
                     logger.exception(f"Could not start workflow {claim.workflow_id}. It will be retried when its lease expires")
-            if claims:
-                continue
-            try:
-                await asyncio.wait_for(wake.wait(), queue.polling_interval_sec)
-            except TimeoutError:
-                pass
 
     def _launch_claim(self, queue: Queue, claim: _native.Claim) -> None:
         info = _registry[claim.name]
@@ -840,6 +905,36 @@ def _in_daemon_thread[T](function: Callable[..., T], *args: Any) -> concurrent.f
 
     threading.Thread(target=target, name="dbos-sync", daemon=True).start()
     return future
+
+
+def _call_watched(instance: DBOS, watch: _native.StepWatch, step_name: str, function: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    # shortcut: Python cannot kill a thread, so an expired body runs on until it calls DBOS.heartbeat() or returns,
+    # and it can overlap the next attempt. Upgrade by running such steps in a subprocess if that overlap matters.
+    body = _in_daemon_thread(functools.partial(contextvars.copy_context().run, function, *args, **kwargs))
+    body.add_done_callback(lambda _: watch.finish())
+    reason = instance._blocking(watch.expired)
+    if reason is not None:
+        raise DBOSStepTimeoutError(step_name, reason)
+    return body.result()
+
+
+async def _await_watched(watch: _native.StepWatch, step_name: str, coroutine: Coroutine[Any, Any, Any]) -> Any:
+    body = asyncio.ensure_future(coroutine)
+    expired = asyncio.ensure_future(watch.expired())
+    try:
+        await asyncio.wait({body, expired}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        body.cancel()
+        await asyncio.gather(body, return_exceptions=True)
+        raise
+    finally:
+        expired.cancel()
+    reason = watch.finish()
+    if reason is None:
+        return body.result()
+    body.cancel()
+    await asyncio.gather(body, return_exceptions=True)
+    raise DBOSStepTimeoutError(step_name, reason)
 
 
 def _cancel_task(task: asyncio.Task[Any]) -> None:

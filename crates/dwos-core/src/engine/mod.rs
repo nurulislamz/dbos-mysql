@@ -1,6 +1,9 @@
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+
+use tokio::sync::Notify;
 
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
@@ -15,13 +18,16 @@ mod recovery;
 mod sleep;
 mod steps;
 mod timeouts;
+mod wakeup;
 mod workflow_management;
 
 pub use crate::store::{EventRow, MessageRow, Poll, SendOutcome, StoredValue};
 pub use steps::{StepAttempts, StepDecision, StepPolicy};
+use wakeup::{WakeHub, WakeKey};
 
 const POLL_MIN: Duration = Duration::from_millis(10);
-const POLL_MAX: Duration = Duration::from_secs(1);
+// SQLite and MySQL have no LISTEN/NOTIFY, so this bounds how late a change from another process is seen.
+const POLL_MAX: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
@@ -146,11 +152,40 @@ pub enum Finished {
     Superseded(WorkflowResult),
 }
 
+/// This engine's running lease keepers. A workflow can have two, when a run has not yet
+/// noticed that it was replaced.
+#[derive(Debug, Default)]
+struct LocalRuns(Mutex<HashMap<String, Vec<Arc<Notify>>>>);
+
+impl LocalRuns {
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<Arc<Notify>>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn poke(&self, workflow_id: &str) {
+        if let Some(pokes) = self.lock().get(workflow_id) {
+            pokes.iter().for_each(|poke| poke.notify_one());
+        }
+    }
+
+    fn remove(&self, workflow_id: &str, poke: &Arc<Notify>) {
+        let mut runs = self.lock();
+        if let Some(pokes) = runs.get_mut(workflow_id) {
+            pokes.retain(|known| !Arc::ptr_eq(known, poke));
+            if pokes.is_empty() {
+                runs.remove(workflow_id);
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ActiveRun {
     keeper: LeaseKeeper,
     active: Arc<AtomicUsize>,
     stopped: AtomicBool,
+    local_runs: Arc<LocalRuns>,
+    workflow_id: String,
 }
 
 impl ActiveRun {
@@ -162,6 +197,8 @@ impl ActiveRun {
         self.keeper.stop();
         if !self.stopped.swap(true, Ordering::SeqCst) {
             self.active.fetch_sub(1, Ordering::SeqCst);
+            self.local_runs
+                .remove(&self.workflow_id, &self.keeper.poker());
         }
     }
 }
@@ -207,6 +244,8 @@ pub struct Engine {
     active: Arc<AtomicUsize>,
     closing: Arc<AtomicBool>,
     last_unreadable_warn_ms: Arc<AtomicU64>,
+    wakeups: Arc<WakeHub>,
+    local_runs: Arc<LocalRuns>,
 }
 
 impl Engine {
@@ -235,12 +274,15 @@ impl Engine {
             active: Arc::new(AtomicUsize::new(0)),
             closing: Arc::new(AtomicBool::new(false)),
             last_unreadable_warn_ms: Arc::new(AtomicU64::new(0)),
+            wakeups: Arc::default(),
+            local_runs: Arc::default(),
         })
     }
 
     /// After this, a failure may just be the shutdown, so failures are no longer stored as final.
     pub fn close(&self) {
         self.closing.store(true, Ordering::SeqCst);
+        self.wakeups.wake_all();
     }
 
     fn is_closing(&self) -> bool {
@@ -354,7 +396,11 @@ impl Engine {
             return Err(Error::ShuttingDown);
         }
         match self.store.finish_workflow(&run.lease, &outcome).await {
-            Ok(()) => Ok(Finished::Accepted),
+            Ok(()) => {
+                self.wakeups
+                    .wake(&WakeKey::Workflow(run.workflow_id().to_owned()));
+                Ok(Finished::Accepted)
+            }
             Err(Error::LeaseLost(_) | Error::WorkflowCancelled(_)) => {
                 log::warn!(
                     "workflow {} finished after losing its lease, so its result was discarded",
@@ -377,25 +423,56 @@ impl Engine {
 
     pub fn keep_lease(&self, run: &Run) -> ActiveRun {
         self.active.fetch_add(1, Ordering::SeqCst);
+        let (store, lease, duration) = (self.store.clone(), run.lease.clone(), self.config.lease);
+        let (releasing, release_lease) = (store.clone(), lease.clone());
+        // Give the workflow back before anyone hears the loss. Stopping renewals
+        // alone would leave it owned until the old `claim_after`.
+        let keeper = LeaseKeeper::spawn_until(
+            duration,
+            self.config.max_run,
+            move || {
+                let (store, lease) = (store.clone(), lease.clone());
+                async move { store.renew_lease(&lease, duration).await }
+            },
+            move || {
+                let (store, lease) = (releasing.clone(), release_lease.clone());
+                async move {
+                    if let Err(error) = store.release_lease(&lease).await
+                        && !matches!(error, Error::LeaseLost(_))
+                    {
+                        log::warn!(
+                            "could not release workflow {} after its max run time: {error}",
+                            lease.workflow_id
+                        );
+                    }
+                }
+            },
+        );
+        self.local_runs
+            .lock()
+            .entry(run.lease.workflow_id.clone())
+            .or_default()
+            .push(keeper.poker());
         ActiveRun {
-            keeper: self.store.keep_lease(
-                run.lease.clone(),
-                self.config.lease,
-                self.config.max_run,
-            ),
+            keeper,
             active: self.active.clone(),
             stopped: AtomicBool::new(false),
+            local_runs: self.local_runs.clone(),
+            workflow_id: run.lease.workflow_id.clone(),
         }
     }
 
     pub async fn await_result(&self, workflow_id: &str) -> Result<WorkflowResult, Error> {
+        let waiter = self
+            .wakeups
+            .waiter(vec![WakeKey::Workflow(workflow_id.to_owned())]);
         let mut delay = POLL_MIN;
         loop {
             let workflow = self.get_status(workflow_id).await?;
             if let Some(result) = final_result(&workflow)? {
                 return Ok(result);
             }
-            tokio::time::sleep(delay).await;
+            waiter.wait(delay).await;
             delay = (delay * 2).min(POLL_MAX);
         }
     }
@@ -422,6 +499,31 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_stopped_run_leaves_the_local_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}?mode=rwc", dir.path().join("a.db").display());
+        let engine = Engine::connect(&url, EngineConfig::default())
+            .await
+            .unwrap();
+        let run = |token: &str| {
+            let lease = Lease {
+                workflow_id: "a".to_owned(),
+                token: token.to_owned(),
+            };
+            Run::new(lease, PORTABLE_JSON.to_owned(), None)
+        };
+        let (first, second) = (engine.keep_lease(&run("1")), engine.keep_lease(&run("2")));
+        assert_eq!(engine.local_runs.lock()["a"].len(), 2);
+        first.stop();
+        first.stop();
+        assert_eq!(engine.local_runs.lock()["a"].len(), 1);
+        drop(first);
+        assert_eq!(engine.local_runs.lock()["a"].len(), 1);
+        drop(second);
+        assert!(engine.local_runs.lock().is_empty());
+    }
 
     fn policy(retries_allowed: bool) -> StepPolicy {
         StepPolicy::new(retries_allowed, 1.0, 3, 2.0).unwrap()

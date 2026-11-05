@@ -19,6 +19,23 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
 }
 
 impl Store {
+    pub async fn get_queue(&self, name: &str) -> Result<Option<NonZeroU32>, Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let row =
+                sqlx::query(self.sql("SELECT concurrency FROM workflow_queues WHERE name = ?"))
+                    .bind(name)
+                    .fetch_optional(&self.pool)
+                    .await?;
+            row.map(|row| {
+                NonZeroU32::new(get_u32(&row, "concurrency")?)
+                    .ok_or_else(|| Error::Corrupt(format!("queue {name} has zero concurrency")))
+            })
+            .transpose()
+        })
+        .await
+    }
+
     pub async fn ensure_queue(&self, name: &str, concurrency: NonZeroU32) -> Result<(), Error> {
         check_queue_name(name)?;
         self.attempt(|| async {
@@ -211,15 +228,37 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
         // Revoke at one cutoff, then count every remaining token: a renewal cannot resurrect a freed slot.
-        sqlx::query(self.sql(
-            "UPDATE workflow_status SET lease_token = NULL WHERE status = 'PENDING' AND lease_token IS NOT NULL \
+        // MySQL scans retain unrelated row locks, so read candidates before locking primary keys.
+        // Free rows are updated together. A row someone else holds is updated after those, so that
+        // wait cannot leave the other rows expired.
+        let expired_owners: Vec<String> = sqlx::query_scalar(self.sql(
+            "SELECT workflow_uuid FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL \
              AND claim_after <= ? AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?)",
-        )).bind(cutoff).bind(queue).execute(&mut *tx).await?;
-        sqlx::query(self.sql(
-            "UPDATE workflow_status SET status = 'CANCELLED', lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} \
-             WHERE status = 'PENDING' AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?) \
+        )).bind(cutoff).bind(queue).fetch_all(&mut *tx).await?;
+        let revoke = "status = 'PENDING' AND lease_token IS NOT NULL AND claim_after <= ?";
+        self.recheck_update(
+            &mut tx,
+            &expired_owners,
+            "lease_token = NULL",
+            revoke,
+            revoke,
+            Some(cutoff),
+        )
+        .await?;
+        let expired_deadlines: Vec<String> = sqlx::query_scalar(self.sql(
+            "SELECT workflow_uuid FROM workflow_status WHERE status = 'PENDING' \
+             AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?) \
              AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_timeouts WHERE deadline_epoch_ms <= ?)",
-        )).bind(queue).bind(cutoff).execute(&mut *tx).await?;
+        )).bind(queue).bind(cutoff).fetch_all(&mut *tx).await?;
+        self.recheck_update(
+            &mut tx,
+            &expired_deadlines,
+            "status = 'CANCELLED', lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW}",
+            "status = 'PENDING' AND EXISTS (SELECT 1 FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid AND deadline_epoch_ms <= ?)",
+            "status = 'PENDING' AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_timeouts WHERE deadline_epoch_ms <= ?)",
+            Some(cutoff),
+        )
+        .await?;
         let occupied: i64 = sqlx::query_scalar(self.sql(
             "SELECT COUNT(*) FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL \
              AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?)",
@@ -236,7 +275,8 @@ impl Store {
                  AND serialization IN ({}) AND name IN ({}) AND workflow_uuid IN \
                  (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?) \
                  ORDER BY (SELECT sequence FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
-                 LIMIT 1 {}", self.readable_formats(), vec!["?"; names.len()].join(", "), self.dialect.lock_row(),
+                 LIMIT 1 {}", self.readable_formats(), vec!["?"; names.len()].join(", "),
+                if self.dialect == Dialect::MySql { "" } else { self.dialect.lock_row() },
             ));
             let mut select = sqlx::query(select_sql).bind(cutoff);
             for name in names {
@@ -246,6 +286,23 @@ impl Store {
                 break;
             };
             let workflow_id: String = row.try_get("workflow_uuid")?;
+            // MySQL's ordered locking scan can keep unrelated live owners locked until commit.
+            let row = if self.dialect == Dialect::MySql {
+                let Some(locked) = sqlx::query(self.sql(
+                    "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
+                     FROM workflow_status WHERE workflow_uuid = ? AND status = 'PENDING' \
+                     AND lease_token IS NULL AND claim_after <= ? FOR UPDATE",
+                ))
+                .bind(workflow_id.as_str())
+                .bind(cutoff)
+                .fetch_optional(&mut *tx)
+                .await? else {
+                    continue;
+                };
+                locked
+            } else {
+                row
+            };
             let timeout: Option<i64> = sqlx::query_scalar(self.sql(
                 "SELECT start_timeout_ms FROM workflow_queue_entries WHERE workflow_uuid = ?",
             ))

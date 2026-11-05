@@ -14,7 +14,7 @@ pub use engine::{
     StoredValue, WorkflowResult,
 };
 pub use error::Error;
-pub use lease::{LeaseKeeper, LeaseLoss};
+pub use lease::{LeaseKeeper, LeaseLoss, StepExpiry, StepWatch};
 pub use store::{SendFrom, Store};
 pub use workflow::{
     Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE,

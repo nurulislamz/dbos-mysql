@@ -1,5 +1,6 @@
 use dwos_core::{EventRow, Poll, SendOutcome};
 use pyo3::prelude::*;
+use pyo3_async_runtimes::tokio::future_into_py;
 
 use super::{PyEngine, PyRun, dispatch, to_py};
 
@@ -135,6 +136,26 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (run, step_id, timeout_step_id, timeout_ms, topic=None))]
+    fn wait_recv<'py>(
+        &self,
+        py: Python<'py>,
+        run: PyRef<'py, PyRun>,
+        step_id: u32,
+        timeout_step_id: u32,
+        timeout_ms: i64,
+        topic: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let (engine, run) = (self.0.clone(), run.0.clone());
+        future_into_py(py, async move {
+            let value = engine
+                .wait_recv(&run, step_id, timeout_step_id, topic.as_deref(), timeout_ms)
+                .await
+                .map_err(to_py)?;
+            Ok(PyPoll::from(Poll::Ready(value)))
+        })
+    }
+
     #[pyo3(signature = (target, key, timeout_ms, deadline_ms=None, run=None, step_id=None, timeout_step_id=None, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn poll_event<'py>(
@@ -163,6 +184,35 @@ impl PyEngine {
                 .await
                 .map_err(to_py)?;
             Ok(PyPoll::from(poll))
+        })
+    }
+
+    #[pyo3(signature = (target, key, timeout_ms, run=None, step_id=None, timeout_step_id=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn wait_event<'py>(
+        &self,
+        py: Python<'py>,
+        target: String,
+        key: String,
+        timeout_ms: i64,
+        run: Option<PyRef<'py, PyRun>>,
+        step_id: Option<u32>,
+        timeout_step_id: Option<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        let run = run.map(|run| run.0.clone());
+        future_into_py(py, async move {
+            let caller = match (run.as_deref(), step_id, timeout_step_id) {
+                (Some(run), Some(step_id), Some(timeout_step_id)) => {
+                    Some((run, step_id, timeout_step_id))
+                }
+                _ => None,
+            };
+            let value = engine
+                .wait_event(&target, &key, timeout_ms, caller)
+                .await
+                .map_err(to_py)?;
+            Ok(PyPoll::from(Poll::Ready(value)))
         })
     }
 

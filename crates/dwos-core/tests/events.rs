@@ -1,7 +1,10 @@
-use std::time::Duration;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dwos_core::{
-    Begin, Begun, Engine, EngineConfig, Error, PORTABLE_JSON, Poll, Run, SendOutcome, StoredValue,
+    Begin, Begun, Engine, EngineConfig, Error, FinalOutcome, Finished, Lease, Outcome,
+    PORTABLE_JSON, Poll, Run, SendOutcome, StoredValue,
 };
 
 #[macro_use]
@@ -48,7 +51,7 @@ fn json(text: &str) -> StoredValue {
 }
 
 all_dbs!(send_to_a_missing_workflow_fails, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let error = engine
         .send("missing", None, "\"hi\"", PORTABLE_JSON, None, None, None)
@@ -61,7 +64,7 @@ all_dbs!(send_to_a_missing_workflow_fails, backend, {
 });
 
 all_dbs!(send_from_outside_a_workflow_inserts_a_message, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     begin_run(&engine, "dest").await;
     engine
@@ -87,7 +90,7 @@ all_dbs!(
     send_inside_a_workflow_is_recorded_and_not_sent_twice,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         begin_run(&engine, "dest").await;
         let sender = begin_run(&engine, "sender").await;
@@ -133,7 +136,7 @@ all_dbs!(
 );
 
 all_dbs!(an_idempotency_key_delivers_a_message_once, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     begin_run(&engine, "dest").await;
     engine
@@ -167,7 +170,7 @@ all_dbs!(
     idempotency_keys_are_scoped_to_a_destination_without_collisions,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         begin_run(&engine, "dest").await;
         begin_run(&engine, "b::dest").await;
@@ -189,7 +192,7 @@ all_dbs!(
     oversized_idempotency_keys_are_rejected_before_inserting,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         begin_run(&engine, "dest").await;
         let error = engine
@@ -225,7 +228,7 @@ all_dbs!(
     messages_with_equal_timestamps_are_consumed_in_send_order,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let recv = begin_run(&engine, "dest").await;
         for key in ["z", "a", "m"] {
@@ -254,7 +257,7 @@ all_dbs!(
 );
 
 all_dbs!(wait_and_timeout_step_ids_must_differ, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let recv = begin_run(&engine, "dest").await;
     assert!(matches!(
@@ -274,7 +277,7 @@ all_dbs!(
     recv_consumes_a_message_and_records_the_step_together,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let recv = begin_run(&engine, "dest").await;
         engine
@@ -306,7 +309,7 @@ all_dbs!(
     a_timeout_recv_records_null_and_does_not_consume_a_later_message,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let recv = begin_run(&engine, "dest").await;
         assert_eq!(
@@ -328,7 +331,7 @@ all_dbs!(
 );
 
 all_dbs!(recv_waits_until_the_recorded_deadline, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let recv = begin_run(&engine, "dest").await;
     let first = engine.poll_recv(&recv, 1, 2, None, 5_000).await.unwrap();
@@ -363,7 +366,7 @@ all_dbs!(recv_waits_until_the_recorded_deadline, backend, {
 });
 
 all_dbs!(a_message_arriving_during_a_wait_is_consumed, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let recv = begin_run(&engine, "dest").await;
     let waiting = engine.poll_recv(&recv, 1, 2, None, 5_000).await.unwrap();
@@ -379,7 +382,7 @@ all_dbs!(a_message_arriving_during_a_wait_is_consumed, backend, {
 });
 
 all_dbs!(topics_are_separate_queues, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let recv = begin_run(&engine, "dest").await;
     engine
@@ -412,7 +415,7 @@ all_dbs!(topics_are_separate_queues, backend, {
 });
 
 all_dbs!(stale_owner_cannot_send_or_recv, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     begin_run(&engine, "dest").await;
     let stale = Engine::connect(
@@ -451,7 +454,7 @@ all_dbs!(stale_owner_cannot_send_or_recv, backend, {
 });
 
 all_dbs!(set_event_upserts_and_is_recorded_as_a_step, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = begin_run(&engine, "w").await;
     engine
@@ -481,7 +484,7 @@ all_dbs!(
     set_event_from_a_step_overwrites_without_a_new_step,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let run = begin_run(&engine, "w").await;
         engine
@@ -506,7 +509,7 @@ all_dbs!(
 );
 
 all_dbs!(get_event_returns_a_value_without_waiting, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let setter = begin_run(&engine, "src").await;
     engine
@@ -531,7 +534,7 @@ all_dbs!(get_event_returns_a_value_without_waiting, backend, {
 });
 
 all_dbs!(get_event_of_a_missing_key_times_out, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let getter = begin_run(&engine, "dst").await;
     assert_eq!(
@@ -544,7 +547,7 @@ all_dbs!(get_event_of_a_missing_key_times_out, backend, {
 });
 
 all_dbs!(get_event_outside_a_workflow_is_not_recorded, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let waiting = engine
         .poll_event("missing", "k", 5_000, None, None)
@@ -566,7 +569,7 @@ all_dbs!(get_event_outside_a_workflow_is_not_recorded, backend, {
 });
 
 all_dbs!(a_none_event_is_present_and_does_not_wait, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let setter = begin_run(&engine, "src").await;
     engine
@@ -586,31 +589,33 @@ all_dbs!(
     recovered_waits_use_arrivals_before_the_recorded_deadline,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let recv = begin_run(&engine, "receiver").await;
         let target = begin_run(&engine, "target").await;
+        // Deadlines stay ahead of the "before" sends, then the sleep passes every one of them.
+        const WAIT_MS: i64 = 250;
         assert!(matches!(
-            engine.poll_recv(&recv, 1, 2, None, 500).await.unwrap(),
+            engine.poll_recv(&recv, 1, 2, None, WAIT_MS).await.unwrap(),
             Poll::Waiting { .. }
         ));
         assert!(matches!(
             engine
-                .poll_recv(&recv, 3, 4, Some("early"), 500)
+                .poll_recv(&recv, 3, 4, Some("early"), WAIT_MS)
                 .await
                 .unwrap(),
             Poll::Waiting { .. }
         ));
         assert!(matches!(
             engine
-                .poll_event("target", "overwritten", 500, None, Some((&recv, 5, 6)))
+                .poll_event("target", "overwritten", WAIT_MS, None, Some((&recv, 5, 6)))
                 .await
                 .unwrap(),
             Poll::Waiting { .. }
         ));
         assert!(matches!(
             engine
-                .poll_event("target", "late", 500, None, Some((&recv, 7, 8)))
+                .poll_event("target", "late", WAIT_MS, None, Some((&recv, 7, 8)))
                 .await
                 .unwrap(),
             Poll::Waiting { .. }
@@ -631,7 +636,12 @@ all_dbs!(
             .set_event(&target, None, "overwritten", "\"before\"", PORTABLE_JSON)
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        let recorded = Instant::now();
+        tokio::time::sleep(Duration::from_millis(u64::try_from(WAIT_MS).unwrap() + 40)).await;
+        assert!(
+            recorded.elapsed() > Duration::from_millis(u64::try_from(WAIT_MS).unwrap()),
+            "the sleep did not pass the recorded deadlines"
+        );
         engine
             .send(
                 "receiver",
@@ -703,18 +713,18 @@ all_dbs!(
     legacy_events_are_read_immediately_but_have_no_recovered_arrival_time,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let recv = begin_run(&engine, "receiver").await;
         begin_run(&engine, "target").await;
         assert!(matches!(
             engine
-                .poll_event("target", "legacy", 500, None, Some((&recv, 1, 2)))
+                .poll_event("target", "legacy", 80, None, Some((&recv, 1, 2)))
                 .await
                 .unwrap(),
             Poll::Waiting { .. }
         ));
-        tokio::time::sleep(Duration::from_millis(550)).await;
+        tokio::time::sleep(Duration::from_millis(130)).await;
         let sql = match backend {
             Backend::MySql => {
                 "INSERT INTO workflow_events (workflow_uuid, `key`, value, serialization) VALUES ('target', 'legacy', '1', 'portable_json')"
@@ -765,3 +775,420 @@ all_dbs!(
         );
     }
 );
+
+// Far above any timeout a test expects to reach, so a pass cannot come from the timeout itself.
+const LONG_WAIT_MS: i64 = 60_000;
+const BOUND: Duration = Duration::from_secs(30);
+// A write can land inside a re-read that then sees it, which says nothing about the wakeup. So a
+// wakeup test passes when one round of these shows a wake. With no wakeup, no round ever does.
+const ROUNDS: u32 = 10;
+
+async fn within<T>(future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(BOUND, future)
+        .await
+        .expect("the wait did not end in time")
+}
+
+/// Returns once a wait is registered, with time for it to reach its timer.
+async fn until_waiting(engine: &Engine) {
+    within(async {
+        while engine.waiting_keys() == 0 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+}
+
+fn spawn_recv(
+    engine: &Engine,
+    run: &Arc<Run>,
+) -> tokio::task::JoinHandle<Result<StoredValue, Error>> {
+    let (engine, run) = (engine.clone(), run.clone());
+    tokio::spawn(async move { engine.wait_recv(&run, 1, 2, None, LONG_WAIT_MS).await })
+}
+
+fn spawn_event(
+    engine: &Engine,
+    target: &str,
+) -> tokio::task::JoinHandle<Result<StoredValue, Error>> {
+    let (engine, target) = (engine.clone(), target.to_owned());
+    tokio::spawn(async move { engine.wait_event(&target, "k", LONG_WAIT_MS, None).await })
+}
+
+async fn send(engine: &Engine, destination: &str, message: &str) {
+    engine
+        .send(destination, None, message, PORTABLE_JSON, None, None, None)
+        .await
+        .unwrap();
+}
+
+all_dbs!(same_engine_send_wakes_a_waiter, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    for round in 0..ROUNDS {
+        let id = format!("dest-{round}");
+        let run = Arc::new(begin_run(&engine, &id).await);
+        let before = engine.wakeups_received();
+        let waiter = spawn_recv(&engine, &run);
+        until_waiting(&engine).await;
+        send(&engine, &id, "\"hi\"").await;
+        assert_eq!(within(waiter).await.unwrap().unwrap(), json("\"hi\""));
+        assert_eq!(engine.waiting_keys(), 0);
+        if engine.wakeups_received() > before {
+            return;
+        }
+    }
+    panic!("no send reached its waiter through the wakeup");
+});
+
+all_dbs!(same_engine_set_event_wakes_a_waiter, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    for round in 0..ROUNDS {
+        let id = format!("target-{round}");
+        let run = begin_run(&engine, &id).await;
+        let before = engine.wakeups_received();
+        let waiter = spawn_event(&engine, &id);
+        until_waiting(&engine).await;
+        engine
+            .set_event(&run, None, "k", "1", PORTABLE_JSON)
+            .await
+            .unwrap();
+        assert_eq!(within(waiter).await.unwrap().unwrap(), json("1"));
+        assert_eq!(engine.waiting_keys(), 0);
+        if engine.wakeups_received() > before {
+            return;
+        }
+    }
+    panic!("no set_event reached its waiter through the wakeup");
+});
+
+all_dbs!(a_second_engine_send_is_seen_by_re_reading, backend, {
+    let db = TestDb::migrated(backend).await;
+    let (waiting, sending) = (engine(&db).await, engine(&db).await);
+    let run = Arc::new(begin_run(&waiting, "dest").await);
+    let waiter = spawn_recv(&waiting, &run);
+    until_waiting(&waiting).await;
+    send(&sending, "dest", "\"hi\"").await;
+    assert_eq!(within(waiter).await.unwrap().unwrap(), json("\"hi\""));
+    assert_eq!(waiting.wakeups_received(), 0);
+});
+
+all_dbs!(a_second_engine_set_event_is_seen_by_re_reading, backend, {
+    let db = TestDb::migrated(backend).await;
+    let (waiting, writing) = (engine(&db).await, engine(&db).await);
+    let run = begin_run(&writing, "target").await;
+    let waiter = spawn_event(&waiting, "target");
+    until_waiting(&waiting).await;
+    writing
+        .set_event(&run, None, "k", "1", PORTABLE_JSON)
+        .await
+        .unwrap();
+    assert_eq!(within(waiter).await.unwrap().unwrap(), json("1"));
+    assert_eq!(waiting.wakeups_received(), 0);
+});
+
+all_dbs!(wait_recv_timeout_fires_and_replays, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = begin_run(&engine, "dest").await;
+    assert_eq!(
+        within(engine.wait_recv(&run, 1, 2, None, 50))
+            .await
+            .unwrap(),
+        json("null")
+    );
+    let steps = engine.list_steps("dest").await.unwrap();
+    assert_eq!(
+        steps
+            .iter()
+            .map(|step| step.step_name.as_str())
+            .collect::<Vec<_>>(),
+        ["DBOS.recv", "DBOS.sleep"]
+    );
+    send(&engine, "dest", "\"late\"").await;
+    assert_eq!(
+        within(engine.wait_recv(&run, 1, 2, None, LONG_WAIT_MS))
+            .await
+            .unwrap(),
+        json("null")
+    );
+    assert!(!engine.store().list_messages("dest").await.unwrap()[0].consumed);
+    assert_eq!(
+        within(engine.wait_recv(&run, 3, 4, None, LONG_WAIT_MS))
+            .await
+            .unwrap(),
+        json("\"late\"")
+    );
+});
+
+all_dbs!(wait_event_timeout_fires_and_replays, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let target = begin_run(&engine, "target").await;
+    let caller = begin_run(&engine, "caller").await;
+    assert_eq!(
+        within(engine.wait_event("target", "k", 50, None))
+            .await
+            .unwrap(),
+        json("null")
+    );
+    assert_eq!(
+        within(engine.wait_event("target", "k", 50, Some((&caller, 1, 2))))
+            .await
+            .unwrap(),
+        json("null")
+    );
+    let steps = engine.list_steps("caller").await.unwrap();
+    assert_eq!(
+        steps
+            .iter()
+            .map(|step| step.step_name.as_str())
+            .collect::<Vec<_>>(),
+        ["DBOS.getEvent", "DBOS.sleep"]
+    );
+    engine
+        .set_event(&target, None, "k", "1", PORTABLE_JSON)
+        .await
+        .unwrap();
+    assert_eq!(
+        within(engine.wait_event("target", "k", LONG_WAIT_MS, Some((&caller, 1, 2))))
+            .await
+            .unwrap(),
+        json("null")
+    );
+    assert_eq!(
+        within(engine.wait_event("target", "k", LONG_WAIT_MS, Some((&caller, 3, 4))))
+            .await
+            .unwrap(),
+        json("1")
+    );
+});
+
+all_dbs!(zero_and_negative_timeouts_do_not_wait, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = begin_run(&engine, "dest").await;
+    for (step_id, timeout_ms) in [(1, 0), (3, -5)] {
+        assert_eq!(
+            within(engine.wait_recv(&run, step_id, step_id + 1, None, timeout_ms))
+                .await
+                .unwrap(),
+            json("null")
+        );
+    }
+    for timeout_ms in [0, -5] {
+        assert_eq!(
+            within(engine.wait_event("dest", "k", timeout_ms, None))
+                .await
+                .unwrap(),
+            json("null")
+        );
+    }
+    engine
+        .set_event(&run, None, "k", "1", PORTABLE_JSON)
+        .await
+        .unwrap();
+    assert_eq!(
+        within(engine.wait_event("dest", "k", 0, None))
+            .await
+            .unwrap(),
+        json("1")
+    );
+});
+
+all_dbs!(same_engine_cancel_wakes_a_waiter, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    for round in 0..ROUNDS {
+        let id = format!("dest-{round}");
+        let run = Arc::new(begin_run(&engine, &id).await);
+        let before = engine.wakeups_received();
+        let waiter = spawn_recv(&engine, &run);
+        until_waiting(&engine).await;
+        engine.cancel_workflow(&id).await.unwrap();
+        let error = within(waiter).await.unwrap().unwrap_err();
+        assert!(
+            matches!(&error, Error::WorkflowCancelled(found) if *found == id),
+            "{error:?}"
+        );
+        if engine.wakeups_received() > before {
+            return;
+        }
+    }
+    panic!("no cancel reached its waiter through the wakeup");
+});
+
+all_dbs!(cancel_of_the_caller_stops_a_get_event_wait, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    begin_run(&engine, "target").await;
+    let caller = Arc::new(begin_run(&engine, "caller").await);
+    let waiter = {
+        let (engine, caller) = (engine.clone(), caller.clone());
+        tokio::spawn(async move {
+            engine
+                .wait_event("target", "k", LONG_WAIT_MS, Some((&caller, 1, 2)))
+                .await
+        })
+    };
+    until_waiting(&engine).await;
+    engine.cancel_workflow("caller").await.unwrap();
+    let error = within(waiter).await.unwrap().unwrap_err();
+    assert!(matches!(error, Error::WorkflowCancelled(_)), "{error:?}");
+});
+
+all_dbs!(a_second_engine_cancel_stops_a_waiter, backend, {
+    let db = TestDb::migrated(backend).await;
+    let (waiting, cancelling) = (engine(&db).await, engine(&db).await);
+    let run = Arc::new(begin_run(&waiting, "dest").await);
+    let waiter = spawn_recv(&waiting, &run);
+    until_waiting(&waiting).await;
+    cancelling.cancel_workflow("dest").await.unwrap();
+    let error = within(waiter).await.unwrap().unwrap_err();
+    assert!(matches!(error, Error::WorkflowCancelled(_)), "{error:?}");
+});
+
+all_dbs!(losing_the_lease_stops_a_waiter, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = Arc::new(begin_run(&engine, "dest").await);
+    let waiter = spawn_recv(&engine, &run);
+    until_waiting(&engine).await;
+    let lease = Lease {
+        workflow_id: run.workflow_id().to_owned(),
+        token: run.token().to_owned(),
+    };
+    engine.store().release_lease(&lease).await.unwrap();
+    let error = within(waiter).await.unwrap().unwrap_err();
+    assert!(matches!(error, Error::LeaseLost(_)), "{error:?}");
+});
+
+all_dbs!(closing_the_engine_stops_waiters, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = Arc::new(begin_run(&engine, "dest").await);
+    let (recv, event) = (spawn_recv(&engine, &run), spawn_event(&engine, "dest"));
+    until_waiting(&engine).await;
+    engine.close();
+    for waiter in [recv, event] {
+        let error = within(waiter).await.unwrap().unwrap_err();
+        assert!(matches!(error, Error::ShuttingDown), "{error:?}");
+    }
+});
+
+all_dbs!(no_send_is_lost_in_a_tight_loop, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = Arc::new(begin_run(&engine, "dest").await);
+    let count = 40_u32;
+    let receiver = {
+        let (engine, run) = (engine.clone(), run.clone());
+        tokio::spawn(async move {
+            let mut received = Vec::new();
+            for index in 0..count {
+                let step_id = index * 2 + 1;
+                let value = engine
+                    .wait_recv(&run, step_id, step_id + 1, None, LONG_WAIT_MS)
+                    .await
+                    .unwrap();
+                received.push(value.text);
+            }
+            received
+        })
+    };
+    for index in 0..count {
+        send(&engine, "dest", &index.to_string()).await;
+    }
+    let expected: Vec<String> = (0..count).map(|index| index.to_string()).collect();
+    assert_eq!(within(receiver).await.unwrap(), expected);
+    assert_eq!(engine.waiting_keys(), 0);
+});
+
+all_dbs!(more_waiters_than_connections_all_finish, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let extra = engine.store().pool().options().get_max_connections() as usize + 5;
+    let mut waiters = Vec::new();
+    for index in 0..extra {
+        let run = Arc::new(begin_run(&engine, &format!("dest-{index}")).await);
+        waiters.push((spawn_recv(&engine, &run), run));
+    }
+    within(async {
+        while engine.waiting_keys() < extra {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    for index in 0..extra {
+        send(&engine, &format!("dest-{index}"), "1").await;
+    }
+    for (waiter, _run) in waiters {
+        assert_eq!(within(waiter).await.unwrap().unwrap(), json("1"));
+    }
+    assert_eq!(engine.waiting_keys(), 0);
+});
+
+all_dbs!(a_dropped_wait_leaves_no_waiter_behind, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let run = begin_run(&engine, "dest").await;
+    let wait = engine.wait_recv(&run, 1, 2, None, LONG_WAIT_MS);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), wait)
+            .await
+            .is_err()
+    );
+    assert_eq!(engine.waiting_keys(), 0);
+});
+
+all_dbs!(finishing_a_workflow_wakes_await_result, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    for round in 0..ROUNDS {
+        let id = format!("done-{round}");
+        let run = begin_run(&engine, &id).await;
+        let before = engine.wakeups_received();
+        let waiter = {
+            let (engine, id) = (engine.clone(), id.clone());
+            tokio::spawn(async move { engine.await_result(&id).await })
+        };
+        until_waiting(&engine).await;
+        assert_eq!(
+            engine
+                .finish(&run, Outcome::Success("1".to_owned()))
+                .await
+                .unwrap(),
+            Finished::Accepted
+        );
+        let result = within(waiter).await.unwrap().unwrap();
+        assert_eq!(result.outcome, FinalOutcome::Success("1".to_owned()));
+        if engine.wakeups_received() > before {
+            return;
+        }
+    }
+    panic!("no finish reached await_result through the wakeup");
+});
+
+all_dbs!(cancelling_a_workflow_wakes_await_result, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    for round in 0..ROUNDS {
+        let id = format!("cancelled-{round}");
+        begin_run(&engine, &id).await;
+        let before = engine.wakeups_received();
+        let waiter = {
+            let (engine, id) = (engine.clone(), id.clone());
+            tokio::spawn(async move { engine.await_result(&id).await })
+        };
+        until_waiting(&engine).await;
+        engine.cancel_workflow(&id).await.unwrap();
+        let result = within(waiter).await.unwrap().unwrap();
+        assert_eq!(result.outcome, FinalOutcome::Cancelled);
+        if engine.wakeups_received() > before {
+            return;
+        }
+    }
+    panic!("no cancel reached await_result through the wakeup");
+});

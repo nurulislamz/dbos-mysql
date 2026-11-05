@@ -40,7 +40,7 @@ def open_viewer(database: Database) -> Iterator[Any]:
 
     def start() -> Viewer:
         viewer = Viewer(database.url)
-        threading.Thread(target=viewer.serve_forever, daemon=True).start()
+        threading.Thread(target=viewer.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
         viewers.append(viewer)
         return viewer
 

@@ -41,7 +41,7 @@ async fn begin_run(engine: &Engine, id: &str) -> Run {
 }
 
 all_dbs!(cancel_marks_a_pending_workflow_cancelled, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine.cancel_workflow("a").await.unwrap();
@@ -59,7 +59,7 @@ all_dbs!(cancel_marks_a_pending_workflow_cancelled, backend, {
 });
 
 all_dbs!(cancel_of_success_or_error_is_a_noop, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "ok").await;
     engine
@@ -85,13 +85,13 @@ all_dbs!(cancel_of_success_or_error_is_a_noop, backend, {
 });
 
 all_dbs!(cancel_of_a_missing_workflow_is_a_noop, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     engine.cancel_workflow("missing").await.unwrap();
 });
 
 all_dbs!(check_step_stops_once_the_workflow_is_cancelled, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -109,7 +109,7 @@ all_dbs!(check_step_stops_once_the_workflow_is_cancelled, backend, {
 });
 
 all_dbs!(invalid_step_names_are_rejected_before_execution, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     for name in ["bad\0step".to_owned(), "x".repeat(256)] {
@@ -138,7 +138,7 @@ all_dbs!(invalid_step_names_are_rejected_before_execution, backend, {
 });
 
 all_dbs!(resume_makes_a_cancelled_workflow_claimable, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     begin_run(&engine, "a").await;
     engine.cancel_workflow("a").await.unwrap();
@@ -162,7 +162,7 @@ all_dbs!(resume_makes_a_cancelled_workflow_claimable, backend, {
 });
 
 all_dbs!(resume_resets_a_dead_lettered_workflow, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(
         &db,
         EngineConfig {
@@ -187,7 +187,7 @@ all_dbs!(resume_resets_a_dead_lettered_workflow, backend, {
 });
 
 all_dbs!(resume_of_success_is_a_noop, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -207,7 +207,7 @@ all_dbs!(resume_of_success_is_a_noop, backend, {
 });
 
 all_dbs!(resume_of_a_missing_workflow_fails, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let error = engine
         .resume_workflow("missing", &names())
@@ -223,7 +223,7 @@ all_dbs!(
     resume_without_the_function_leaves_the_row_claimable,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, config()).await;
         begin_run(&engine, "a").await;
         engine.cancel_workflow("a").await.unwrap();
@@ -238,7 +238,7 @@ all_dbs!(
 );
 
 all_dbs!(list_workflows_applies_filters, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     for id in ["a", "b", "c", "other"] {
         let run = begin_run(&engine, id).await;
@@ -363,7 +363,7 @@ all_dbs!(list_workflows_applies_filters, backend, {
 });
 
 all_dbs!(list_workflows_filters_by_parent_and_time, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let parent = begin_run(&engine, "p").await;
     let mut child = begin(Some("child"));
@@ -423,7 +423,7 @@ all_dbs!(list_workflows_filters_by_parent_and_time, backend, {
 });
 
 all_dbs!(await_result_reports_cancelled, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     begin_run(&engine, "a").await;
     engine.cancel_workflow("a").await.unwrap();
@@ -432,7 +432,7 @@ all_dbs!(await_result_reports_cancelled, backend, {
 });
 
 all_dbs!(resume_preserves_a_live_pending_owner, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     assert!(
@@ -457,7 +457,7 @@ all_dbs!(resume_preserves_a_live_pending_owner, backend, {
 });
 
 all_dbs!(repeated_cancel_preserves_completion_time, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     begin_run(&engine, "a").await;
     engine.cancel_workflow("a").await.unwrap();
@@ -471,7 +471,7 @@ all_dbs!(repeated_cancel_preserves_completion_time, backend, {
 });
 
 all_dbs!(list_rejects_negative_pagination, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     for filter in [
         WorkflowFilter {
@@ -494,7 +494,7 @@ all_dbs!(
     replaced_owner_cannot_check_steps_or_start_children,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, config()).await;
         let old = begin_run(&engine, "a").await;
         engine

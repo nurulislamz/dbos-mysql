@@ -49,14 +49,14 @@ fn expired() -> EngineConfig {
 }
 
 all_dbs!(begin_runs_a_new_workflow_with_the_given_id, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     assert_eq!(run.workflow_id(), "a");
 });
 
 all_dbs!(begin_generates_an_id_when_none_is_given, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     for id in [None, Some("")] {
         let Begun::Run(run) = engine.begin(begin(id)).await.unwrap() else {
@@ -67,7 +67,7 @@ all_dbs!(begin_generates_an_id_when_none_is_given, backend, {
 });
 
 all_dbs!(begin_attaches_to_a_running_workflow, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     begin_run(&engine, "a").await;
     let begun = engine.begin(begin(Some("a"))).await.unwrap();
@@ -75,7 +75,7 @@ all_dbs!(begin_attaches_to_a_running_workflow, backend, {
 });
 
 all_dbs!(begin_returns_a_stored_success, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -90,7 +90,7 @@ all_dbs!(begin_returns_a_stored_success, backend, {
 });
 
 all_dbs!(begin_returns_a_stored_error, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -104,7 +104,7 @@ all_dbs!(begin_returns_a_stored_error, backend, {
 });
 
 all_dbs!(begin_with_another_name_conflicts, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     begin_run(&engine, "a").await;
     let mut other = begin(Some("a"));
@@ -117,7 +117,7 @@ all_dbs!(begin_with_another_name_conflicts, backend, {
 });
 
 all_dbs!(child_id_comes_from_the_parent_and_step, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let parent = begin_run(&engine, "p").await;
     let step_id = parent.next_step_id();
@@ -142,7 +142,7 @@ all_dbs!(
     child_uses_an_explicit_id_and_replays_the_recorded_one,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, config()).await;
         let parent = begin_run(&engine, "p").await;
         let parent_step = ParentStep {
@@ -164,7 +164,7 @@ all_dbs!(
 );
 
 all_dbs!(stale_parent_cannot_start_a_child, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let stale_engine = engine(&db, expired()).await;
     let parent = begin_run(&stale_engine, "p").await;
     stale_engine.recover_now(&names()).await.unwrap();
@@ -187,7 +187,7 @@ all_dbs!(stale_parent_cannot_start_a_child, backend, {
 });
 
 all_dbs!(child_slot_holding_a_step_is_a_mismatch, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let parent = begin_run(&engine, "p").await;
     engine
@@ -204,7 +204,7 @@ all_dbs!(child_slot_holding_a_step_is_a_mismatch, backend, {
 });
 
 all_dbs!(check_step_says_run_when_nothing_is_saved, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     assert_eq!(
@@ -214,7 +214,7 @@ all_dbs!(check_step_says_run_when_nothing_is_saved, backend, {
 });
 
 all_dbs!(check_step_replays_output_and_errors, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -236,7 +236,7 @@ all_dbs!(check_step_replays_output_and_errors, backend, {
 });
 
 all_dbs!(check_step_rejects_a_changed_name, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -248,7 +248,7 @@ all_dbs!(check_step_rejects_a_changed_name, backend, {
 });
 
 all_dbs!(check_step_rejects_a_child_pointer, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let parent = begin_run(&engine, "p").await;
     let mut child = begin(None);
@@ -262,7 +262,7 @@ all_dbs!(check_step_rejects_a_child_pointer, backend, {
 });
 
 all_dbs!(saving_a_step_as_a_stale_owner_fails, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, expired()).await;
     let run = begin_run(&engine, "a").await;
     engine.recover_now(&names()).await.unwrap();
@@ -276,13 +276,13 @@ all_dbs!(saving_a_step_as_a_stale_owner_fails, backend, {
 });
 
 all_dbs!(await_result_waits_for_the_owner, backend, {
-    let db = Arc::new(TestDb::create(backend).await);
+    let db = Arc::new(TestDb::migrated(backend).await);
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
 
     let waiter = engine.clone();
     let waiting = tokio::spawn(async move { waiter.await_result("a").await });
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
     assert!(!waiting.is_finished());
 
     engine
@@ -298,14 +298,14 @@ all_dbs!(await_result_waits_for_the_owner, backend, {
 });
 
 all_dbs!(await_result_on_a_missing_workflow_fails, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let error = engine.await_result("nope").await.unwrap_err();
     assert!(matches!(error, Error::WorkflowNotFound(_)), "{error:?}");
 });
 
 all_dbs!(await_result_reports_too_many_recoveries, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, expired()).await;
     let mut new = begin(Some("a"));
     new.max_recovery_attempts = 0;
@@ -316,7 +316,7 @@ all_dbs!(await_result_reports_too_many_recoveries, backend, {
 });
 
 all_dbs!(finish_is_accepted_for_the_owner, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     let finished = engine
@@ -330,7 +330,7 @@ all_dbs!(
     finish_after_takeover_returns_the_new_owners_result,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db, expired()).await;
         let stale = begin_run(&engine, "a").await;
         let claim = engine.recover_now(&names()).await.unwrap().remove(0);
@@ -341,7 +341,7 @@ all_dbs!(
             late.finish(&stale, Outcome::Success("\"stale\"".to_owned()))
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!finishing.is_finished());
 
         engine
@@ -359,7 +359,7 @@ all_dbs!(
 );
 
 all_dbs!(release_ignores_a_lost_lease, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, expired()).await;
     let stale = begin_run(&engine, "a").await;
     engine.recover_now(&names()).await.unwrap();
@@ -369,7 +369,7 @@ all_dbs!(release_ignores_a_lost_lease, backend, {
 });
 
 all_dbs!(recovery_tick_returns_crashed_work, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, expired()).await;
     begin_run(&engine, "a").await;
     let claims = engine.recovery_tick(&names()).await;
@@ -378,11 +378,11 @@ all_dbs!(recovery_tick_returns_crashed_work, backend, {
 });
 
 all_dbs!(recovery_tick_waits_out_its_interval_when_idle, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(
         &db,
         EngineConfig {
-            recovery_interval: Duration::from_millis(200),
+            recovery_interval: Duration::from_millis(40),
             ..config()
         },
     )
@@ -390,14 +390,14 @@ all_dbs!(recovery_tick_waits_out_its_interval_when_idle, backend, {
     let started = std::time::Instant::now();
     assert!(engine.recovery_tick(&names()).await.is_empty());
     assert!(
-        started.elapsed() >= Duration::from_millis(100),
+        started.elapsed() >= Duration::from_millis(20),
         "{:?}",
         started.elapsed()
     );
 });
 
 all_dbs!(recovery_tick_respects_the_concurrency_limit, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let limited = EngineConfig {
         max_concurrent_recoveries: 2,
         ..expired()
@@ -422,7 +422,7 @@ all_dbs!(recovery_tick_respects_the_concurrency_limit, backend, {
 });
 
 all_dbs!(keep_lease_counts_runs_until_stopped, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     let run = begin_run(&engine, "a").await;
     let keeper = engine.keep_lease(&run);
@@ -432,14 +432,14 @@ all_dbs!(keep_lease_counts_runs_until_stopped, backend, {
 });
 
 all_dbs!(keep_lease_reports_a_takeover, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let short = EngineConfig {
-        lease: Duration::from_millis(150),
+        lease: Duration::from_millis(60),
         ..config()
     };
     let engine = engine(&db, short.clone()).await;
     let stale = begin_run(&engine, "a").await;
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    tokio::time::sleep(Duration::from_millis(120)).await;
     assert_eq!(engine.recover_now(&names()).await.unwrap().len(), 1);
 
     let keeper = engine.keep_lease(&stale);
@@ -469,11 +469,11 @@ all_dbs!(migrations_can_be_turned_off, backend, {
 fn step_attempts_retry_until_the_limit_then_give_up() {
     let mut attempts = StepPolicy::new(true, 1.0, 3, 2.0).unwrap().attempts();
     assert_eq!(attempts.status(), (Some(0), Some(3)));
-    assert_eq!(attempts.failed(), Some(Duration::from_secs(1)));
+    assert_eq!(attempts.failed(true), Some(Duration::from_secs(1)));
     assert_eq!(attempts.status(), (Some(1), Some(3)));
-    assert_eq!(attempts.failed(), Some(Duration::from_secs(2)));
+    assert_eq!(attempts.failed(true), Some(Duration::from_secs(2)));
     assert_eq!(attempts.status(), (Some(2), Some(3)));
-    assert_eq!(attempts.failed(), None);
+    assert_eq!(attempts.failed(true), None);
 }
 
 #[test]
@@ -482,7 +482,7 @@ fn only_a_retrying_step_wraps_its_failures() {
     let single = StepPolicy::new(false, 1.0, 3, 2.0).unwrap();
     assert!(retrying.wraps_failures());
     assert!(!single.wraps_failures());
-    assert_eq!(single.attempts().failed(), None);
+    assert_eq!(single.attempts().failed(true), None);
 }
 
 #[test]
@@ -492,7 +492,7 @@ fn an_unlimited_recovery_limit_round_trips() {
 }
 
 all_dbs!(an_interrupted_workflow_is_released_for_recovery, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = Engine::connect(&db.url, expired()).await.unwrap();
     let run = begin_run(&engine, "a").await;
     assert_eq!(
@@ -509,7 +509,7 @@ all_dbs!(an_interrupted_workflow_is_released_for_recovery, backend, {
 });
 
 all_dbs!(json_recovery_leaves_pickled_workflows_unclaimed, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let pickled = engine(
         &db,
         EngineConfig {
@@ -539,7 +539,7 @@ all_dbs!(json_recovery_leaves_pickled_workflows_unclaimed, backend, {
 });
 
 all_dbs!(read_only_engine_can_list_an_existing_database, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let writer = engine(&db, config()).await;
     begin_run(&writer, "a").await;
     let reader = Engine::connect(
@@ -562,7 +562,7 @@ all_dbs!(read_only_engine_can_list_an_existing_database, backend, {
 });
 
 all_dbs!(an_ended_workflow_stores_its_outcome, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = Engine::connect(&db.url, config()).await.unwrap();
     let run = begin_run(&engine, "a").await;
     engine

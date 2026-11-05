@@ -6,11 +6,15 @@ An embedded durable workflow engine for SQLite, MySQL 8.4 and Postgres. Rust own
 
 Keep `ActiveRun` alive with `keep_lease` while executing. Monitor `ActiveRun::lost` and stop scheduling work when ownership is lost. The store fences writes and execution decisions by ownership token. A database check cannot prevent an SDK function from starting after a process pause between that check and invocation; initial lease age and this scheduling gap must be handled by the SDK and external effect boundaries.
 
+Wait out a durable sleep with `Engine::wait_sleep`. A cancel on the same `Engine` pokes the keeper at once. A cancel from elsewhere is seen by one primary-key read per sleeper every `POLL_MAX` (250ms).
+
+`StepPolicy::with_timeouts` limits each step attempt. `StepPolicy::watch` starts one attempt's `StepWatch`, which is separate from the owner lease: it never touches the database, and an expired attempt fails through `StepAttempts::failed` without cancelling the workflow. The caller must stop the body, and must drop its result when `StepWatch::finish` returns `Err`.
+
 `recover_now` and `recovery_tick` return `Claimed` descriptors filtered by registered function names and readable serialization formats. Construct a `Run` from its lease, serialization and deadline, then execute through the same path as a new run. Recovery limits, interrupted-attempt accounting and persisted deadlines apply to recovery too. Claim retries reuse request tokens to recover a committed descriptor after a lost acknowledgment.
 
 `sleep` records an absolute database-clock wake time and returns the remaining duration. The SDK performs the actual sleep while monitoring ownership. A relative workflow timeout starts when execution starts; children inherit the absolute deadline unless they supply their own timeout or explicitly opt out. Deadlines survive restart and resume. An expired deadline cancels the workflow; resume does not silently grant a new budget.
 
-Workflow management supports cancellation, resume and filtered listing. Events and messages use durable step records for replay, and messages are FIFO within a destination/topic. Recovered waits use the recorded arrival deadline. Event revisions preserve earlier eligible values after overwrites and remain until workflow deletion. Older event rows without history support immediate reads, but their past arrival times cannot be reconstructed. Polling APIs return serialized values or remaining wait time; SDKs perform the waits.
+Workflow management supports cancellation, resume and filtered listing. Events and messages use durable step records for replay, and messages are FIFO within a destination/topic. Recovered waits use the recorded arrival deadline. Event revisions preserve earlier eligible values after overwrites and remain until workflow deletion. Older event rows without history support immediate reads, but their past arrival times cannot be reconstructed. `wait_recv`, `wait_event` and `wait_queue_claims` hold the wait in the core: a write on the same engine wakes the waiter at once, and a write from another process is seen by re-reading within 250ms. Polling APIs return one read.
 
 ## Queues
 

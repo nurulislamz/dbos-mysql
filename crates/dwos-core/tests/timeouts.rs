@@ -17,7 +17,7 @@ fn config() -> EngineConfig {
 }
 
 async fn setup_engine(backend: Backend) -> (TestDb, Engine) {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = Engine::connect(&db.url, config()).await.unwrap();
     (db, engine)
 }

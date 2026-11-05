@@ -75,6 +75,64 @@ fn is_fk_violation(error: &sqlx::Error) -> bool {
     }
 }
 
+struct RecordedWrite {
+    name: String,
+    output: Option<String>,
+    error: Option<String>,
+    child_workflow_id: Option<String>,
+    serialization: String,
+}
+
+fn recorded_send(
+    workflow_id: &str,
+    step_id: u32,
+    expected: &'static str,
+    step: &RecordedWrite,
+) -> Result<SendOutcome, Error> {
+    check_step_name(workflow_id, step_id, expected, step.name.clone())?;
+    if step.child_workflow_id.is_some() {
+        return Err(Error::StepKindMismatch {
+            workflow_id: workflow_id.to_owned(),
+            step_id,
+            expected: "step",
+        });
+    }
+    if let Some(error) = &step.error {
+        return Ok(SendOutcome::ReplayedError(error.clone()));
+    }
+    Ok(SendOutcome::Replayed)
+}
+
+fn recorded_value(
+    workflow_id: &str,
+    step_id: u32,
+    step_name: &str,
+    step: &RecordedWrite,
+) -> Result<StoredValue, Error> {
+    check_step_name(workflow_id, step_id, step_name, step.name.clone())?;
+    if step.child_workflow_id.is_some() {
+        return Err(Error::StepKindMismatch {
+            workflow_id: workflow_id.to_owned(),
+            step_id,
+            expected: "step",
+        });
+    }
+    if let Some(error) = &step.error {
+        return Err(Error::Corrupt(format!(
+            "workflow {workflow_id} step {step_id} recorded an error during wait: {error}"
+        )));
+    }
+    let text = step.output.clone().ok_or_else(|| {
+        Error::Corrupt(format!(
+            "workflow {workflow_id} step {step_id} has no stored output"
+        ))
+    })?;
+    Ok(StoredValue {
+        text,
+        serialization: step.serialization.clone(),
+    })
+}
+
 fn check_wait_steps(step_id: u32, timeout_step_id: u32) -> Result<(), Error> {
     if step_id == timeout_step_id {
         return Err(Error::InvalidConfig(
@@ -143,13 +201,20 @@ impl Store {
                 self.owned_transaction(lease).await?.0
             }
         };
-        if let SendFrom::Workflow { lease, step_id } = from
-            && let Some(outcome) = self
-                .replay_send(&mut tx, &lease.workflow_id, step_id, SEND_STEP)
-                .await?
-        {
-            tx.commit().await?;
-            return Ok(outcome);
+        match from {
+            SendFrom::Workflow { lease, step_id } => {
+                let (next, recorded) = self.read_for_write(tx, lease, step_id).await?;
+                tx = next;
+                if let Some(recorded) = recorded {
+                    let outcome = recorded_send(&lease.workflow_id, step_id, SEND_STEP, &recorded)?;
+                    tx.commit().await?;
+                    return Ok(outcome);
+                }
+            }
+            SendFrom::Step(lease) => {
+                tx = self.live_transaction(tx, lease).await?;
+            }
+            SendFrom::Outside => {}
         }
         let inserted = sqlx::query(self.sql(&format!(
             "INSERT INTO notifications (destination_uuid, topic, message, created_at_epoch_ms, message_uuid, serialization, consumed) \
@@ -213,10 +278,10 @@ impl Store {
         timeout_ms: i64,
     ) -> Result<Poll, Error> {
         let (mut tx, _) = self.owned_transaction(lease).await?;
-        if let Some(saved) = self
-            .replay_value(&mut tx, &lease.workflow_id, step_id, RECV_STEP)
-            .await?
-        {
+        let (next, recorded) = self.read_for_write(tx, lease, step_id).await?;
+        tx = next;
+        if let Some(recorded) = recorded {
+            let saved = recorded_value(&lease.workflow_id, step_id, RECV_STEP, &recorded)?;
             tx.commit().await?;
             return Ok(Poll::Ready(saved));
         }
@@ -303,13 +368,14 @@ impl Store {
             Some((lease, _, _)) => self.owned_transaction(lease).await?.0,
             None => self.begin().await?,
         };
-        if let Some((lease, step_id, _)) = caller
-            && let Some(saved) = self
-                .replay_value(&mut tx, &lease.workflow_id, step_id, GET_EVENT_STEP)
-                .await?
-        {
-            tx.commit().await?;
-            return Ok(Poll::Ready(saved));
+        if let Some((lease, step_id, _)) = caller {
+            let (next, recorded) = self.read_for_write(tx, lease, step_id).await?;
+            tx = next;
+            if let Some(recorded) = recorded {
+                let saved = recorded_value(&lease.workflow_id, step_id, GET_EVENT_STEP, &recorded)?;
+                tx.commit().await?;
+                return Ok(Poll::Ready(saved));
+            }
         }
         let (deadline_ms, initial) = if let Some((lease, _, timeout_step_id)) = caller {
             self.ensure_deadline(&mut tx, lease, timeout_step_id, timeout_ms)
@@ -390,13 +456,17 @@ impl Store {
         serialization: &str,
     ) -> Result<SendOutcome, Error> {
         let (mut tx, _) = self.owned_transaction(lease).await?;
-        if let Some(step_id) = step_id
-            && let Some(outcome) = self
-                .replay_send(&mut tx, &lease.workflow_id, step_id, SET_EVENT_STEP)
-                .await?
-        {
-            tx.commit().await?;
-            return Ok(outcome);
+        if let Some(step_id) = step_id {
+            let (next, recorded) = self.read_for_write(tx, lease, step_id).await?;
+            tx = next;
+            if let Some(recorded) = recorded {
+                let outcome =
+                    recorded_send(&lease.workflow_id, step_id, SET_EVENT_STEP, &recorded)?;
+                tx.commit().await?;
+                return Ok(outcome);
+            }
+        } else {
+            tx = self.live_transaction(tx, lease).await?;
         }
         sqlx::query(self.sql(&format!(
             "INSERT INTO workflow_events (workflow_uuid, {{KEY}}, value, serialization) VALUES (?, ?, ?, ?) {}",
@@ -502,77 +572,57 @@ impl Store {
         .await
     }
 
-    async fn replay_send(
+    /// Replay and the claim window in one read. A recorded step is returned without revoking
+    /// an expired lease. A new write revokes that lease first, same as `live_transaction`.
+    async fn read_for_write(
         &self,
-        tx: &mut Transaction<'static, Any>,
-        workflow_id: &str,
+        mut tx: Transaction<'static, Any>,
+        lease: &Lease,
         step_id: u32,
-        expected: &'static str,
-    ) -> Result<Option<SendOutcome>, Error> {
-        let Some((recorded_name, record)) = self.read_step(tx, workflow_id, step_id).await? else {
-            return Ok(None);
-        };
-        check_step_name(workflow_id, step_id, expected, recorded_name)?;
-        if record.child_workflow_id.is_some() {
-            return Err(Error::StepKindMismatch {
-                workflow_id: workflow_id.to_owned(),
-                step_id,
-                expected: "step",
-            });
-        }
-        if let Some(error) = record.error {
-            return Ok(Some(SendOutcome::ReplayedError(error)));
-        }
-        Ok(Some(SendOutcome::Replayed))
-    }
-
-    async fn replay_value(
-        &self,
-        tx: &mut Transaction<'static, Any>,
-        workflow_id: &str,
-        step_id: u32,
-        step_name: &str,
-    ) -> Result<Option<StoredValue>, Error> {
+    ) -> Result<(Transaction<'static, Any>, Option<RecordedWrite>), Error> {
         let row = sqlx::query(self.sql(
-            "SELECT function_name, output, error, child_workflow_id, serialization FROM operation_outputs WHERE workflow_uuid = ? AND function_id = ?",
+            "SELECT workflow_status.claim_after AS claim_after, {NOW} AS now_ms, \
+             operation_outputs.function_name AS function_name, operation_outputs.output AS output, \
+             operation_outputs.error AS error, operation_outputs.child_workflow_id AS child_workflow_id, \
+             operation_outputs.serialization AS serialization \
+             FROM operation_outputs \
+             RIGHT JOIN workflow_status ON operation_outputs.workflow_uuid = workflow_status.workflow_uuid \
+             AND operation_outputs.function_id = ? \
+             WHERE workflow_status.workflow_uuid = ? AND workflow_status.lease_token = ?",
         ))
-        .bind(workflow_id)
         .bind(i64::from(step_id))
-        .fetch_optional(&mut **tx)
+        .bind(lease.workflow_id.as_str())
+        .bind(lease.token.as_str())
+        .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
-            return Ok(None);
+            return Err(Error::LeaseLost(lease.workflow_id.clone()));
         };
-        check_step_name(
-            workflow_id,
-            step_id,
-            step_name,
-            row.try_get("function_name")?,
-        )?;
-        if row
-            .try_get::<Option<String>, _>("child_workflow_id")?
-            .is_some()
-        {
-            return Err(Error::StepKindMismatch {
-                workflow_id: workflow_id.to_owned(),
-                step_id,
-                expected: "step",
-            });
+        if let Some(name) = row.try_get::<Option<String>, _>("function_name")? {
+            return Ok((
+                tx,
+                Some(RecordedWrite {
+                    name,
+                    output: row.try_get("output")?,
+                    error: row.try_get("error")?,
+                    child_workflow_id: row.try_get("child_workflow_id")?,
+                    serialization: row
+                        .try_get::<Option<String>, _>("serialization")?
+                        .ok_or_else(|| {
+                            Error::Corrupt(format!(
+                                "workflow {} step {step_id} has no stored serialization",
+                                lease.workflow_id
+                            ))
+                        })?,
+                }),
+            ));
         }
-        if let Some(error) = row.try_get::<Option<String>, _>("error")? {
-            return Err(Error::Corrupt(format!(
-                "workflow {workflow_id} step {step_id} recorded an error during wait: {error}"
-            )));
+        let claim_after: Option<i64> = row.try_get("claim_after")?;
+        let now_ms: i64 = row.try_get("now_ms")?;
+        if claim_after.is_some_and(|claim_after| claim_after <= now_ms) {
+            tx = self.live_transaction(tx, lease).await?;
         }
-        let text = row.try_get::<Option<String>, _>("output")?.ok_or_else(|| {
-            Error::Corrupt(format!(
-                "workflow {workflow_id} step {step_id} has no stored output"
-            ))
-        })?;
-        Ok(Some(StoredValue {
-            text,
-            serialization: row.try_get("serialization")?,
-        }))
+        Ok((tx, None))
     }
 
     async fn ensure_deadline(

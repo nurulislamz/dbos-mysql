@@ -5,6 +5,7 @@
 //! SQLite takes the write lock in `BEGIN IMMEDIATE`, so these races cannot exist there. Its branches
 //! run each order one after the other and check the same end state.
 
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +29,7 @@ const LOCK_QUEUE: &str = "SELECT concurrency FROM workflow_queues";
 const REVOKE: &str = "lease_token IS NOT NULL AND claim_after <=";
 const DEADLINE_CANCEL: &str = "WHERE status = 'PENDING' AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries";
 const NEXT_IN_FIFO: &str = "ORDER BY (SELECT sequence";
+const LOCK_CANDIDATE: &str = "AND lease_token IS NULL AND claim_after <=";
 const RENEW: &str = "SET claim_after = ";
 const RELEASE: &str = "recovery_attempts = recovery_attempts - 1";
 const CANCEL: &str = "status IN ('PENDING', 'MAX_RECOVERY_ATTEMPTS_EXCEEDED')";
@@ -459,14 +461,14 @@ all_dbs!(
             let mut renewal = connection(&db, backend).await;
             exec(&mut renewal, "BEGIN").await;
             exec(
-            &mut renewal,
-            &format!(
+                &mut renewal,
+                &format!(
                 "UPDATE workflow_status SET claim_after = 9000000000000 WHERE workflow_uuid = 'a' \
                  AND lease_token = '{}' AND status = 'PENDING'",
                 held.token()
             ),
-        )
-        .await;
+            )
+            .await;
             let claiming = claim(&claimer, "q");
             wait_blocked(&db, backend, REVOKE).await;
             exec(&mut renewal, "ROLLBACK").await;
@@ -1174,15 +1176,12 @@ all_dbs!(
                     past_deadline(&db, backend, "a").await;
                 }
                 let operation = op.spawn(&owner, &first[0].lease);
-                // shortcut: MySQL's paused claim can still hold a's row lock, so its operation may only
-                // finish after the claim. Remove the branch if that lock goes away (see REPORT.md).
-                if matches!(backend, Backend::MySql) {
-                    exec(&mut stop, "ROLLBACK").await;
-                    operation.await.unwrap().unwrap();
-                } else {
-                    operation.await.unwrap().unwrap();
-                    exec(&mut stop, "ROLLBACK").await;
-                }
+                let completed = tokio::time::timeout(Duration::from_secs(5), operation).await;
+                exec(&mut stop, "ROLLBACK").await;
+                completed
+                    .expect("a queue claim blocked a live owner's operation")
+                    .unwrap()
+                    .unwrap();
                 claiming.await.unwrap().unwrap()
             };
             assert_eq!(
@@ -1299,7 +1298,7 @@ all_dbs!(
                 let owner = owner.clone();
                 tokio::spawn(async move { owner.store().cancel_expired().await })
             };
-            wait_blocked(&db, backend, Op::CancelExpired.needle()).await;
+            wait_blocked(&db, backend, CANCEL_IF_EXPIRED).await;
             exec(&mut stop, "ROLLBACK").await;
             (
                 claiming.await.unwrap().unwrap(),
@@ -1381,66 +1380,62 @@ all_dbs!(only_claim_and_enqueue_wait_for_the_queue_row, backend, {
     assert!(!claiming.await.unwrap().unwrap().is_empty());
 });
 
-// A real cycle on MySQL. The revoke keeps its lock on the expired destination, then reads the sender's
-// row. `send` holds the sender's row, then needs a shared lock on the destination for its foreign key.
-// Postgres has no cycle: its revoke touches only expired rows, and key-share does not block it. Either
-// way both must finish, the message must exist once, and the failed attempt must spend nothing.
-all_dbs!(deadlock_between_send_and_claim_loses_no_state, backend, {
-    let db = TestDb::create(backend).await;
-    let (owner, claimer) = (engine(&db).await, engine(&db).await);
-    make_queue(&owner, "q", 2).await;
-    enqueue(&owner, "q", &["a-destination", "b-sender"]).await;
-    let held = owner.claim_queue("q", &names()).await.unwrap();
-    assert_eq!(ids(&held), ["a-destination", "b-sender"]);
-    let sender = lease_of(&run(&held[1]));
-    expire(&db, backend, "a-destination").await;
-    let send = |engine: Engine, sender: Lease| async move {
-        let run = Run::new(sender, dwos_core::PORTABLE_JSON.to_owned(), None);
-        engine
-            .send(
-                "a-destination",
-                None,
-                "1",
-                dwos_core::PORTABLE_JSON,
-                Some("once"),
-                Some(&run),
-                Some(1),
-            )
-            .await
-    };
-    let claimed = if is_sqlite(backend) {
-        send(owner.clone(), sender.clone()).await.unwrap();
-        claimer.claim_queue("q", &names()).await.unwrap()
-    } else {
-        // The gate stops the send's replay check: after it locked its own row, before its foreign key.
-        let gate = Gate::close(&db, backend, "operation_outputs").await;
-        let sending = tokio::spawn(send(owner.clone(), sender.clone()));
-        wait_blocked(&db, backend, READ_STEP).await;
-        let claiming = claim(&claimer, "q");
-        if matches!(backend, Backend::MySql) {
-            wait_blocked(&db, backend, REVOKE).await;
-        }
-        gate.open().await;
-        sending.await.unwrap().unwrap();
-        claiming.await.unwrap().unwrap()
-    };
-    assert_eq!(ids(&claimed), ["a-destination"]);
-    assert_eq!(claimed[0].recovery_attempts, 2);
-    assert_eq!(owners(&db, backend, "q").await, 2);
-    let mut conn = connection(&db, backend).await;
-    assert_eq!(
-        scalar(&mut conn, "SELECT COUNT(*) FROM notifications").await,
-        1
-    );
-    owner.store().renew_lease(&sender, LONG).await.unwrap();
-    assert_eq!(attempts(&owner, "b-sender").await, 1);
-    if matches!(backend, Backend::MySql) {
-        assert!(
-            owner.store().transient_retries() + claimer.store().transient_retries() >= 1,
-            "the forced cycle should have made one side the victim"
+// Admission must finish while a send holds another live owner's row, before its foreign-key check.
+all_dbs!(
+    send_holding_a_live_owner_does_not_block_admission,
+    backend,
+    {
+        let db = TestDb::create(backend).await;
+        let (owner, claimer) = (engine(&db).await, engine(&db).await);
+        make_queue(&owner, "q", 2).await;
+        enqueue(&owner, "q", &["a-destination", "b-sender"]).await;
+        let held = owner.claim_queue("q", &names()).await.unwrap();
+        assert_eq!(ids(&held), ["a-destination", "b-sender"]);
+        let sender = lease_of(&run(&held[1]));
+        expire(&db, backend, "a-destination").await;
+        let send = |engine: Engine, sender: Lease| async move {
+            let run = Run::new(sender, dwos_core::PORTABLE_JSON.to_owned(), None);
+            engine
+                .send(
+                    "a-destination",
+                    None,
+                    "1",
+                    dwos_core::PORTABLE_JSON,
+                    Some("once"),
+                    Some(&run),
+                    Some(1),
+                )
+                .await
+        };
+        let claimed = if is_sqlite(backend) {
+            send(owner.clone(), sender.clone()).await.unwrap();
+            claimer.claim_queue("q", &names()).await.unwrap()
+        } else {
+            // The gate stops the send's replay check: after it locked its own row, before its foreign key.
+            let gate = Gate::close(&db, backend, "operation_outputs").await;
+            let sending = tokio::spawn(send(owner.clone(), sender.clone()));
+            wait_blocked(&db, backend, READ_STEP).await;
+            let claiming = claim(&claimer, "q");
+            let claimed = tokio::time::timeout(Duration::from_secs(5), claiming).await;
+            gate.open().await;
+            sending.await.unwrap().unwrap();
+            claimed
+                .expect("a live sender blocked admission")
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(ids(&claimed), ["a-destination"]);
+        assert_eq!(claimed[0].recovery_attempts, 2);
+        assert_eq!(owners(&db, backend, "q").await, 2);
+        let mut conn = connection(&db, backend).await;
+        assert_eq!(
+            scalar(&mut conn, "SELECT COUNT(*) FROM notifications").await,
+            1
         );
+        owner.store().renew_lease(&sender, LONG).await.unwrap();
+        assert_eq!(attempts(&owner, "b-sender").await, 1);
     }
-});
+);
 
 // The claim is the deadlock victim after it already revoked and re-admitted an owner. A retry must
 // redo that from scratch: one attempt per admission that committed, and the same FIFO result.
@@ -1585,12 +1580,11 @@ all_dbs!(
             enqueue(&engine, "q", &["next", "last"]).await;
             let mut lock = lock_row(&db, backend, "head").await;
             let claiming = claim(&engine, "q");
-            // On MySQL the revoke stops at this row, which is still before the head's check.
             wait_blocked(
                 &db,
                 backend,
                 if matches!(backend, Backend::MySql) {
-                    REVOKE
+                    LOCK_CANDIDATE
                 } else {
                     NEXT_IN_FIFO
                 },
@@ -1640,13 +1634,13 @@ all_dbs!(
         enqueue(&engine, "q", &["next"]).await;
         let mut conn = connection(&db, backend).await;
         exec(
-        &mut conn,
-        &format!(
+            &mut conn,
+            &format!(
             "UPDATE workflow_queue_entries SET start_timeout_ms = {} WHERE workflow_uuid = 'huge'",
             i64::MAX
         ),
-    )
-    .await;
+        )
+        .await;
         let claimed = engine.claim_queue("q", &names()).await.unwrap();
         assert_eq!(ids(&claimed), ["huge"]);
         assert_eq!(claimed[0].deadline_epoch_ms, Some(i64::MAX));
@@ -1658,12 +1652,8 @@ all_dbs!(
     }
 );
 
-// The revoke above uses a primary key plan, which takes a plain lock wait. MySQL's semi-consistent
-// read only applies to a table scan, which the optimizer may pick on other data. So run the store's
-// statement under that plan: a matching row waits and re-reads, and a row that does not match is
-// passed without waiting.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mysql_revoke_recheck_also_holds_under_a_table_scan() {
+async fn mysql_expired_owner_recheck_does_not_wait_for_live_rows() {
     let backend = Backend::MySql;
     let db = TestDb::create(backend).await;
     let engine = engine(&db).await;
@@ -1681,39 +1671,12 @@ async fn mysql_revoke_recheck_also_holds_under_a_table_scan() {
         "UPDATE workflow_status SET claim_after = 9000000000000 WHERE workflow_uuid = 'b'",
     )
     .await;
-
-    let revoke = "UPDATE workflow_status SET lease_token = NULL WHERE status = 'PENDING' AND lease_token IS NOT NULL \
-                  AND claim_after <= 1000 AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = 'q')";
-    let mut claimer = connection(&db, backend).await;
     exec(
-        &mut claimer,
-        "SET SESSION optimizer_switch = 'semijoin=off'",
-    )
-    .await;
-    exec(
-        &mut claimer,
+        &mut setup,
         "ALTER TABLE workflow_status DROP INDEX ix_workflow_status_claim",
     )
     .await;
-    let plan: String = sqlx::query_scalar(AssertSqlSafe(format!("EXPLAIN FORMAT=JSON {revoke}")))
-        .fetch_one(&mut claimer)
-        .await
-        .unwrap();
-    let status_block = plan
-        .split("\"table_name\": \"workflow_status\"")
-        .nth(1)
-        .unwrap();
-    assert!(
-        status_block
-            .split("\"access_type\": ")
-            .nth(1)
-            .unwrap()
-            .starts_with("\"ALL\""),
-        "expected a table scan: {plan}"
-    );
 
-    // `b` is locked but its committed version does not match, so the scan passes it and revokes `a`
-    // only after the in-flight renewal of `a` decides. Here that renewal commits, so nothing changes.
     let mut renewal = connection(&db, backend).await;
     exec(&mut renewal, "BEGIN").await;
     exec(
@@ -1724,28 +1687,65 @@ async fn mysql_revoke_recheck_also_holds_under_a_table_scan() {
         ),
     )
     .await;
-    let mut b_lock = lock_row(&db, backend, "b").await;
-    let revoking = tokio::spawn(async move {
-        sqlx::raw_sql(AssertSqlSafe(revoke.to_owned()))
-            .execute(&mut claimer)
-            .await
-            .map(|done| done.rows_affected())
-    });
-    wait_blocked(
-        &db,
-        backend,
-        "lease_token IS NOT NULL AND claim_after <= 1000",
-    )
-    .await;
+    let mut live_lock = lock_row(&db, backend, "b").await;
+    let claiming = claim(&engine, "q");
+    wait_blocked(&db, backend, REVOKE).await;
     exec(&mut renewal, "COMMIT").await;
-    assert_eq!(revoking.await.unwrap().unwrap(), 0);
-    exec(&mut b_lock, "COMMIT").await;
+    let claimed = tokio::time::timeout(Duration::from_secs(5), claiming).await;
+    exec(&mut live_lock, "COMMIT").await;
+    assert!(
+        claimed
+            .expect("rechecking an expired owner blocked on a live workflow")
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(owners(&db, backend, "q").await, 2);
+    assert_eq!(attempts(&engine, "a").await, 1);
     engine
         .store()
         .renew_lease(&held[0].lease, LONG)
         .await
         .unwrap();
+}
+
+/// Stands in for parties that have already left a barrier. One stand-in fills one
+/// empty slot. Two workers can leave while a third is already inside `wait`, so
+/// every empty slot needs its own stand-in or that third worker stays there.
+fn hold_barrier_open(barrier: Arc<tokio::sync::Barrier>, parties: usize) -> Vec<JoinHandle<()>> {
+    (0..parties.saturating_sub(1))
+        .map(|_| {
+            let barrier = barrier.clone();
+            tokio::spawn(async move {
+                loop {
+                    barrier.wait().await;
+                }
+            })
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parked_barrier_waiter_unblocks_after_the_other_parties_leave() {
+    let parties = STRESS_ENGINES;
+    let barrier = Arc::new(tokio::sync::Barrier::new(parties));
+    let parked = barrier.clone();
+    let mut wait = std::pin::pin!(async move { parked.wait().await });
+    std::future::poll_fn(|cx| {
+        let _ = wait.as_mut().poll(cx);
+        std::task::Poll::Ready(())
+    })
+    .await;
+    let fillers = hold_barrier_open(barrier, parties);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        std::future::poll_fn(|cx| wait.as_mut().poll(cx)),
+    )
+    .await
+    .expect("a lone waiter stayed parked when the other parties had left");
+    for filler in fillers {
+        filler.abort();
+    }
 }
 
 const STRESS_ENGINES: usize = 3;
@@ -1934,21 +1934,23 @@ all_dbs!(
             }
         })
         .await;
-        // A worker that already saw `done` stays out of the barrier, so the others must not wait for it.
+        // A worker that already saw `done` stays out of the barrier. The join is
+        // outside the wait above, so it has the same bound: a stuck worker fails
+        // the test instead of leaving the suite parked.
         done.store(true, Ordering::SeqCst);
-        let release_barrier = {
-            let barrier = barrier.clone();
-            tokio::spawn(async move {
-                loop {
-                    barrier.wait().await;
-                }
-            })
-        };
-        let mut admitted = 0;
-        for worker in workers {
-            admitted += worker.await.unwrap();
+        let release_barrier = hold_barrier_open(barrier.clone(), STRESS_ENGINES);
+        let admitted = tokio::time::timeout(STRESS_BOUND, async {
+            let mut admitted = 0;
+            for worker in workers {
+                admitted += worker.await.unwrap();
+            }
+            admitted
+        })
+        .await
+        .expect("a worker did not finish after its workflows ended");
+        for release in release_barrier {
+            release.abort();
         }
-        release_barrier.abort();
         let (samples, highest) = sampler.await.unwrap();
         assert!(
             ended.is_ok(),
@@ -2011,3 +2013,42 @@ all_dbs!(stalled_claim_does_not_block_live_owners, backend, {
     assert_eq!(ids(&claiming.await.unwrap().unwrap()), ["b-expired"]);
     assert_eq!(owners(&db, backend, "q").await, 3);
 });
+
+all_dbs!(
+    claim_paused_after_count_does_not_block_a_live_owner,
+    backend,
+    {
+        if is_sqlite(backend) {
+            return;
+        }
+        for live_id in ["a-live", "z-live"] {
+            let db = TestDb::create(backend).await;
+            let (owner, claimer) = (engine(&db).await, engine(&db).await);
+            make_queue(&owner, "q", 2).await;
+            enqueue(&owner, "q", &[live_id]).await;
+            let held = owner.claim_queue("q", &names()).await.unwrap();
+            enqueue_timed(&owner, "q", "b-waiting").await;
+            enqueue(&owner, "q", &["c-waiting", "d-waiting"]).await;
+            if matches!(backend, Backend::MySql) {
+                exec(
+                    &mut connection(&db, backend).await,
+                    "ALTER TABLE workflow_status DROP INDEX ix_workflow_status_claim",
+                )
+                .await;
+            }
+            let mut stop = stop_after_count(&db, backend, "b-waiting").await;
+            let claiming = claim(&claimer, "q");
+            wait_after_count(&db, backend).await;
+            let renewed = tokio::time::timeout(
+                Duration::from_secs(2),
+                owner.store().renew_lease(&held[0].lease, LONG),
+            )
+            .await;
+            exec(&mut stop, "ROLLBACK").await;
+            assert_eq!(ids(&claiming.await.unwrap().unwrap()), ["b-waiting"]);
+            renewed
+                .expect("a queue claim blocked renewal of a live owner")
+                .unwrap();
+        }
+    }
+);

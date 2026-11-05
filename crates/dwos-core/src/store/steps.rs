@@ -55,25 +55,36 @@ impl Store {
                     Ok(record)
                 })
                 .transpose()?;
-            // Revoked, not only refused: an SDK reports this through the body, and `finish` must not store it as final.
-            let revoked = saved.is_none()
-                && sqlx::query(self.sql(
-                    "UPDATE workflow_status SET lease_token = NULL, updated_at = {NOW} \
-                     WHERE workflow_uuid = ? AND lease_token = ? AND claim_after <= {NOW}",
-                ))
-                .bind(lease.workflow_id.as_str())
-                .bind(lease.token.as_str())
-                .execute(&mut *tx)
-                .await?
-                .rows_affected()
-                    > 0;
-            tx.commit().await?;
-            if revoked {
-                return Err(Error::LeaseLost(lease.workflow_id.clone()));
+            if saved.is_none() {
+                tx = self.live_transaction(tx, lease).await?;
             }
+            tx.commit().await?;
             Ok(saved)
         })
         .await
+    }
+
+    pub(super) async fn live_transaction(
+        &self,
+        mut tx: Transaction<'static, Any>,
+        lease: &Lease,
+    ) -> Result<Transaction<'static, Any>, Error> {
+        // Revoked, not only refused: an SDK reports this through the body, and `finish` must not store it as final.
+        let revoked = sqlx::query(self.sql(
+            "UPDATE workflow_status SET lease_token = NULL, updated_at = {NOW} \
+             WHERE workflow_uuid = ? AND lease_token = ? AND claim_after <= {NOW}",
+        ))
+        .bind(lease.workflow_id.as_str())
+        .bind(lease.token.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            > 0;
+        if revoked {
+            tx.commit().await?;
+            return Err(Error::LeaseLost(lease.workflow_id.clone()));
+        }
+        Ok(tx)
     }
 
     pub async fn load_step(

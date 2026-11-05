@@ -1,7 +1,10 @@
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use super::{Engine, Run};
 use crate::Error;
+use crate::lease::StepWatch;
 use crate::workflow::StepRecord;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +20,15 @@ pub struct StepPolicy {
     interval_seconds: f64,
     max_attempts: u32,
     backoff_rate: f64,
+    timeout: Option<Duration>,
+    heartbeat_timeout: Option<Duration>,
+}
+
+fn attempt_limit(name: &str, seconds: f64) -> Result<Duration, Error> {
+    Duration::try_from_secs_f64(seconds)
+        .ok()
+        .filter(|limit| !limit.is_zero() && Instant::now().checked_add(*limit).is_some())
+        .ok_or_else(|| Error::InvalidConfig(format!("{name} must be a positive number of seconds")))
 }
 
 impl StepPolicy {
@@ -46,7 +58,30 @@ impl StepPolicy {
             interval_seconds,
             max_attempts,
             backoff_rate,
+            timeout: None,
+            heartbeat_timeout: None,
         })
+    }
+
+    /// Limits on each attempt. An attempt over a limit fails like any other: see [`StepAttempts::failed`].
+    pub fn with_timeouts(
+        mut self,
+        timeout_seconds: Option<f64>,
+        heartbeat_timeout_seconds: Option<f64>,
+    ) -> Result<Self, Error> {
+        self.timeout = timeout_seconds
+            .map(|seconds| attempt_limit("timeout_seconds", seconds))
+            .transpose()?;
+        self.heartbeat_timeout = heartbeat_timeout_seconds
+            .map(|seconds| attempt_limit("heartbeat_timeout_seconds", seconds))
+            .transpose()?;
+        Ok(self)
+    }
+
+    /// Starts one attempt's timers, or returns `None` for a step with no limits.
+    pub fn watch(&self) -> Option<StepWatch> {
+        (self.timeout.is_some() || self.heartbeat_timeout.is_some())
+            .then(|| StepWatch::start(self.timeout, self.heartbeat_timeout))
     }
 
     pub fn attempts(self) -> StepAttempts {
@@ -98,8 +133,13 @@ impl StepAttempts {
         self.policy.status(self.attempt)
     }
 
+    pub fn wraps_failures(&self) -> bool {
+        self.policy.wraps_failures()
+    }
+
     /// The delay before trying again, or `None` when the step has failed for good.
-    pub fn failed(&mut self) -> Option<Duration> {
+    pub fn failed(&mut self, retryable: bool) -> Option<Duration> {
+        self.policy.retries_allowed &= retryable;
         let delay = self.policy.retry_delay(self.attempt)?;
         self.attempt += 1;
         Some(delay)
@@ -172,6 +212,75 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_non_retryable_failure_stops_without_wrapping_the_error() {
+        for failures_before_fatal in [0, 2] {
+            let mut attempts = StepPolicy::new(true, 0.0, 3, 2.0).unwrap().attempts();
+            for _ in 0..failures_before_fatal {
+                assert_eq!(attempts.failed(true), Some(Duration::ZERO));
+            }
+            assert_eq!(attempts.failed(false), None);
+            assert!(!attempts.wraps_failures());
+            assert_eq!(attempts.failed(true), None);
+        }
+    }
+
+    #[test]
+    fn exhausted_retryable_failures_keep_the_wrapper() {
+        let mut attempts = StepPolicy::new(true, 0.0, 1, 2.0).unwrap().attempts();
+        assert_eq!(attempts.failed(true), None);
+        assert!(attempts.wraps_failures());
+    }
+
+    #[test]
+    fn invalid_attempt_limits_are_rejected() {
+        let policy = StepPolicy::new(true, 0.0, 3, 2.0).unwrap();
+        for bad in [
+            0.0,
+            -0.0,
+            -1.0,
+            1.0e-12,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::MAX,
+            1.0e19,
+        ] {
+            for (timeout, heartbeat) in
+                [(Some(bad), None), (None, Some(bad)), (Some(1.0), Some(bad))]
+            {
+                assert!(
+                    matches!(
+                        policy.with_timeouts(timeout, heartbeat),
+                        Err(Error::InvalidConfig(_))
+                    ),
+                    "{timeout:?} {heartbeat:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_step_with_a_limit_gets_a_watch() {
+        let policy = StepPolicy::new(true, 0.0, 3, 2.0).unwrap();
+        assert!(policy.watch().is_none());
+        assert!(policy.with_timeouts(None, None).unwrap().watch().is_none());
+        assert!(
+            policy
+                .with_timeouts(Some(1.0), None)
+                .unwrap()
+                .watch()
+                .is_some()
+        );
+        assert!(
+            policy
+                .with_timeouts(None, Some(1.0))
+                .unwrap()
+                .watch()
+                .is_some()
+        );
+    }
 
     #[test]
     fn zero_retry_interval_stays_zero_when_backoff_overflows() {

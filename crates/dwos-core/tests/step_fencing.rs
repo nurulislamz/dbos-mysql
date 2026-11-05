@@ -42,7 +42,8 @@ macro_rules! networked {
     };
 }
 
-const REAL_LEASE: Duration = Duration::from_secs(3);
+const REAL_LEASE: Duration = Duration::from_millis(400);
+const PAST_EXPIRY: Duration = Duration::from_millis(50);
 
 fn config(lease: Duration) -> EngineConfig {
     EngineConfig {
@@ -171,7 +172,7 @@ async fn wait_until_blocked(store: &Store) {
         }
         // shortcut: SQLite does not show its busy waiters, so this only gives the other task time to reach the lock.
         _ => {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             return;
         }
     };
@@ -346,7 +347,7 @@ all_dbs!(
     q1_after_takeover_only_the_new_owner_sees_the_step,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let old = begin_run(&engine, "a").await;
         let current = take_over(&engine, "a").await;
@@ -370,7 +371,7 @@ all_dbs!(
 );
 
 all_dbs!(q1_repeated_checks_say_run_only_until_the_save, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = begin_run(&engine, "a").await;
     for _ in 0..2 {
@@ -399,8 +400,7 @@ networked!(
     q1_a_save_abandoned_after_a_lost_ack_still_replays,
     backend,
     {
-        let db = TestDb::create(backend).await;
-        db.open().await;
+        let db = TestDb::migrated(backend).await;
         let proxy = WireFault::start(&db.url).await;
         let engine = engine_at(&proxy.url, LONG).await;
         let run = Arc::new(begin_run(&engine, "a").await);
@@ -427,7 +427,7 @@ networked!(
 // Question 2: execution decisions on an expired lease that nobody has replaced.
 
 all_dbs!(q2_an_expired_lease_gets_no_run_and_is_revoked, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let old = begin_run(&engine, "a").await;
     expire(engine.store(), "a").await;
@@ -457,7 +457,7 @@ all_dbs!(q2_an_expired_lease_gets_no_run_and_is_revoked, backend, {
 });
 
 all_dbs!(q2_a_child_cannot_start_from_an_expired_parent, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let parent = begin_run(&engine, "a").await;
     expire(engine.store(), "a").await;
@@ -474,7 +474,7 @@ all_dbs!(q2_a_child_cannot_start_from_an_expired_parent, backend, {
 });
 
 all_dbs!(q2_a_refused_queue_member_is_admitted_again, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     engine
         .ensure_queue("q", NonZeroU32::new(1).unwrap())
@@ -495,7 +495,7 @@ all_dbs!(q2_a_refused_queue_member_is_admitted_again, backend, {
 });
 
 all_dbs!(q2_an_expired_lease_still_replays_saved_steps, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = begin_run(&engine, "a").await;
     engine
@@ -521,7 +521,7 @@ all_dbs!(
     q2_save_and_finish_after_expiry_without_takeover_stay_valid,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let run = begin_run(&engine, "a").await;
         expire(engine.store(), "a").await;
@@ -547,7 +547,7 @@ all_dbs!(
     q2_a_refused_owner_cannot_store_its_refusal_as_final,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let old = Arc::new(begin_run(&engine, "a").await);
         expire(engine.store(), "a").await;
@@ -593,7 +593,7 @@ all_dbs!(
     q2_a_renewal_rescues_an_expired_lease_before_any_refusal,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let run = begin_run(&engine, "a").await;
         expire(engine.store(), "a").await;
@@ -614,7 +614,7 @@ all_dbs!(
     q2_a_renewal_cannot_undo_a_revocation_in_progress,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let run = begin_run(&engine, "a").await;
         let mut revoking = hold_write_lock(engine.store()).await;
@@ -633,7 +633,7 @@ all_dbs!(
 );
 
 all_dbs!(q2_a_check_blocked_by_a_renewal_sees_the_renewal, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = Arc::new(begin_run(&engine, "a").await);
     expire(engine.store(), "a").await;
@@ -652,7 +652,7 @@ all_dbs!(q2_a_check_blocked_by_a_renewal_sees_the_renewal, backend, {
 });
 
 all_dbs!(q2_one_failed_renewal_causes_no_loss, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine_at(&db.url, REAL_LEASE).await;
     let run = begin_run(&engine, "a").await;
     let calls = AtomicU32::new(0);
@@ -668,7 +668,7 @@ all_dbs!(q2_one_failed_renewal_causes_no_loss, backend, {
         }
     });
     // Past the original expiry, which only the second renewal can have moved.
-    tokio::time::sleep(REAL_LEASE + Duration::from_millis(200)).await;
+    tokio::time::sleep(REAL_LEASE + PAST_EXPIRY).await;
     assert_eq!(
         engine.check_step(&run, 1, "step").await.unwrap(),
         StepDecision::Run
@@ -685,7 +685,7 @@ all_dbs!(
     q2_the_keeper_reports_loss_before_the_lease_expires,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine_at(&db.url, REAL_LEASE).await;
         let run = begin_run(&engine, "a").await;
         let started = Instant::now();
@@ -694,14 +694,13 @@ all_dbs!(
         });
         assert_eq!(keeper.lost().await, LeaseLoss::Unrenewable);
         assert!(started.elapsed() < REAL_LEASE, "{:?}", started.elapsed());
-        tokio::time::sleep_until((started + REAL_LEASE + Duration::from_millis(200)).into()).await;
+        tokio::time::sleep_until((started + REAL_LEASE + PAST_EXPIRY).into()).await;
         assert_lost(engine.check_step(&run, 1, "step").await);
     }
 );
 
 networked!(q2_a_brief_outage_causes_no_loss, backend, {
-    let db = TestDb::create(backend).await;
-    db.open().await;
+    let db = TestDb::migrated(backend).await;
     let proxy = WireFault::start(&db.url).await;
     let engine = engine_at(&proxy.url, REAL_LEASE).await;
     let run = Arc::new(begin_run(&engine, "a").await);
@@ -732,7 +731,7 @@ all_dbs!(
     q2_the_gap_after_a_check_is_fenced_only_at_the_save,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let old = begin_run(&engine, "a").await;
         assert_eq!(
@@ -762,7 +761,7 @@ all_dbs!(
 // Question 3: retries across an outage.
 
 all_dbs!(q3_a_blocked_check_sees_the_committed_takeover, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = Arc::new(begin_run(&engine, "a").await);
     let takeover = takeover_in_progress(engine.store()).await;
@@ -786,7 +785,7 @@ all_dbs!(
     q3_a_blocked_check_survives_a_rolled_back_takeover,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let run = Arc::new(begin_run(&engine, "a").await);
         let takeover = takeover_in_progress(engine.store()).await;
@@ -804,11 +803,8 @@ networked!(
     q3_a_check_retried_across_a_takeover_sees_fresh_state,
     backend,
     {
-        let db = TestDb::create(backend).await;
-        let direct = {
-            db.open().await;
-            engine(&db).await
-        };
+        let db = TestDb::migrated(backend).await;
+        let direct = { engine(&db).await };
         let proxy = WireFault::start(&db.url).await;
         let engine = engine_at(&proxy.url, LONG).await;
         let run = Arc::new(begin_run(&engine, "a").await);
@@ -831,11 +827,8 @@ networked!(
 );
 
 networked!(q3_a_retried_check_by_the_owner_sees_a_new_save, backend, {
-    let db = TestDb::create(backend).await;
-    let direct = {
-        db.open().await;
-        engine(&db).await
-    };
+    let db = TestDb::migrated(backend).await;
+    let direct = { engine(&db).await };
     let proxy = WireFault::start(&db.url).await;
     let engine = engine_at(&proxy.url, LONG).await;
     let run = Arc::new(begin_run(&engine, "a").await);
@@ -854,11 +847,8 @@ networked!(q3_a_retried_check_by_the_owner_sees_a_new_save, backend, {
 });
 
 networked!(q3_a_save_retried_after_a_lost_ack_is_idempotent, backend, {
-    let db = TestDb::create(backend).await;
-    let direct = {
-        db.open().await;
-        engine(&db).await
-    };
+    let db = TestDb::migrated(backend).await;
+    let direct = { engine(&db).await };
     let proxy = WireFault::start(&db.url).await;
     let engine = engine_at(&proxy.url, LONG).await;
     let run = Arc::new(begin_run(&engine, "a").await);
@@ -885,11 +875,8 @@ networked!(q3_a_save_retried_after_a_lost_ack_is_idempotent, backend, {
 });
 
 networked!(q3_a_retried_save_is_refused_after_a_takeover, backend, {
-    let db = TestDb::create(backend).await;
-    let direct = {
-        db.open().await;
-        engine(&db).await
-    };
+    let db = TestDb::migrated(backend).await;
+    let direct = { engine(&db).await };
     let proxy = WireFault::start(&db.url).await;
     let engine = engine_at(&proxy.url, LONG).await;
     let run = Arc::new(begin_run(&engine, "a").await);
@@ -920,7 +907,7 @@ all_dbs!(
     q3_repeating_a_save_is_idempotent_only_for_the_owner,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let old = begin_run(&engine, "a").await;
         for _ in 0..2 {
@@ -942,7 +929,7 @@ all_dbs!(
 // Question 4: stale owners, and values that never change.
 
 all_dbs!(q4_a_recorded_value_never_changes, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let old = begin_run(&engine, "a").await;
     let current = take_over(&engine, "a").await;
@@ -984,7 +971,7 @@ all_dbs!(q4_a_recorded_value_never_changes, backend, {
 });
 
 all_dbs!(q4_the_new_owner_replays_only_what_was_committed, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let old = begin_run(&engine, "a").await;
     engine
@@ -1024,7 +1011,7 @@ all_dbs!(
     q4_a_stale_conclude_cannot_overwrite_or_free_the_workflow,
     backend,
     {
-        let db = TestDb::create(backend).await;
+        let db = TestDb::migrated(backend).await;
         let engine = engine(&db).await;
         let old = Arc::new(begin_run(&engine, "a").await);
         let current = take_over(&engine, "a").await;
@@ -1074,7 +1061,7 @@ all_dbs!(
 );
 
 all_dbs!(q4_a_stale_error_during_shutdown_changes_nothing, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine_open = engine(&db).await;
     let old = begin_run(&engine_open, "a").await;
     let current = take_over(&engine_open, "a").await;
@@ -1100,7 +1087,7 @@ all_dbs!(q4_a_stale_error_during_shutdown_changes_nothing, backend, {
 
 // A finish is one statement, so its retry after a lost acknowledgment is this second call.
 all_dbs!(q4_a_repeated_conclude_returns_the_stored_result, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     let run = begin_run(&engine, "a").await;
     assert_eq!(
@@ -1123,7 +1110,7 @@ all_dbs!(q4_a_repeated_conclude_returns_the_stored_result, backend, {
 // Question 5: one request token can own several workflows.
 
 all_dbs!(q5_one_token_is_fenced_per_workflow, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     for id in ["a", "b", "c"] {
         begin_run(&engine, id).await;
@@ -1179,7 +1166,7 @@ all_dbs!(q5_one_token_is_fenced_per_workflow, backend, {
 });
 
 all_dbs!(q5_expiry_revokes_only_the_workflow_that_expired, backend, {
-    let db = TestDb::create(backend).await;
+    let db = TestDb::migrated(backend).await;
     let engine = engine(&db).await;
     for id in ["a", "b"] {
         begin_run(&engine, id).await;
@@ -1218,11 +1205,8 @@ networked!(
     q5_a_retried_reclaim_returns_only_what_it_still_owns,
     backend,
     {
-        let db = TestDb::create(backend).await;
-        let direct = {
-            db.open().await;
-            engine(&db).await
-        };
+        let db = TestDb::migrated(backend).await;
+        let direct = { engine(&db).await };
         let proxy = WireFault::start(&db.url).await;
         let proxied = engine_at(&proxy.url, LONG).await;
         let claiming = claim_with_lost_ack(&direct, &proxied, &proxy, &["a", "b"]).await;
@@ -1259,11 +1243,8 @@ networked!(
     q5_a_retried_reclaim_cannot_take_back_a_replaced_workflow,
     backend,
     {
-        let db = TestDb::create(backend).await;
-        let direct = {
-            db.open().await;
-            engine(&db).await
-        };
+        let db = TestDb::migrated(backend).await;
+        let direct = { engine(&db).await };
         let proxy = WireFault::start(&db.url).await;
         let proxied = engine_at(&proxy.url, LONG).await;
         let claiming = claim_with_lost_ack(&direct, &proxied, &proxy, &["a"]).await;
@@ -1284,11 +1265,8 @@ networked!(
     q5_a_retried_reclaim_of_a_released_workflow_is_a_new_claim,
     backend,
     {
-        let db = TestDb::create(backend).await;
-        let direct = {
-            db.open().await;
-            engine(&db).await
-        };
+        let db = TestDb::migrated(backend).await;
+        let direct = { engine(&db).await };
         let proxy = WireFault::start(&db.url).await;
         let proxied = engine_at(&proxy.url, LONG).await;
         let claiming = claim_with_lost_ack(&direct, &proxied, &proxy, &["a"]).await;
