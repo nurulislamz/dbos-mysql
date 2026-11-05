@@ -1,0 +1,47 @@
+site_name: rust-dwos
+site_description: Durable workflows on Postgres, MySQL and SQLite
+docs_dir: docs
+strict: true
+exclude_docs: |
+  PLAN.md
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Use dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Use light mode
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+nav:
+  - Introduction: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - Add it to your app: integrate.md
+  - Architecture: architecture.md
+  - Programming guide:
+      - Workflows: guide/workflows.md
+      - Steps: guide/steps.md
+      - Queues: guide/queues.md
+      - Messages and events: guide/communication.md
+      - Sleep, timeouts and schedules: guide/time.md
+      - Managing workflows: guide/management.md
+  - Production: production.md
+  - Reference: reference.md
+  - Coming soon: coming-soon.md

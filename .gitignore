@@ -4,6 +4,7 @@ __pycache__
 *.so
 *.sqlite*
 dist
+/site
 .pytest_cache
 .worktrees
 .workmux
