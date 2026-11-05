@@ -77,7 +77,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | `send`, `recv` | ✅ | ✅ |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
-| Queues | ✅ | ✅ FIFO, with one global concurrency limit. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
+| Queues | ✅ | ✅ FIFO, with one global concurrency limit. The latest registration sets the limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
 | Queue rate limits, priorities, partitions | ✅ | 📅 Deferred |
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |

@@ -42,25 +42,22 @@ impl Store {
         check_queue_name(name)?;
         self.attempt(|| async {
             let mut tx = self.begin().await?;
-            let conflict = match self.dialect {
-                Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
-                Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
+            let upsert = match self.dialect {
+                Dialect::MySql => {
+                    "AS incoming ON DUPLICATE KEY UPDATE concurrency = incoming.concurrency"
+                }
+                Dialect::Postgres | Dialect::Sqlite => {
+                    "ON CONFLICT (name) DO UPDATE SET concurrency = excluded.concurrency"
+                }
             };
             sqlx::query(self.sql(&format!(
-                "INSERT INTO workflow_queues (name, concurrency) VALUES (?, ?) {conflict}"
+                "INSERT INTO workflow_queues (name, concurrency) VALUES (?, ?) {upsert}"
             )))
             .bind(name)
             .bind(i64::from(concurrency.get()))
             .execute(&mut *tx)
             .await?;
-            let recorded = self.lock_queue(&mut tx, name).await?;
-            if recorded != concurrency.get() {
-                return Err(Error::QueueConcurrencyConflict {
-                    queue: name.to_owned(),
-                    recorded,
-                    requested: concurrency.get(),
-                });
-            }
+            self.lock_queue(&mut tx, name).await?;
             tx.commit().await?;
             Ok(())
         })

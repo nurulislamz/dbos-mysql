@@ -88,7 +88,7 @@ What may differ per database: the schema and migration files, "now in millisecon
 
 ## Durable queues
 
-The core now offers durable FIFO enqueue and global lease-owner concurrency. Queue metadata and membership use new companion tables; workflow identity, status, results and ownership remain in the existing workflow row. A queue transaction revokes expired owners, counts all remaining tokens and admits compatible work. Ordinary recovery and direct resume claims exclude queue members. Relative timeout budgets begin on first admission; inherited deadlines apply while waiting.
+The core now offers durable FIFO enqueue and global lease-owner concurrency. Queue metadata and membership use new companion tables; workflow identity, status, results and ownership remain in the existing workflow row. A queue transaction revokes expired owners, counts all remaining tokens and admits compatible work. Ordinary recovery and direct resume claims exclude queue members. Relative timeout budgets begin on first admission; inherited deadlines apply while waiting. The latest registration sets the limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop.
 
 Stop old workers before upgrading the schema or using queues: older claim SQL does not enforce queue admission, and old workers do not read the schema version. The core API and remaining SDK obligations are described in [`dwos-core/README.md`](../crates/dwos-core/README.md).
 
@@ -106,7 +106,7 @@ Stop old workers before upgrading the schema or using queues: older claim SQL do
 
 ## Not in this version
 
-Streams, fork, a TypeScript SDK, and a separate coordinator. Schedules are five-field UTC crons: a new schedule does not run a tick that has already passed (changing the cron counts as a new schedule), and a later tick is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities, partitions and runtime reconfiguration are outside the current basic FIFO/global-concurrency scope. MessagePack is deferred by the user.
+Streams, fork, a TypeScript SDK, and a separate coordinator. Schedules are five-field UTC crons: a new schedule does not run a tick that has already passed (changing the cron counts as a new schedule), and a later tick is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are outside the current basic FIFO/global-concurrency scope. MessagePack is deferred by the user.
 
 ## Tests
 
