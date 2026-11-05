@@ -47,3 +47,14 @@ def test_worker_concurrency_setting(dbos: DBOS) -> None:
     assert queue.worker_concurrency == 1
     queue.set_worker_concurrency(2)
     assert queue.worker_concurrency == 2
+
+
+def test_enqueue_by_name_with_options(dbos: DBOS) -> None:
+    @DBOS.workflow(name="by-name")
+    def workflow(value: str) -> str:
+        return value
+
+    DBOS.register_queue("named")
+    handle = DBOS.enqueue_workflow_with_options({"workflow_name": "by-name", "queue_name": "named", "workflow_id": "named-id", "priority": 1}, "ok")
+    assert handle.get_workflow_id() == "named-id"
+    assert handle.get_result() == "ok"

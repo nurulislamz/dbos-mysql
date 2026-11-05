@@ -108,7 +108,7 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, delay_seconds=None, blocking=false))]
+    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, delay_seconds=None, app_version=None, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn enqueue<'py>(
         &self,
@@ -127,6 +127,7 @@ impl PyEngine {
         duplication_policy: Option<String>,
         priority: Option<i64>,
         delay_seconds: Option<f64>,
+        app_version: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -139,6 +140,7 @@ impl PyEngine {
         options.deduplication_id = deduplication_id;
         options.priority = priority;
         options.delay_ms = delay_ms(delay_seconds)?;
+        options.application_version = app_version;
         options.duplication_policy = duplication_policy
             .as_deref()
             .map(dwos_core::ReusePolicy::parse)

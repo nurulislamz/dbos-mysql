@@ -23,8 +23,8 @@ _enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVa
 
 
 class SetEnqueueOptions:
-    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None) -> None:
-        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds}
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None, app_version: str | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds, "app_version": app_version}
         self._token: contextvars.Token[dict[str, Any]] | None = None
 
     def __enter__(self) -> SetEnqueueOptions:
@@ -135,7 +135,40 @@ def _stored_limit(concurrency: int) -> int | None:
     return None if concurrency == 2**32 - 1 else concurrency
 
 
+def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], str, dict[str, Any]]:
+    from rust_dwos.serialization import Codec
+
+    dbos = _dbos()
+    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version"}
+    unknown = options.keys() - allowed
+    if unknown:
+        raise DBOSException(f"Unsupported enqueue options: {', '.join(sorted(unknown))}")
+    name = options["workflow_name"]
+    queue = options["queue_name"]
+    text = Codec(lambda *args, **kwargs: None).encode_input(args, kwargs, dbos._running()._engine.serialization)
+    timeout = options.get("workflow_timeout")
+    timeout_ms = int(timeout * 1000) if timeout is not None else None
+    begin = (name, text, None, options.get("workflow_id", dbos._next_workflow_id.get()), dbos._current_run.get(), dbos._current_step.get() is not None, timeout_ms, False, options.get("workflow_id_reuse_policy", dbos._next_reuse_policy.get()))
+    enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version")}
+    return begin, queue, enqueue
+
+
 class Queues:
+    @classmethod
+    def enqueue_workflow_with_options(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        begin, queue, enqueue = _enqueue_with_options_args(options, args, kwargs)
+        workflow_id = instance._blocking(instance._engine.enqueue, queue, *begin, **enqueue)
+        return dbos.WorkflowHandle(workflow_id)
+
+    @classmethod
+    async def enqueue_workflow_with_options_async(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        begin, queue, enqueue = _enqueue_with_options_args(options, args, kwargs)
+        workflow_id = await instance._engine.enqueue(queue, *begin, **enqueue)
+        return dbos.WorkflowHandleAsync(workflow_id)
     @classmethod
     def set_workflow_delay(cls, workflow_id: str, *, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None) -> None:
         instance = _dbos()._running()

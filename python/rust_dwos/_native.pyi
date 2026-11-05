@@ -304,6 +304,7 @@ class Engine:
         duplication_policy: str | None = None,
         priority: int | None = None,
         delay_seconds: float | None = None,
+        app_version: str | None = None,
         blocking: bool = False,
     ) -> asyncio.Future[str] | str: ...
     def set_workflow_delay(self, workflow_id: str, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None, *, blocking: bool = False) -> asyncio.Future[None] | None: ...

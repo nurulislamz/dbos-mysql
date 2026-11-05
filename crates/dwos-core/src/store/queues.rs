@@ -298,9 +298,11 @@ impl Store {
         let mut tx = self.begin().await?;
         self.lock_queue(&mut tx, queue).await?;
         // The temporary token distinguishes insertion from an existing unowned row on every backend.
-        sqlx::query(self.sql(&format!(
-            "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, recovery_attempts, max_recovery_attempts, parent_workflow_id, serialization, created_at, updated_at) \
-             VALUES (?, ?, 'PENDING', ?, {{NOW}}, ?, 0, ?, ?, ?, {{NOW}}, {{NOW}}) {}",
+        let insert = sqlx::query(self.sql(&format!(
+            "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, recovery_attempts, max_recovery_attempts, parent_workflow_id, serialization, created_at, updated_at, {}) \
+             VALUES (?, ?, 'PENDING', ?, {{NOW}}, ?, 0, ?, ?, ?, {{NOW}}, {{NOW}}, {}) {}",
+            super::workflows::START_COLUMNS,
+            super::workflows::START_VALUES,
             self.dialect.insert_if_absent(),
         )))
         .bind(new.workflow_id)
@@ -309,9 +311,10 @@ impl Store {
         .bind(token)
         .bind(i64::from(new.max_recovery_attempts))
         .bind(new.parent_workflow_id)
-        .bind(new.serialization)
-        .execute(&mut *tx)
-        .await?;
+        .bind(new.serialization);
+        self.bind_start_columns(insert, options)
+            .execute(&mut *tx)
+            .await?;
         let row = sqlx::query(self.sql(SELECT_WORKFLOW))
             .bind(new.workflow_id)
             .fetch_one(&mut *tx)

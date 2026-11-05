@@ -223,6 +223,29 @@ all_dbs!(worker_concurrency_is_per_engine, backend, {
     assert_eq!(first.claim_queue("q", &names()).await.unwrap().len(), 1);
 });
 
+all_dbs!(queue_enqueue_saves_application_version, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    let options = WorkflowOptions {
+        application_version: Some("version-a".into()),
+        ..Default::default()
+    };
+    engine
+        .enqueue_with("q", begin("versioned"), &options)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .get_status("versioned")
+            .await
+            .unwrap()
+            .application_version
+            .as_deref(),
+        Some("version-a")
+    );
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())
