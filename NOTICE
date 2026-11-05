@@ -9,5 +9,5 @@ python/rust_dwos/dbos.py, queues.py, timeouts.py, sleep.py, events.py and workfl
 (DBOS.step retry predicates, Queue, SetWorkflowTimeout, SetWorkflowID workflow_id_reuse_policy, get_result polling_interval_sec, cancel_children, resume queue_name, bulk cancel and resume, DBOS.sleep, events and messages, workflow management) from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., used under the MIT License. See tests/upstream/LICENSE-DBOS.
 
-python/rust_dwos/validation.py adapts argument validation from dbos-transact-py
+python/rust_dwos/validation.py and sdk_calls.py adapt behavior from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.

@@ -35,6 +35,7 @@ from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
 from rust_dwos.sleep import Sleep
+from rust_dwos.sdk_calls import SDKCalls
 from rust_dwos.timeouts import _timeout_override, timeout_start_args
 from rust_dwos.workflow_management import WorkflowManagement
 from rust_dwos.validation import make_pydantic_args_validator, pydantic_args_validator, ValidateArgsCallable
@@ -339,7 +340,7 @@ class _DBOSMeta(type):
         return _current_step.get()
 
 
-class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
