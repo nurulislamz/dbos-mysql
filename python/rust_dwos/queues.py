@@ -23,8 +23,8 @@ _enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVa
 
 
 class SetEnqueueOptions:
-    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None) -> None:
-        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority}
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds}
         self._token: contextvars.Token[dict[str, Any]] | None = None
 
     def __enter__(self) -> SetEnqueueOptions:
@@ -118,6 +118,15 @@ def _stored_limit(concurrency: int) -> int | None:
 
 
 class Queues:
+    @classmethod
+    def set_workflow_delay(cls, workflow_id: str, *, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_workflow_delay, workflow_id, delay_seconds, delay_until_epoch_ms)
+
+    @classmethod
+    async def set_workflow_delay_async(cls, workflow_id: str, *, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None) -> None:
+        await _dbos()._running()._engine.set_workflow_delay(workflow_id, delay_seconds, delay_until_epoch_ms)
+
     @classmethod
     def register_queue(
         cls,

@@ -158,6 +158,45 @@ all_dbs!(queue_priority_is_fifo_within_priority, backend, {
     );
 });
 
+all_dbs!(queue_delay_can_be_shortened, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    let options = WorkflowOptions {
+        delay_ms: Some(60_000),
+        ..Default::default()
+    };
+    engine
+        .enqueue_with("q", begin("delayed"), &options)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("delayed").await.unwrap().status,
+        Status::Delayed
+    );
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    engine
+        .set_workflow_delay("delayed", Some(0), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("delayed").await.unwrap().status,
+        Status::Enqueued
+    );
+    assert_eq!(
+        engine.claim_queue("q", &names()).await.unwrap()[0]
+            .lease
+            .workflow_id,
+        "delayed"
+    );
+    assert!(
+        engine
+            .set_workflow_delay("delayed", None, None)
+            .await
+            .is_err()
+    );
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())

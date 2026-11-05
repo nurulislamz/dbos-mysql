@@ -211,6 +211,11 @@ impl Store {
                 "priority must be between 1 and 2147483647".to_owned(),
             ));
         }
+        if options.delay_ms.is_some_and(|delay| delay < 0) {
+            return Err(Error::InvalidConfig(
+                "delay must be non-negative".to_owned(),
+            ));
+        }
         if let Some(id) = &options.deduplication_id {
             check_name("deduplication ID", id)?;
         } else if options.duplication_policy.is_some() {
@@ -295,21 +300,65 @@ impl Store {
                     Error::InvalidConfig("workflow timeout is too large".to_owned())
                 })?;
             }
+            let delay_until = if let Some(delay) = options.delay_ms {
+                let now: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}"))
+                    .fetch_one(&mut *tx)
+                    .await?;
+                Some(
+                    now.checked_add(delay)
+                        .ok_or_else(|| Error::InvalidConfig("delay is too large".to_owned()))?,
+                )
+            } else {
+                None
+            };
             sqlx::query(self.sql(
-                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority, delay_until_ms) VALUES (?, ?, ?, ?, ?, ?)",
             ))
-            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).bind(options.priority.unwrap_or(0)).execute(&mut *tx).await?;
+            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).bind(options.priority.unwrap_or(0)).bind(delay_until).execute(&mut *tx).await?;
             if let Some(deadline) = new.deadline_epoch_ms {
                 sqlx::query(self.sql(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, NULL, ?)",
                 ))
                 .bind(new.workflow_id).bind(deadline).execute(&mut *tx).await?;
             }
-            sqlx::query(self.sql("UPDATE workflow_status SET lease_token = NULL WHERE workflow_uuid = ? AND lease_token = ?"))
-                .bind(new.workflow_id).bind(token).execute(&mut *tx).await?;
+            sqlx::query(self.sql("UPDATE workflow_status SET lease_token = NULL, claim_after = COALESCE(?, claim_after) WHERE workflow_uuid = ? AND lease_token = ?"))
+                .bind(delay_until).bind(new.workflow_id).bind(token).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(new.workflow_id.to_owned())
+    }
+
+    pub async fn set_workflow_delay(
+        &self,
+        workflow_id: &str,
+        delay_ms: Option<i64>,
+        until_ms: Option<i64>,
+    ) -> Result<(), Error> {
+        check_name("workflow ID", workflow_id)?;
+        if delay_ms.is_some() == until_ms.is_some()
+            || delay_ms.is_some_and(|n| n < 0)
+            || until_ms.is_some_and(|n| n < 0)
+        {
+            return Err(Error::InvalidConfig(
+                "provide one non-negative delay or delay-until time".to_owned(),
+            ));
+        }
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            let now: i64 = sqlx::query_scalar(self.sql("SELECT {NOW}")).fetch_one(&mut *tx).await?;
+            let until = match delay_ms {
+                Some(delay) => now.checked_add(delay).ok_or_else(|| Error::InvalidConfig("delay is too large".to_owned()))?,
+                None => until_ms.expect("validated above"),
+            };
+            let changed = sqlx::query(self.sql("UPDATE workflow_status SET claim_after = ?, updated_at = {NOW} WHERE workflow_uuid = ? AND status = 'PENDING' AND lease_token IS NULL AND started_at_epoch_ms IS NULL AND claim_after > {NOW} AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries)"))
+                .bind(until).bind(workflow_id).execute(&mut *tx).await?.rows_affected();
+            if changed > 0 {
+                sqlx::query(self.sql("UPDATE workflow_queue_entries SET delay_until_ms = ? WHERE workflow_uuid = ?"))
+                    .bind(until).bind(workflow_id).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        }).await
     }
 
     pub async fn claim_queue(

@@ -6,6 +6,16 @@ use super::{Begin, Engine};
 use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
 
 impl Engine {
+    pub async fn set_workflow_delay(
+        &self,
+        workflow_id: &str,
+        delay_ms: Option<i64>,
+        until_ms: Option<i64>,
+    ) -> Result<(), Error> {
+        self.store
+            .set_workflow_delay(workflow_id, delay_ms, until_ms)
+            .await
+    }
     pub async fn get_queue(&self, name: &str) -> Result<Option<NonZeroU32>, Error> {
         self.store.get_queue(name).await
     }

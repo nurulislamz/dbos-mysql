@@ -27,3 +27,16 @@ def test_priority_option_reaches_store(dbos: DBOS) -> None:
     queue = DBOS.register_queue("priority")
     with SetEnqueueOptions(priority=0), pytest.raises(StoreError, match="priority"):
         queue.enqueue(workflow)
+
+
+def test_delay_option_and_setter(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> str:
+        return "done"
+
+    queue = DBOS.register_queue("delayed")
+    with SetEnqueueOptions(delay_seconds=60):
+        handle = queue.enqueue(workflow)
+    assert handle.get_status().status == "DELAYED"
+    DBOS.set_workflow_delay(handle.get_workflow_id(), delay_seconds=0)
+    assert handle.get_result() == "done"

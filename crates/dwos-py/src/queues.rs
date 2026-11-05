@@ -9,6 +9,20 @@ use pyo3_async_runtimes::tokio::future_into_py;
 
 use super::{PyEngine, PyRun, claims_to_py, dispatch, to_py};
 
+fn delay_ms(seconds: Option<f64>) -> PyResult<Option<i64>> {
+    seconds
+        .map(|seconds| {
+            let ms = seconds * 1000.0;
+            if !ms.is_finite() || ms < 0.0 || ms >= i64::MAX as f64 {
+                return Err(to_py(Error::InvalidConfig(
+                    "delay_seconds must be finite and non-negative".to_owned(),
+                )));
+            }
+            Ok(ms as i64)
+        })
+        .transpose()
+}
+
 #[pymethods]
 impl PyEngine {
     #[pyo3(signature = (name, *, blocking=false))]
@@ -56,7 +70,7 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, blocking=false))]
+    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, deduplication_id=None, duplication_policy=None, priority=None, delay_seconds=None, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn enqueue<'py>(
         &self,
@@ -74,6 +88,7 @@ impl PyEngine {
         deduplication_id: Option<String>,
         duplication_policy: Option<String>,
         priority: Option<i64>,
+        delay_seconds: Option<f64>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -85,6 +100,7 @@ impl PyEngine {
         let mut options = start_options(reuse_policy.as_deref())?;
         options.deduplication_id = deduplication_id;
         options.priority = priority;
+        options.delay_ms = delay_ms(delay_seconds)?;
         options.duplication_policy = duplication_policy
             .as_deref()
             .map(dwos_core::ReusePolicy::parse)
@@ -109,6 +125,25 @@ impl PyEngine {
                     },
                     &options,
                 )
+                .await
+                .map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (workflow_id, delay_seconds=None, delay_until_epoch_ms=None, *, blocking=false))]
+    fn set_workflow_delay<'py>(
+        &self,
+        py: Python<'py>,
+        workflow_id: String,
+        delay_seconds: Option<f64>,
+        delay_until_epoch_ms: Option<i64>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let delay = delay_ms(delay_seconds)?;
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .set_workflow_delay(&workflow_id, delay, delay_until_epoch_ms)
                 .await
                 .map_err(to_py)
         })
