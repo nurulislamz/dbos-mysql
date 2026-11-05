@@ -106,7 +106,7 @@ Stop old workers before upgrading the schema or using queues: older claim SQL do
 
 ## Not in this version
 
-Streams, fork, a TypeScript SDK, and a separate coordinator. Schedules are five-field UTC crons: a new schedule does not run a tick that has already passed, and a later tick is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities, partitions and runtime reconfiguration are outside the current basic FIFO/global-concurrency scope. MessagePack is deferred by the user.
+Streams, fork, a TypeScript SDK, and a separate coordinator. Schedules are five-field UTC crons: a new schedule does not run a tick that has already passed (changing the cron counts as a new schedule), and a later tick is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities, partitions and runtime reconfiguration are outside the current basic FIFO/global-concurrency scope. MessagePack is deferred by the user.
 
 ## Tests
 

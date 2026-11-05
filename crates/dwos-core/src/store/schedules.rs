@@ -5,7 +5,8 @@ use crate::Error;
 use crate::cron::Cron;
 use crate::workflow::{PORTABLE_JSON, PY_PICKLE, new_token};
 
-/// What `ensure_schedule` stores. An existing name is updated and keeps its last fire time.
+/// What `ensure_schedule` stores. An existing name is updated and keeps its last fire time,
+/// unless the cron text changed: then it is armed again like a new schedule.
 #[derive(Clone, Copy, Debug)]
 pub struct NewSchedule<'a> {
     pub name: &'a str,
@@ -43,11 +44,13 @@ impl Store {
         // Reject an expression that can never fire before writing it.
         Cron::parse(schedule.cron)?;
         self.check_size(&[Some(schedule.inputs)])?;
+        // MySQL assigns left to right, so the reset must come before `cron` changes.
         let statement = match self.dialect {
             super::Dialect::MySql => {
                 "INSERT INTO workflow_schedules \
                  (schedule_name, workflow_name, cron, queue_name, inputs, serialization, max_recovery_attempts) \
                  VALUES (?, ?, ?, ?, ?, ?, ?) AS incoming ON DUPLICATE KEY UPDATE \
+                 last_fired_epoch_ms = IF(workflow_schedules.cron = incoming.cron, last_fired_epoch_ms, NULL), \
                  workflow_name = incoming.workflow_name, cron = incoming.cron, queue_name = incoming.queue_name, \
                  inputs = incoming.inputs, serialization = incoming.serialization, \
                  max_recovery_attempts = incoming.max_recovery_attempts"
@@ -56,6 +59,8 @@ impl Store {
                 "INSERT INTO workflow_schedules \
                  (schedule_name, workflow_name, cron, queue_name, inputs, serialization, max_recovery_attempts) \
                  VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (schedule_name) DO UPDATE SET \
+                 last_fired_epoch_ms = CASE WHEN workflow_schedules.cron = excluded.cron \
+                 THEN workflow_schedules.last_fired_epoch_ms END, \
                  workflow_name = excluded.workflow_name, cron = excluded.cron, queue_name = excluded.queue_name, \
                  inputs = excluded.inputs, serialization = excluded.serialization, \
                  max_recovery_attempts = excluded.max_recovery_attempts"

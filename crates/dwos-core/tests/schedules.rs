@@ -151,7 +151,7 @@ all_dbs!(
             .ensure_schedule(schedule(
                 "daily-job-digest",
                 "DispatchDeadlineRemindersWorkflow",
-                "0 * * * *",
+                "* * * * *",
                 "notifications",
                 "{\"kept\":true}",
                 7,
@@ -168,6 +168,95 @@ all_dbs!(
         assert_eq!(stored.1, "{\"kept\":true}");
         assert_eq!(stored.2, 7);
         assert!(last_fired(&engine, "daily-job-digest").await.is_some());
+    }
+);
+
+all_dbs!(
+    changing_the_cron_does_not_run_a_tick_from_before_the_change,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = Engine::connect(&db.url, config()).await.unwrap();
+        engine
+            .ensure_queue("notifications", NonZeroU32::new(2).unwrap())
+            .await
+            .unwrap();
+        engine
+            .ensure_schedule(schedule(
+                "daily-job-digest",
+                "DispatchDailyDigestWorkflow",
+                "0 9 * * *",
+                "notifications",
+                "{}",
+                100,
+            ))
+            .await
+            .unwrap();
+        assert!(engine.fire_schedules().await.unwrap().is_empty());
+        rewind(&engine, "daily-job-digest").await;
+
+        engine
+            .ensure_schedule(schedule(
+                "daily-job-digest",
+                "DispatchDailyDigestWorkflow",
+                "0 12 * * *",
+                "notifications",
+                "{}",
+                100,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(last_fired(&engine, "daily-job-digest").await, None);
+        assert!(engine.fire_schedules().await.unwrap().is_empty());
+        assert!(last_fired(&engine, "daily-job-digest").await.is_some());
+        assert_eq!(scheduled_rows(&engine).await, 0);
+    }
+);
+
+all_dbs!(
+    registering_the_same_cron_again_still_fires_the_missed_tick,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = Engine::connect(&db.url, config()).await.unwrap();
+        for queue in ["notifications", "system-ops"] {
+            engine
+                .ensure_queue(queue, NonZeroU32::new(2).unwrap())
+                .await
+                .unwrap();
+        }
+        engine
+            .ensure_schedule(schedule(
+                "daily-job-digest",
+                "DispatchDailyDigestWorkflow",
+                "0 9 * * *",
+                "notifications",
+                "{}",
+                100,
+            ))
+            .await
+            .unwrap();
+        assert!(engine.fire_schedules().await.unwrap().is_empty());
+        rewind(&engine, "daily-job-digest").await;
+
+        // Other fields may change on a restart without losing the missed tick.
+        engine
+            .ensure_schedule(schedule(
+                "daily-job-digest",
+                "DispatchDailyDigestWorkflow",
+                "0 9 * * *",
+                "system-ops",
+                "{\"kept\":true}",
+                100,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(last_fired(&engine, "daily-job-digest").await, Some(0));
+        let fired = engine.fire_schedules().await.unwrap();
+        assert_eq!(fired.len(), 1, "{fired:?}");
+        assert!(fired[0].started);
+        assert_eq!(fired[0].queue_name, "system-ops");
+        assert_eq!(scheduled_rows(&engine).await, 1);
     }
 );
 

@@ -83,7 +83,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Fork and rewind | ✅ | 📅 |
 | Deleting old workflows | ✅ | 📅 |
 | `run_step`, `wait_first` | ✅ | 📅 |
-| Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
+| Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed, and changing the cron counts as a new schedule. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
 | Streams | ✅ | 📅 |
 | Debouncer | ✅ | 📅 |
 | External client (`DBOSClient`) | ✅ | 📅 |
