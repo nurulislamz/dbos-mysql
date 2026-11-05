@@ -15,7 +15,7 @@ fn like_prefix(prefix: &str) -> String {
     format!("{escaped}%")
 }
 
-fn in_clause(column: &str, count: usize) -> String {
+pub(super) fn in_clause(column: &str, count: usize) -> String {
     if count == 0 {
         return " AND 1 = 0".to_owned();
     }

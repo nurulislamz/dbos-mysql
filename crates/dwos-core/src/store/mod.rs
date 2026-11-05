@@ -14,6 +14,7 @@ mod events;
 mod leases;
 mod migrations;
 mod queues;
+mod retention;
 mod schedules;
 mod sleep;
 mod steps;
