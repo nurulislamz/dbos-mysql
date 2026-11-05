@@ -114,6 +114,7 @@ impl PyEngine {
     }
 
     #[pyo3(signature = (run, step_id, timeout_step_id, timeout_ms, topic=None, *, blocking=false))]
+    #[allow(clippy::too_many_arguments)]
     fn poll_recv<'py>(
         &self,
         py: Python<'py>,
@@ -166,6 +167,7 @@ impl PyEngine {
     }
 
     #[pyo3(signature = (run, key, value, serialization, step_id=None, *, blocking=false))]
+    #[allow(clippy::too_many_arguments)]
     fn set_event<'py>(
         &self,
         py: Python<'py>,
