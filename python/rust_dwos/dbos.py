@@ -98,6 +98,11 @@ class WorkflowStatus:
     assumed_role: str | None = None
     authenticated_roles: str | None = None
     queue_name: str | None = None
+    priority: int | None = None
+    deduplication_id: str | None = None
+    queue_partition_key: str | None = None
+    dequeued_at_ms: int | None = None
+    delay_until_ms: int | None = None
     attributes: dict[str, Any] | None = None
 
 
@@ -992,6 +997,11 @@ def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output
         assumed_role=row.assumed_role,
         authenticated_roles=row.authenticated_roles,
         queue_name=row.queue_name,
+        priority=row.priority,
+        deduplication_id=row.deduplication_id,
+        queue_partition_key=row.queue_partition_key,
+        dequeued_at_ms=row.dequeued_at_ms,
+        delay_until_ms=row.delay_until_ms,
         attributes=json.loads(row.attributes) if row.attributes is not None else None,
     )
 

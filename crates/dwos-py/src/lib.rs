@@ -140,6 +140,11 @@ pub(crate) struct PyWorkflow {
     authenticated_roles: Option<String>,
     attributes: Option<String>,
     queue_name: Option<String>,
+    priority: Option<i64>,
+    deduplication_id: Option<String>,
+    queue_partition_key: Option<String>,
+    dequeued_at_ms: Option<i64>,
+    delay_until_ms: Option<i64>,
 }
 
 impl From<Workflow> for PyWorkflow {
@@ -170,6 +175,11 @@ impl From<Workflow> for PyWorkflow {
             authenticated_roles: row.authenticated_roles,
             attributes: row.attributes,
             queue_name: row.queue_name,
+            priority: row.priority,
+            deduplication_id: row.deduplication_id,
+            queue_partition_key: row.queue_partition_key,
+            dequeued_at_ms: row.dequeued_at_ms,
+            delay_until_ms: row.delay_until_ms,
         }
     }
 }

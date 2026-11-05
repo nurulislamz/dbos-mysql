@@ -252,12 +252,25 @@ impl Store {
     }
 
     pub async fn list_queues(&self) -> Result<Vec<(String, u32)>, Error> {
+        self.list_queues_filtered(None).await
+    }
+
+    pub async fn list_queues_filtered(
+        &self,
+        applications: Option<&[String]>,
+    ) -> Result<Vec<(String, u32)>, Error> {
         self.attempt(|| async {
-            let rows = sqlx::query(self.sql(
-                "SELECT name, concurrency FROM workflow_queues WHERE deleted = 0 ORDER BY name",
-            ))
-            .fetch_all(&self.pool)
-            .await?;
+            let applications = applications.map(|values| values.iter().map(String::as_str).collect::<Vec<_>>())
+                .or_else(|| self.identity.application_name.as_deref().map(|name| vec![name]));
+            let condition = match &applications {
+                Some(names) if names.is_empty() => " AND application_name IS NULL".to_owned(),
+                Some(names) => format!(" AND (application_name IS NULL OR application_name IN ({}))", vec!["?"; names.len()].join(", ")),
+                None => String::new(),
+            };
+            let sql = self.sql(&format!("SELECT name, concurrency FROM workflow_queues WHERE deleted = 0{condition} ORDER BY name"));
+            let mut query = sqlx::query(sql);
+            if let Some(names) = applications { for name in names { query = query.bind(name); } }
+            let rows = query.fetch_all(&self.pool).await?;
             rows.iter()
                 .map(|row| Ok((row.try_get("name")?, get_u32(row, "concurrency")?)))
                 .collect()
@@ -340,9 +353,9 @@ impl Store {
     pub async fn get_worker_concurrency(&self, name: &str) -> Result<Option<u32>, Error> {
         check_queue_name(name)?;
         self.attempt(|| async {
-            let value: Option<i64> = sqlx::query_scalar(
-                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ? AND deleted = 0"),
-            )
+            let value: Option<i64> = sqlx::query_scalar(self.sql(
+                "SELECT worker_concurrency FROM workflow_queues WHERE name = ? AND deleted = 0",
+            ))
             .bind(name)
             .fetch_optional(&self.pool)
             .await?

@@ -221,11 +221,19 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (*, blocking=false))]
-    fn list_queues<'py>(&self, py: Python<'py>, blocking: bool) -> PyResult<Bound<'py, PyAny>> {
+    #[pyo3(signature = (applications=None, *, blocking=false))]
+    fn list_queues<'py>(
+        &self,
+        py: Python<'py>,
+        applications: Option<Vec<String>>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
-            engine.list_queues().await.map_err(to_py)
+            engine
+                .list_queues_filtered(applications.as_deref())
+                .await
+                .map_err(to_py)
         })
     }
 

@@ -307,13 +307,15 @@ class Queues:
         await _dbos()._running()._engine.delete_queue(name)
 
     @classmethod
-    def list_queues(cls) -> list[Queue]:
+    def list_queues(cls, *, application_name: str | list[str] | None = None) -> list[Queue]:
         instance = _dbos()._running()
-        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in instance._blocking(instance._engine.list_queues)]
+        applications = [application_name] if isinstance(application_name, str) else application_name
+        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in instance._blocking(instance._engine.list_queues, applications)]
 
     @classmethod
-    async def list_queues_async(cls) -> list[Queue]:
-        rows = await _dbos()._running()._engine.list_queues()
+    async def list_queues_async(cls, *, application_name: str | list[str] | None = None) -> list[Queue]:
+        applications = [application_name] if isinstance(application_name, str) else application_name
+        rows = await _dbos()._running()._engine.list_queues(applications)
         return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in rows]
     @classmethod
     def enqueue_workflow_with_options(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:

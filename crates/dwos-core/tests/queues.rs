@@ -355,6 +355,36 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     );
 });
 
+all_dbs!(
+    queue_list_filters_applications_and_keeps_unowned,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db, config()).await;
+        for name in ["a", "b", "unowned"] {
+            engine.ensure_queue_exists(name).await.unwrap();
+        }
+        let mut conn = sqlx::AnyConnection::connect(&db.url).await.unwrap();
+        for (name, app) in [("a", "app-a"), ("b", "app-b")] {
+            sqlx::query("UPDATE workflow_queues SET application_name = ? WHERE name = ?")
+                .bind(app)
+                .bind(name)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        conn.close().await.unwrap();
+        let names = engine
+            .list_queues_filtered(Some(&["app-a".into()]))
+            .await
+            .unwrap();
+        assert_eq!(
+            names.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+            ["a", "unowned"]
+        );
+    }
+);
+
 all_dbs!(queue_rate_limit_counts_starts_across_workers, backend, {
     let db = TestDb::migrated(backend).await;
     let first = engine(&db, config()).await;

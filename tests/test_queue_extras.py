@@ -69,6 +69,7 @@ def test_queue_management(dbos: DBOS) -> None:
     queue.set_polling_interval_sec(0.5)
     assert queue.polling_interval_sec == 0.5
     assert "management" in [item.name for item in DBOS.list_queues()]
+    assert "management" in [item.name for item in DBOS.list_queues(application_name="another-app")]
     DBOS.delete_queue("management")
     assert DBOS.retrieve_queue("management") is None
 
@@ -103,9 +104,12 @@ def test_queued_initial_attributes(dbos: DBOS) -> None:
         return "done"
 
     queue = DBOS.register_queue("attributes")
-    with SetWorkflowAttributes({"team": "queues"}), SetEnqueueOptions(delay_seconds=60):
+    with SetWorkflowAttributes({"team": "queues"}), SetEnqueueOptions(delay_seconds=60, deduplication_id="key", priority=2):
         handle = queue.enqueue(workflow)
-    assert handle.get_status().attributes == {"team": "queues"}
+    status = handle.get_status()
+    assert status.attributes == {"team": "queues"}
+    assert (status.priority, status.deduplication_id) == (2, "key")
+    assert status.delay_until_ms is not None
     DBOS.set_workflow_delay(handle.get_workflow_id(), delay_seconds=0)
     assert handle.get_result() == "done"
 
