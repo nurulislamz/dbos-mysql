@@ -153,6 +153,7 @@ impl Dialect {
             Self::Sqlite => "",
         }
     }
+
     fn quote_key(self) -> &'static str {
         match self {
             Self::MySql => "`key`",

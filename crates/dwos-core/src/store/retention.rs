@@ -182,6 +182,7 @@ impl Store {
                     .await?;
                 total += deleted;
                 if busy {
+                    // shortcut: a row held for long stops every call at this batch, so older rows behind it wait, upgrade by skipping busy rows inside the batch.
                     return Ok(total);
                 }
             }
