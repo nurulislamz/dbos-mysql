@@ -300,6 +300,7 @@ class Engine:
         *,
         deduplication_id: str | None = None,
         duplication_policy: str | None = None,
+        priority: int | None = None,
         blocking: bool = False,
     ) -> asyncio.Future[str] | str: ...
     def claim_queue(self, queue: str, names: list[str]) -> asyncio.Future[list[Claim]]: ...

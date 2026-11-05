@@ -203,6 +203,14 @@ impl Store {
         check_queue_name(queue)?;
         check_name("workflow ID", new.workflow_id)?;
         check_name("workflow name", new.name)?;
+        if options
+            .priority
+            .is_some_and(|priority| !(1..=i64::from(i32::MAX)).contains(&priority))
+        {
+            return Err(Error::InvalidConfig(
+                "priority must be between 1 and 2147483647".to_owned(),
+            ));
+        }
         if let Some(id) = &options.deduplication_id {
             check_name("deduplication ID", id)?;
         } else if options.duplication_policy.is_some() {
@@ -288,9 +296,9 @@ impl Store {
                 })?;
             }
             sqlx::query(self.sql(
-                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id) VALUES (?, ?, ?, ?)",
+                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority) VALUES (?, ?, ?, ?, ?)",
             ))
-            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).execute(&mut *tx).await?;
+            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).bind(options.priority.unwrap_or(0)).execute(&mut *tx).await?;
             if let Some(deadline) = new.deadline_epoch_ms {
                 sqlx::query(self.sql(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, NULL, ?)",
@@ -344,7 +352,7 @@ impl Store {
             let order: Vec<String> = sqlx::query_scalar(self.sql(
                 "SELECT workflow_queue_entries.workflow_uuid FROM workflow_queue_entries \
                  JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid \
-                 WHERE queue_name = ? AND lease_token = ? ORDER BY sequence",
+                 WHERE queue_name = ? AND lease_token = ? ORDER BY priority, sequence",
             )).bind(queue).bind(request_token).fetch_all(&mut *tx).await?;
             let positions: HashMap<_, _> = order
                 .into_iter()
@@ -414,7 +422,7 @@ impl Store {
                      WHERE workflow_queue_entries.queue_name = ? AND workflow_status.status = 'PENDING' \
                      AND workflow_status.lease_token IS NULL AND workflow_status.claim_after <= ? \
                      AND workflow_status.serialization IN ({}) AND workflow_status.name IN ({}){compatible} \
-                     ORDER BY workflow_queue_entries.sequence LIMIT ?",
+                     ORDER BY workflow_queue_entries.priority, workflow_queue_entries.sequence LIMIT ?",
                     self.readable_formats(),
                     vec!["?"; names.len()].join(", "),
                 ));

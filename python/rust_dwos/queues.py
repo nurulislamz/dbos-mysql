@@ -23,8 +23,8 @@ _enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVa
 
 
 class SetEnqueueOptions:
-    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None) -> None:
-        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy}
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority}
         self._token: contextvars.Token[dict[str, Any]] | None = None
 
     def __enter__(self) -> SetEnqueueOptions:

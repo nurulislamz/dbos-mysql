@@ -109,6 +109,7 @@ pub struct Workflow {
 pub struct WorkflowOptions {
     pub deduplication_id: Option<String>,
     pub duplication_policy: Option<ReusePolicy>,
+    pub priority: Option<i64>,
     pub application_version: Option<String>,
     pub application_name: Option<String>,
     pub schedule_name: Option<String>,

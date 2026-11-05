@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSQueueDeduplicatedError, SetEnqueueOptions
+from rust_dwos import DBOS, DBOSQueueDeduplicatedError, SetEnqueueOptions, StoreError
 
 
 def test_deduplication_connects_to_queue(dbos: DBOS) -> None:
@@ -17,3 +17,13 @@ def test_deduplication_connects_to_queue(dbos: DBOS) -> None:
         assert queue.enqueue(waiting).get_workflow_id() == first.get_workflow_id()
     DBOS.send(first.get_workflow_id(), "done", "release")
     assert first.get_result() == "done"
+
+
+def test_priority_option_reaches_store(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def workflow() -> None:
+        pass
+
+    queue = DBOS.register_queue("priority")
+    with SetEnqueueOptions(priority=0), pytest.raises(StoreError, match="priority"):
+        queue.enqueue(workflow)

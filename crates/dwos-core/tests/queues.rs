@@ -122,6 +122,42 @@ all_dbs!(queue_deduplication, backend, {
     );
 });
 
+all_dbs!(queue_priority_is_fifo_within_priority, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 5).await;
+    for (id, priority) in [
+        ("low", Some(10)),
+        ("high-1", Some(1)),
+        ("default", None),
+        ("high-2", Some(1)),
+    ] {
+        let options = WorkflowOptions {
+            priority,
+            ..Default::default()
+        };
+        engine.enqueue_with("q", begin(id), &options).await.unwrap();
+    }
+    let claims = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(
+        claims
+            .iter()
+            .map(|claim| claim.lease.workflow_id.as_str())
+            .collect::<Vec<_>>(),
+        ["default", "high-1", "high-2", "low"]
+    );
+    let invalid = WorkflowOptions {
+        priority: Some(0),
+        ..Default::default()
+    };
+    assert!(
+        engine
+            .enqueue_with("q", begin("invalid"), &invalid)
+            .await
+            .is_err()
+    );
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())
