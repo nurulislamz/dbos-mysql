@@ -6,6 +6,17 @@ use super::{Begin, Engine};
 use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
 
 impl Engine {
+    pub async fn set_limiter(
+        &self,
+        name: &str,
+        limiter: Option<(NonZeroU32, i64)>,
+    ) -> Result<(), Error> {
+        self.store.set_limiter(name, limiter).await
+    }
+
+    pub async fn get_limiter(&self, name: &str) -> Result<Option<(u32, i64)>, Error> {
+        self.store.get_limiter(name).await
+    }
     pub async fn set_global_concurrency(
         &self,
         name: &str,
@@ -18,10 +29,11 @@ impl Engine {
         name: &str,
         global: Option<NonZeroU32>,
         worker: Option<NonZeroU32>,
+        limiter: Option<(NonZeroU32, i64)>,
         update: bool,
     ) -> Result<(), Error> {
         self.store
-            .register_queue(name, global, worker, update)
+            .register_queue(name, global, worker, limiter, update)
             .await
     }
 

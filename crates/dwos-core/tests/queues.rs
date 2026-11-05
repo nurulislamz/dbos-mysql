@@ -250,11 +250,11 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
     engine
-        .register_queue("q", NonZeroU32::new(3), NonZeroU32::new(1), true)
+        .register_queue("q", NonZeroU32::new(3), NonZeroU32::new(1), None, true)
         .await
         .unwrap();
     engine
-        .register_queue("q", NonZeroU32::new(4), None, false)
+        .register_queue("q", NonZeroU32::new(4), None, None, false)
         .await
         .unwrap();
     assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 3);
@@ -264,7 +264,7 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
     assert!(engine.list_queues().await.unwrap().is_empty());
     assert!(engine.claim_queue("q", &names()).await.is_err());
     engine
-        .register_queue("q", NonZeroU32::new(2), None, true)
+        .register_queue("q", NonZeroU32::new(2), None, None, true)
         .await
         .unwrap();
     assert_eq!(engine.list_queues().await.unwrap(), [("q".to_string(), 2)]);
@@ -274,6 +274,37 @@ all_dbs!(queue_management_preserves_waiting_work, backend, {
             .workflow_id,
         "waiting"
     );
+});
+
+all_dbs!(queue_rate_limit_counts_starts_across_workers, backend, {
+    let db = TestDb::migrated(backend).await;
+    let first = engine(&db, config()).await;
+    let second = engine(&db, config()).await;
+    queue(&first, 4).await;
+    first
+        .set_limiter("q", Some((NonZeroU32::new(1).unwrap(), 60_000)))
+        .await
+        .unwrap();
+    first.enqueue("q", begin("one")).await.unwrap();
+    first.enqueue("q", begin("two")).await.unwrap();
+    let claim = first
+        .claim_queue("q", &names())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    first
+        .finish(&run(claim), Outcome::Success("null".into()))
+        .await
+        .unwrap();
+    assert!(second.claim_queue("q", &names()).await.unwrap().is_empty());
+    let mut connection = sqlx::AnyConnection::connect(&db.url).await.unwrap();
+    sqlx::query("UPDATE workflow_queue_admissions SET admitted_at_ms = 0")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    connection.close().await.unwrap();
+    assert_eq!(second.claim_queue("q", &names()).await.unwrap().len(), 1);
 });
 
 async fn queue(engine: &Engine, concurrency: u32) {

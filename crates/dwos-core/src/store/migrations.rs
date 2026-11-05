@@ -104,6 +104,11 @@ const POSTGRES: &[Migration] = &[
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_workflow_status_lease_token')",
     ),
     plain(
+        20,
+        include_str!("../../schema/postgres/020_queue_admissions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_queue_admissions')",
+    ),
+    plain(
         25,
         include_str!("../../schema/postgres/025_workflow_attributes_json.sql"),
         "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_status' AND column_name = 'attributes') = 0 THEN 1 ELSE 0 END",
@@ -198,6 +203,11 @@ const MYSQL: &[Migration] = &[
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND INDEX_NAME = 'ix_workflow_status_lease_token')",
     ),
     plain(
+        20,
+        include_str!("../../schema/mysql/020_queue_admissions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_queue_admissions')",
+    ),
+    plain(
         25,
         include_str!("../../schema/mysql/025_workflow_attributes_json.sql"),
         "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_status' AND column_name = 'attributes') = 0 THEN 1 ELSE 0 END",
@@ -278,6 +288,11 @@ const SQLITE: &[Migration] = &[
         15,
         include_str!("../../schema/sqlite/015_workflow_lease_token.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_workflow_status_lease_token')",
+    ),
+    plain(
+        20,
+        include_str!("../../schema/sqlite/020_queue_admissions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_queue_admissions')",
     ),
     plain(
         25,

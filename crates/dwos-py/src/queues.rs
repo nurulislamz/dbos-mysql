@@ -23,9 +23,54 @@ fn delay_ms(seconds: Option<f64>) -> PyResult<Option<i64>> {
         .transpose()
 }
 
+fn parse_limiter(limit: Option<u32>, period: Option<f64>) -> PyResult<Option<(NonZeroU32, i64)>> {
+    match (limit, delay_ms(period)?) {
+        (None, None) => Ok(None),
+        (Some(limit), Some(period)) if period > 0 => Ok(Some((
+            NonZeroU32::new(limit).ok_or_else(|| {
+                to_py(Error::InvalidConfig(
+                    "limiter limit must be positive".to_owned(),
+                ))
+            })?,
+            period,
+        ))),
+        _ => Err(to_py(Error::InvalidConfig(
+            "limiter requires a positive limit and period".to_owned(),
+        ))),
+    }
+}
+
 #[pymethods]
 impl PyEngine {
-    #[pyo3(signature = (name, global=None, worker=None, update=true, *, blocking=false))]
+    #[pyo3(signature = (name, limit=None, period=None, *, blocking=false))]
+    fn set_limiter<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        limit: Option<u32>,
+        period: Option<f64>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let limiter = parse_limiter(limit, period)?;
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.set_limiter(&name, limiter).await.map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn get_limiter<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.get_limiter(&name).await.map_err(to_py)
+        })
+    }
+    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, *, blocking=false))]
     fn register_queue<'py>(
         &self,
         py: Python<'py>,
@@ -33,6 +78,8 @@ impl PyEngine {
         global: Option<u32>,
         worker: Option<u32>,
         update: bool,
+        limit: Option<u32>,
+        period: Option<f64>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let parse = |value: Option<u32>| {
@@ -48,10 +95,11 @@ impl PyEngine {
         };
         let global = parse(global)?;
         let worker = parse(worker)?;
+        let limiter = parse_limiter(limit, period)?;
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
             engine
-                .register_queue(&name, global, worker, update)
+                .register_queue(&name, global, worker, limiter, update)
                 .await
                 .map_err(to_py)
         })

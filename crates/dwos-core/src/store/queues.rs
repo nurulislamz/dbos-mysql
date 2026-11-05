@@ -21,11 +21,54 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
 }
 
 impl Store {
+    pub async fn set_limiter(
+        &self,
+        name: &str,
+        limiter: Option<(NonZeroU32, i64)>,
+    ) -> Result<(), Error> {
+        check_queue_name(name)?;
+        if limiter.is_some_and(|(_, period)| period <= 0) {
+            return Err(Error::InvalidConfig(
+                "limiter period must be positive".to_owned(),
+            ));
+        }
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            self.lock_queue(&mut tx, name).await?;
+            sqlx::query(self.sql(
+                "UPDATE workflow_queues SET rate_limit = ?, rate_period_ms = ? WHERE name = ?",
+            ))
+            .bind(limiter.map(|(limit, _)| i64::from(limit.get())))
+            .bind(limiter.map(|(_, period)| period))
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn get_limiter(&self, name: &str) -> Result<Option<(u32, i64)>, Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let row = sqlx::query(self.sql("SELECT rate_limit, rate_period_ms FROM workflow_queues WHERE name = ? AND deleted = 0"))
+                .bind(name).fetch_optional(&self.pool).await?.ok_or_else(|| Error::QueueNotFound(name.to_owned()))?;
+            let limit: Option<i64> = row.try_get("rate_limit")?;
+            let period: Option<i64> = row.try_get("rate_period_ms")?;
+            match (limit, period) {
+                (None, None) => Ok(None),
+                (Some(limit), Some(period)) if limit > 0 && period > 0 => Ok(Some((u32::try_from(limit).map_err(|_| Error::Corrupt("invalid queue rate limit".to_owned()))?, period))),
+                _ => Err(Error::Corrupt("invalid queue limiter".to_owned())),
+            }
+        }).await
+    }
     pub async fn register_queue(
         &self,
         name: &str,
         global: Option<NonZeroU32>,
         worker: Option<NonZeroU32>,
+        limiter: Option<(NonZeroU32, i64)>,
         update: bool,
     ) -> Result<(), Error> {
         check_queue_name(name)?;
@@ -35,19 +78,24 @@ impl Store {
                 "worker concurrency exceeds global concurrency".to_owned(),
             ));
         }
+        if limiter.is_some_and(|(_, period)| period <= 0) {
+            return Err(Error::InvalidConfig(
+                "limiter period must be positive".to_owned(),
+            ));
+        }
         self.attempt(|| async {
             let mut tx = self.begin().await?;
             let conflict = match self.dialect {
                 Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
                 Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
             };
-            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency) VALUES (?, ?, ?) {conflict}")))
-                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).execute(&mut *tx).await?;
+            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency, rate_limit, rate_period_ms) VALUES (?, ?, ?, ?, ?) {conflict}")))
+                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).execute(&mut *tx).await?;
             sqlx::query(self.sql(&format!("SELECT name FROM workflow_queues WHERE name = ? {}", self.dialect.lock_row())))
                 .bind(name).fetch_one(&mut *tx).await?;
             if update {
-                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, deleted = 0 WHERE name = ?"))
-                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(name).execute(&mut *tx).await?;
+                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, rate_limit = ?, rate_period_ms = ?, deleted = 0 WHERE name = ?"))
+                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(limiter.map(|(n, _)| i64::from(n.get()))).bind(limiter.map(|(_, period)| period)).bind(name).execute(&mut *tx).await?;
             } else {
                 sqlx::query(self.sql("UPDATE workflow_queues SET deleted = 0 WHERE name = ?"))
                     .bind(name).execute(&mut *tx).await?;
@@ -620,6 +668,27 @@ impl Store {
                 slots = slots.min(worker_limit.saturating_sub(worker_occupied));
             }
         }
+        let row = sqlx::query(
+            self.sql("SELECT rate_limit, rate_period_ms FROM workflow_queues WHERE name = ?"),
+        )
+        .bind(queue)
+        .fetch_one(&mut *tx)
+        .await?;
+        let rate: Option<i64> = row.try_get("rate_limit")?;
+        let period: Option<i64> = row.try_get("rate_period_ms")?;
+        if let (Some(rate), Some(period)) = (rate, period) {
+            let rate = u32::try_from(rate)
+                .map_err(|_| Error::Corrupt("invalid queue rate limit".to_owned()))?;
+            if rate == 0 || period <= 0 {
+                return Err(Error::Corrupt("invalid queue limiter".to_owned()));
+            }
+            let recent: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_queue_admissions WHERE queue_name = ? AND admitted_at_ms > ?"))
+                .bind(queue).bind(cutoff.saturating_sub(period)).fetch_one(&mut *tx).await?;
+            let recent = u32::try_from(recent).unwrap_or(u32::MAX);
+            slots = slots.min(rate.saturating_sub(recent));
+        } else if rate.is_some() || period.is_some() {
+            return Err(Error::Corrupt("invalid queue limiter".to_owned()));
+        }
         let mut claimed = Vec::new();
         let (compatible, binds) = self.compatible_clause();
         while claimed.len() < slots as usize {
@@ -682,6 +751,10 @@ impl Store {
                     .claim_locked_row(&mut tx, &row, request_token, duration)
                     .await?
                 {
+                    sqlx::query(self.sql("INSERT INTO workflow_queue_admissions (queue_name, partition_key, admitted_at_ms) SELECT queue_name, partition_key, {NOW} FROM workflow_queue_entries WHERE workflow_uuid = ?"))
+                        .bind(workflow_id.as_str()).execute(&mut *tx).await?;
+                    sqlx::query(self.sql("UPDATE workflow_queue_entries SET admitted_at_ms = {NOW} WHERE workflow_uuid = ?"))
+                        .bind(workflow_id.as_str()).execute(&mut *tx).await?;
                     claimed.push(claim);
                 }
             }

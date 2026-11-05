@@ -69,3 +69,12 @@ def test_queue_management(dbos: DBOS) -> None:
     assert "management" in [item.name for item in DBOS.list_queues()]
     DBOS.delete_queue("management")
     assert DBOS.retrieve_queue("management") is None
+
+
+def test_limiter_setting(dbos: DBOS) -> None:
+    queue = DBOS.register_queue("limiter", limiter={"limit": 2, "period": 30})
+    assert queue.limiter == {"limit": 2, "period": 30}
+    DBOS.register_queue("limiter", on_conflict="never_update")
+    assert queue.limiter == {"limit": 2, "period": 30}
+    queue.set_limiter(None)
+    assert queue.limiter is None

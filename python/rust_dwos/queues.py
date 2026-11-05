@@ -135,6 +135,26 @@ class Queue:
         return await _dbos()._running()._engine.get_worker_concurrency(self.name)
 
     @property
+    def limiter(self) -> dict[str, Any] | None:
+        instance = _dbos()._running()
+        value = instance._blocking(instance._engine.get_limiter, self.name)
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    async def get_limiter_async(self) -> dict[str, Any] | None:
+        value = await _dbos()._running()._engine.get_limiter(self.name)
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    def set_limiter(self, value: dict[str, Any] | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_limiter, self.name, value["limit"] if value else None, value["period"] if value else None)
+        instance._wake_queue(self.name)
+
+    async def set_limiter_async(self, value: dict[str, Any] | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_limiter(self.name, value["limit"] if value else None, value["period"] if value else None)
+        instance._wake_queue(self.name)
+
+    @property
     def polling_interval_sec(self) -> float:
         return self._polling_interval_sec
 
@@ -223,6 +243,7 @@ class Queues:
         *,
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
+        limiter: dict[str, Any] | None = None,
         on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
@@ -234,7 +255,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update")
+        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None)
         limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
@@ -245,6 +266,7 @@ class Queues:
         *,
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
+        limiter: dict[str, Any] | None = None,
         on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
@@ -256,7 +278,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
-        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update")
+        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None)
         limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
