@@ -109,6 +109,11 @@ impl PyRun {
         self.0.deadline_epoch_ms()
     }
 
+    #[getter]
+    fn last_step_id(&self) -> u32 {
+        self.0.last_step_id()
+    }
+
     fn step_id_unless_in_step(&self, in_step: bool) -> Option<u32> {
         self.0.step_id_unless_in_step(in_step)
     }

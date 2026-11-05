@@ -68,6 +68,7 @@ class DBOSConfig(TypedDict):
     retention_hours: NotRequired[float]
     retention_rows: NotRequired[int]
     retention_interval_seconds: NotRequired[float]
+    executor_id: NotRequired[str | None]
 
 
 class WorkflowStatusString(Enum):
@@ -212,9 +213,11 @@ def _running() -> DBOS:
 
 
 def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
+    from rust_dwos.context import DBOSContext, _context
     from rust_dwos.queues import _enqueue_options
 
     _current_run.set(run)
+    _context.set(DBOSContext())
     _current_active.set(active)
     _current_step.set(None)
     _next_workflow_id.set(None)
@@ -328,6 +331,11 @@ class WorkflowHandleAsync[T]:
 
 class _DBOSMeta(type):
     @property
+    def executor_id(cls) -> str:
+        """Process label; leases, not this label, decide workflow ownership."""
+        return _instance._executor_id if _instance is not None else os.environ.get("DBOS__VMID") or "local"
+
+    @property
     def workflow_id(cls) -> str | None:
         run = _current_run.get()
         return run.workflow_id if run is not None else None
@@ -356,6 +364,9 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
 
     def __init__(self, *, config: DBOSConfig) -> None:
         self._config = config
+        self._executor_id = config.get("executor_id")
+        if self._executor_id is None:
+            self._executor_id = os.environ.get("DBOS__VMID") or "local"
         if "log_level" in config or "console_log_level" in config:
             logger.setLevel(config.get("log_level", "INFO"))
             handler = next((h for h in logger.handlers if h.name == "__dbos_console_log_handler__"), None)

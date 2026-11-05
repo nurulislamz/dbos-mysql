@@ -1,5 +1,6 @@
 from rust_dwos.validation import make_pydantic_args_validator, pydantic_args_validator
 from rust_dwos._native import StoreError
+from rust_dwos.context import DBOSContextEnsure
 from rust_dwos.dbos import (
     DBOS,
     DBOSConfig,
@@ -38,6 +39,7 @@ __all__ = [
     "DBOSAwaitedWorkflowCancelledError",
     "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
     "DBOSConfig",
+    "DBOSContextEnsure",
     "DBOSConflictingWorkflowError",
     "DBOSException",
     "DBOSLeaseLostError",

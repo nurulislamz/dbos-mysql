@@ -54,8 +54,11 @@ def get_workflow_start_options() -> WorkflowStartOptions:
 
 
 def assert_current_dbos_context() -> Any:
+    from rust_dwos.context import _context
     from rust_dwos.dbos import _current_run
 
+    if (context := _context.get()) is not None:
+        return context
     run = _current_run.get()
     if run is not None:
         return run

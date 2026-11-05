@@ -210,6 +210,10 @@ impl Engine {
 }
 
 impl Run {
+    pub fn last_step_id(&self) -> u32 {
+        self.last_step_id.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn step_id_for_call(&self, in_step: bool, reserved: Option<u32>) -> Option<u32> {
         (!in_step).then(|| reserved.unwrap_or_else(|| self.next_step_id()))
     }
