@@ -6,6 +6,17 @@ use super::{Begin, Engine};
 use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
 
 impl Engine {
+    pub async fn set_worker_concurrency(
+        &self,
+        name: &str,
+        limit: Option<NonZeroU32>,
+    ) -> Result<(), Error> {
+        self.store.set_worker_concurrency(name, limit).await
+    }
+
+    pub async fn get_worker_concurrency(&self, name: &str) -> Result<Option<u32>, Error> {
+        self.store.get_worker_concurrency(name).await
+    }
     pub async fn set_workflow_delay(
         &self,
         workflow_id: &str,

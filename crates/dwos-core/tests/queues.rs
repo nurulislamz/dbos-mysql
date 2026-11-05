@@ -197,6 +197,32 @@ all_dbs!(queue_delay_can_be_shortened, backend, {
     );
 });
 
+all_dbs!(worker_concurrency_is_per_engine, backend, {
+    let db = TestDb::migrated(backend).await;
+    let first = engine(&db, config()).await;
+    let second = engine(&db, config()).await;
+    queue(&first, 4).await;
+    first
+        .set_worker_concurrency("q", NonZeroU32::new(1))
+        .await
+        .unwrap();
+    for id in ["one", "two", "three"] {
+        first.enqueue("q", begin(id)).await.unwrap();
+    }
+    let claim = first.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(claim.len(), 1);
+    assert!(first.claim_queue("q", &names()).await.unwrap().is_empty());
+    assert_eq!(second.claim_queue("q", &names()).await.unwrap().len(), 1);
+    first
+        .finish(
+            &run(claim.into_iter().next().unwrap()),
+            Outcome::Success("null".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.claim_queue("q", &names()).await.unwrap().len(), 1);
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())

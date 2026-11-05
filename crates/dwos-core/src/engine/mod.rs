@@ -263,6 +263,10 @@ impl Engine {
         } else {
             store
         };
+        let store = store.with_identity(crate::Identity {
+            executor_id: Some(new_token()),
+            ..Default::default()
+        });
         // Store::connect_read_only has already checked the schema.
         if !config.read_only {
             if config.run_migrations {

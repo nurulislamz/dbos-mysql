@@ -40,3 +40,10 @@ def test_delay_option_and_setter(dbos: DBOS) -> None:
     assert handle.get_status().status == "DELAYED"
     DBOS.set_workflow_delay(handle.get_workflow_id(), delay_seconds=0)
     assert handle.get_result() == "done"
+
+
+def test_worker_concurrency_setting(dbos: DBOS) -> None:
+    queue = DBOS.register_queue("worker-limit", global_concurrency=3, worker_concurrency=1)
+    assert queue.worker_concurrency == 1
+    queue.set_worker_concurrency(2)
+    assert queue.worker_concurrency == 2

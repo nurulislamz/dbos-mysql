@@ -97,6 +97,24 @@ class Queue:
         return self._concurrency
 
     @property
+    def worker_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_worker_concurrency, self.name)
+
+    def set_worker_concurrency(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_worker_concurrency, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_worker_concurrency_async(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_worker_concurrency(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_worker_concurrency_async(self) -> int | None:
+        return await _dbos()._running()._engine.get_worker_concurrency(self.name)
+
+    @property
     def polling_interval_sec(self) -> float:
         return self._polling_interval_sec
 
@@ -133,6 +151,7 @@ class Queues:
         name: str,
         *,
         global_concurrency: int | None = None,
+        worker_concurrency: int | None = None,
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
         **unsupported: Any,
@@ -142,6 +161,7 @@ class Queues:
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
         instance._blocking(instance._engine.ensure_queue, name, limit)
+        instance._blocking(instance._engine.set_worker_concurrency, name, worker_concurrency)
         if limit is None:
             limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
@@ -152,6 +172,7 @@ class Queues:
         name: str,
         *,
         global_concurrency: int | None = None,
+        worker_concurrency: int | None = None,
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
         **unsupported: Any,
@@ -161,6 +182,7 @@ class Queues:
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
         await instance._engine.ensure_queue(name, limit)
+        await instance._engine.set_worker_concurrency(name, worker_concurrency)
         if limit is None:
             limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))

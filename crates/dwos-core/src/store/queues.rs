@@ -21,6 +21,52 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
 }
 
 impl Store {
+    pub async fn set_worker_concurrency(
+        &self,
+        name: &str,
+        limit: Option<NonZeroU32>,
+    ) -> Result<(), Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            let global = self.lock_queue(&mut tx, name).await?;
+            if limit.is_some_and(|limit| limit.get() > global) {
+                return Err(Error::InvalidConfig(
+                    "worker concurrency exceeds global concurrency".to_owned(),
+                ));
+            }
+            sqlx::query(
+                self.sql("UPDATE workflow_queues SET worker_concurrency = ? WHERE name = ?"),
+            )
+            .bind(limit.map(|limit| i64::from(limit.get())))
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn get_worker_concurrency(&self, name: &str) -> Result<Option<u32>, Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let value: Option<i64> = sqlx::query_scalar(
+                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ?"),
+            )
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::QueueNotFound(name.to_owned()))?;
+            value
+                .map(|value| {
+                    u32::try_from(value)
+                        .map_err(|_| Error::Corrupt("invalid worker concurrency".to_owned()))
+                })
+                .transpose()
+        })
+        .await
+    }
     pub async fn get_queue(&self, name: &str) -> Result<Option<NonZeroU32>, Error> {
         check_queue_name(name)?;
         self.attempt(|| async {
@@ -459,7 +505,24 @@ impl Store {
         let occupied = u32::try_from(occupied).map_err(|_| {
             Error::Corrupt(format!("queue owner count is out of range: {occupied}"))
         })?;
-        let slots = concurrency.saturating_sub(occupied).min(limit);
+        let mut slots = concurrency.saturating_sub(occupied).min(limit);
+        if let Some(worker) = &self.identity.executor_id {
+            let worker_limit: Option<i64> = sqlx::query_scalar(
+                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ?"),
+            )
+            .bind(queue)
+            .fetch_one(&mut *tx)
+            .await?;
+            if let Some(worker_limit) = worker_limit {
+                let worker_limit = u32::try_from(worker_limit)
+                    .map_err(|_| Error::Corrupt("invalid worker concurrency".to_owned()))?;
+                let worker_occupied: i64 = sqlx::query_scalar(self.sql("SELECT COUNT(*) FROM workflow_status WHERE status = 'PENDING' AND lease_token IS NOT NULL AND executor_id = ? AND workflow_uuid IN (SELECT workflow_uuid FROM workflow_queue_entries WHERE queue_name = ?)"))
+                    .bind(worker.as_str()).bind(queue).fetch_one(&mut *tx).await?;
+                let worker_occupied = u32::try_from(worker_occupied)
+                    .map_err(|_| Error::Corrupt("invalid worker count".to_owned()))?;
+                slots = slots.min(worker_limit.saturating_sub(worker_occupied));
+            }
+        }
         let mut claimed = Vec::new();
         let (compatible, binds) = self.compatible_clause();
         while claimed.len() < slots as usize {
