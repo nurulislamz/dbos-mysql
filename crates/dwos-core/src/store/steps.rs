@@ -55,7 +55,22 @@ impl Store {
                     Ok(record)
                 })
                 .transpose()?;
+            // Revoked, not only refused: an SDK reports this through the body, and `finish` must not store it as final.
+            let revoked = saved.is_none()
+                && sqlx::query(self.sql(
+                    "UPDATE workflow_status SET lease_token = NULL, updated_at = {NOW} \
+                     WHERE workflow_uuid = ? AND lease_token = ? AND claim_after <= {NOW}",
+                ))
+                .bind(lease.workflow_id.as_str())
+                .bind(lease.token.as_str())
+                .execute(&mut *tx)
+                .await?
+                .rows_affected()
+                    > 0;
             tx.commit().await?;
+            if revoked {
+                return Err(Error::LeaseLost(lease.workflow_id.clone()));
+            }
             Ok(saved)
         })
         .await
