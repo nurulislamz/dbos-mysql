@@ -221,8 +221,13 @@ impl Engine {
         } else {
             store
         };
-        if config.run_migrations && !config.read_only {
-            store.migrate().await?;
+        // Store::connect_read_only has already checked the schema.
+        if !config.read_only {
+            if config.run_migrations {
+                store.migrate().await?;
+            } else {
+                store.check_schema().await?;
+            }
         }
         Ok(Self {
             store,

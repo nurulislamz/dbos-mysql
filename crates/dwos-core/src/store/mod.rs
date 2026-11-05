@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod events;
 mod leases;
+mod migrations;
 mod queues;
 mod sleep;
 mod steps;
@@ -28,8 +29,6 @@ const SQLITE_POOL_SIZE: u32 = 5;
 const PACKET_MARGIN: u64 = 4096;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(40);
-const POSTGRES_MIGRATION_LOCK: &str =
-    "SELECT 1 FROM (SELECT pg_advisory_xact_lock(7240319)) AS locked";
 const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, lease_token, (SELECT timeout_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_timeout_ms, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms \
      FROM workflow_status WHERE workflow_uuid = ?";
 
@@ -58,15 +57,6 @@ impl Dialect {
             Self::Postgres => "postgres",
             Self::MySql => "mysql",
             Self::Sqlite => "sqlite",
-        }
-    }
-
-    // shortcut: 001 is edited in place and has no migration runner, add numbered migrations before the first release.
-    fn schema(self) -> &'static str {
-        match self {
-            Self::Postgres => include_str!("../../schema/postgres/001_init.sql"),
-            Self::MySql => include_str!("../../schema/mysql/001_init.sql"),
-            Self::Sqlite => include_str!("../../schema/sqlite/001_init.sql"),
         }
     }
 
@@ -271,6 +261,7 @@ pub struct Store {
     max_packet: Option<u64>,
     retries: Arc<AtomicU64>,
     pickle: bool,
+    read_only: bool,
 }
 
 impl Store {
@@ -279,7 +270,9 @@ impl Store {
     }
 
     pub async fn connect_read_only(url: &str) -> Result<Self, Error> {
-        Self::open(url, true).await
+        let store = Self::open(url, true).await?;
+        store.check_schema().await?;
+        Ok(store)
     }
 
     async fn open(url: &str, read_only: bool) -> Result<Self, Error> {
@@ -300,6 +293,7 @@ impl Store {
                 max_packet: None,
                 retries: Arc::new(AtomicU64::new(0)),
                 pickle: false,
+                read_only,
             });
         }
 
@@ -320,6 +314,7 @@ impl Store {
             max_packet,
             retries: Arc::new(AtomicU64::new(0)),
             pickle: false,
+            read_only,
         })
     }
 
@@ -401,30 +396,6 @@ impl Store {
         let limit = max_packet.saturating_sub(PACKET_MARGIN);
         if size > limit {
             return Err(Error::ValueTooLarge { size, limit });
-        }
-        Ok(())
-    }
-
-    pub async fn migrate(&self) -> Result<(), Error> {
-        let schema = AssertSqlSafe(self.dialect.schema());
-        match self.dialect {
-            Dialect::MySql => {
-                sqlx::raw_sql(schema).execute(&self.pool).await?;
-            }
-            Dialect::Sqlite => {
-                let mut tx = self.begin().await?;
-                sqlx::raw_sql(schema).execute(&mut *tx).await?;
-                tx.commit().await?;
-            }
-            // Concurrent CREATE TABLE IF NOT EXISTS can fail on Postgres, so copies take turns.
-            Dialect::Postgres => {
-                let mut tx = self.begin().await?;
-                sqlx::raw_sql(POSTGRES_MIGRATION_LOCK)
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::raw_sql(schema).execute(&mut *tx).await?;
-                tx.commit().await?;
-            }
         }
         Ok(())
     }

@@ -64,7 +64,7 @@ Each feature gets its own files, so features can be built in parallel without co
 |---|---|
 | SQL | `crates/dwos-core/src/store/<feature>.rs`, as an `impl Store` block |
 | Decisions | `crates/dwos-core/src/engine/<feature>.rs`, as an `impl Engine` block |
-| Tables | `schema/<database>/001_init.sql`, in all 3 files. Add new tables at the end, with `IF NOT EXISTS`. Nothing is released, so there is no migration runner yet |
+| Tables | A new numbered `schema/<database>/NNN_<change>.sql` for each database, listed in `crates/dwos-core/src/store/migrations.rs`. Never edit a file that has shipped, including `001_init.sql`. Migrations must keep every row; see [`dwos-core/README.md`](../crates/dwos-core/README.md#schema-upgrades) |
 | Python API | `python/rust_dwos/<feature>.py`, as a class that `DBOS` inherits from |
 | Bindings | `crates/dwos-py/src/<feature>.rs`, as its own `#[pymethods] impl PyEngine` block |
 
@@ -84,13 +84,13 @@ We do not fork `dbos-transact-rust`. It is Postgres only, its storage trait has 
 | Postgres text columns are `TEXT`, never `CHAR` | `Any` cannot read Postgres `CHAR` |
 | Read the time from the database clock | Machines can disagree on the time |
 
-What may differ per database: the schema file, "now in milliseconds", the insert-if-absent clause, the row lock clause, the transaction start, connection settings, and which errors count as retryable.
+What may differ per database: the schema and migration files, "now in milliseconds", the insert-if-absent clause, the row lock clause, the transaction start, connection settings, and which errors count as retryable.
 
 ## Durable queues
 
 The core now offers durable FIFO enqueue and global lease-owner concurrency. Queue metadata and membership use new companion tables; workflow identity, status, results and ownership remain in the existing workflow row. A queue transaction revokes expired owners, counts all remaining tokens and admits compatible work. Ordinary recovery and direct resume claims exclude queue members. Relative timeout budgets begin on first admission; inherited deadlines apply while waiting.
 
-Upgrade or stop old workers before using queues: older claim SQL does not enforce queue admission. The core API and remaining SDK obligations are described in [`dwos-core/README.md`](../crates/dwos-core/README.md).
+Stop old workers before upgrading the schema or using queues: older claim SQL does not enforce queue admission, and old workers do not read the schema version. The core API and remaining SDK obligations are described in [`dwos-core/README.md`](../crates/dwos-core/README.md).
 
 ## Behaviour we keep
 

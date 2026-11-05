@@ -61,6 +61,16 @@ pub enum Error {
     ValueTooLarge { size: u64, limit: u64 },
     #[error("database operation timed out after {0:?}")]
     Timeout(std::time::Duration),
+    #[error(
+        "database schema version {found} is newer than {supported}, the newest this program knows. Upgrade this program"
+    )]
+    SchemaTooNew { found: i64, supported: i64 },
+    #[error(
+        "database schema version {found} is older than the required {required}. Start a writer with migrations on to upgrade it"
+    )]
+    SchemaOutdated { found: i64, required: i64 },
+    #[error("schema upgrade stopped: {0}")]
+    Migration(String),
     #[error("stored data is invalid: {0}")]
     Corrupt(String),
 }

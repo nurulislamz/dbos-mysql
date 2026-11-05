@@ -20,10 +20,32 @@ Queue membership is separate from the existing workflow row. One queue transacti
 
 Upgrade or stop all older claimers before using queues: workers without membership exclusions can bypass admission. Queue concurrency bounds current owners; an old user function may continue until its SDK responds to lease loss. Rate limits, priorities, partitions and runtime reconfiguration are outside this API.
 
-## Storage and checks
+## Storage
 
-Connections apply bounded lock waits and strict settings. `EngineConfig::read_only` opens read-only database sessions, skips migrations and avoids timeout writes from status reads. It is suitable for inspection; database credentials remain the security boundary.
+Connections apply bounded lock waits and strict settings. `EngineConfig::read_only` opens read-only database sessions and avoids timeout writes from status reads. It is suitable for inspection; database credentials remain the security boundary.
 
-Schemas are prerelease. New features add companion tables; there is no general migration runner for older changes to existing columns or CHECK constraints. Upgrade those schemas offline before using the new engine. Never delete a database containing wanted workflow history to resolve a schema mismatch.
+## Schema upgrades
+
+`Store::migrate`, and `Engine::connect` unless `run_migrations` is false, apply the numbered files in `schema/<database>/` and record each in `dwos_schema_migrations`. An up-to-date start only reads: no lock, no DDL, no write. A database with no version record is recognised by its real shape, and each migration first checks what it would change. Empty databases get the current shape. Several processes can start at once; they take turns and each migration applies once.
+
+**Before upgrading:** stop every older worker and take a backup. Older workers do not read the version record, so nothing stops them. Their claims can bypass queue admission, and their writes can fail or hit the rewrite below.
+
+| Database | What a first upgrade does | Lock and downtime |
+|---|---|---|
+| MySQL | Rebuilds `workflow_status` for the status CHECK, again for its counters, and `operation_outputs` for its step ID, each only if needed | Each is `ALGORITHM=COPY, LOCK=SHARED`: reads continue, writes wait for the whole copy, then a short exclusive lock swaps the table. Time and free disk grow with table size, and values are `LONGTEXT`. If an `ALTER` waits 60 seconds for its lock, the start fails and the next start resumes |
+| Postgres | Replaces the status CHECK | Blocks reads and writes on `workflow_status` during a scan of the table, with no rewrite. If it waits 10 seconds for the lock, the start fails and the next start retries |
+| SQLite | Rebuilds `workflow_status` in one transaction, with foreign keys off so that children survive | Blocks writers for the rebuild. Readers continue in WAL mode |
+
+Other starters wait for up to one hour for their turn. Upgrading a large MySQL database in a maintenance window is the safe choice.
+
+Postgres and SQLite run each migration in one transaction, so a failure leaves that migration undone. MySQL DDL commits on its own, so a crash can stop between steps; the next start checks each step by its effect and carries on. A failed upgrade returns its error, keeps the rows, and is retried by the next start.
+
+A database newer than the binary is refused with `Error::SchemaTooNew`. Sessions that cannot migrate, meaning `read_only` and `run_migrations = false`, never write. They open only a database at exactly the current version, and otherwise return `Error::SchemaTooNew` or `Error::SchemaOutdated` from `connect`. This includes an upgrade still in progress, so retry after it ends. The exception is a database with no tables: it opens, and each query then returns a plain database error until a writer creates the schema.
+
+Databases from before the rename have `dbos_workflows` and `dbos_steps`. Their rows are copied into the current tables in one transaction, and MySQL `DATETIME` values become milliseconds as the old code read them. The old tables stay; drop them yourself once satisfied. Those rows hold an older JSON layout, so they are tagged `dbos_mysql_json`. They stay readable as stored text and can be cancelled, but recovery and resume never claim them, and the Python SDK reports the unknown format instead of loading them. If one workflow ID is in both old and new tables with different data, the upgrade stops with `Error::Migration` and copies nothing.
+
+To change the schema, add a new numbered file for each database and list it in `src/store/migrations.rs`. Never edit a file that has shipped, including `001_init.sql`. On MySQL give it a `pending` query and split DDL into one statement per migration, because it cannot roll back.
+
+## Checks
 
 Run `cargo test -p dwos-core --no-fail-fast` and `cargo clippy -p dwos-core --all-targets -- -D warnings`. The Rust tests use disposable databases on the existing test servers (MySQL port 13307, Postgres port 13309) and temporary SQLite files. The workspace SDK is being integrated separately.

@@ -1,0 +1,1 @@
+Each file is a schema exactly as it stood at that commit (`git show <commit>:<path>/schema/<db>/001_init.sql`), one per distinct shape in the whole history, including the branches and the older `crates/dbos-mysql-core` path. Do not edit them.
