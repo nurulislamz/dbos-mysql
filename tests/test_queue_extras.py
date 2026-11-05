@@ -58,3 +58,14 @@ def test_enqueue_by_name_with_options(dbos: DBOS) -> None:
     handle = DBOS.enqueue_workflow_with_options({"workflow_name": "by-name", "queue_name": "named", "workflow_id": "named-id", "priority": 1}, "ok")
     assert handle.get_workflow_id() == "named-id"
     assert handle.get_result() == "ok"
+
+
+def test_queue_management(dbos: DBOS) -> None:
+    queue = DBOS.register_queue("management", global_concurrency=3)
+    DBOS.register_queue("management", global_concurrency=4, on_conflict="never_update")
+    assert queue.global_concurrency == 3
+    queue.set_global_concurrency(2)
+    assert queue.global_concurrency == 2
+    assert "management" in [item.name for item in DBOS.list_queues()]
+    DBOS.delete_queue("management")
+    assert DBOS.retrieve_queue("management") is None

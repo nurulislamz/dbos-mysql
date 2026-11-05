@@ -90,11 +90,31 @@ class Queue:
 
     @property
     def concurrency(self) -> int | None:
-        return self._concurrency
+        return self.global_concurrency
 
     @property
     def global_concurrency(self) -> int | None:
-        return self._concurrency
+        instance = _dbos()._running()
+        limit = instance._blocking(instance._engine.get_queue, self.name)
+        if limit is None:
+            raise DBOSException(f"queue {self.name} does not exist")
+        return _stored_limit(limit)
+
+    def set_global_concurrency(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_global_concurrency, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_global_concurrency_async(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_global_concurrency(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_global_concurrency_async(self) -> int | None:
+        limit = await _dbos()._running()._engine.get_queue(self.name)
+        if limit is None:
+            raise DBOSException(f"queue {self.name} does not exist")
+        return _stored_limit(limit)
 
     @property
     def worker_concurrency(self) -> int | None:
@@ -155,6 +175,24 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
 
 class Queues:
     @classmethod
+    def delete_queue(cls, name: str) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.delete_queue, name)
+
+    @classmethod
+    async def delete_queue_async(cls, name: str) -> None:
+        await _dbos()._running()._engine.delete_queue(name)
+
+    @classmethod
+    def list_queues(cls) -> list[Queue]:
+        instance = _dbos()._running()
+        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in instance._blocking(instance._engine.list_queues)]
+
+    @classmethod
+    async def list_queues_async(cls) -> list[Queue]:
+        rows = await _dbos()._running()._engine.list_queues()
+        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in rows]
+    @classmethod
     def enqueue_workflow_with_options(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
         dbos = _dbos()
         instance = dbos._running()
@@ -185,6 +223,7 @@ class Queues:
         *,
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
+        on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
         **unsupported: Any,
@@ -193,10 +232,10 @@ class Queues:
         Queue._validate_queue(name=name, concurrency=concurrency, global_concurrency=global_concurrency, polling_interval_sec=polling_interval_sec, unsupported=unsupported)
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
-        instance._blocking(instance._engine.ensure_queue, name, limit)
-        instance._blocking(instance._engine.set_worker_concurrency, name, worker_concurrency)
-        if limit is None:
-            limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
+        if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
+            raise DBOSException(f"Invalid on_conflict: {on_conflict}")
+        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update")
+        limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
     @classmethod
@@ -206,6 +245,7 @@ class Queues:
         *,
         global_concurrency: int | None = None,
         worker_concurrency: int | None = None,
+        on_conflict: str = "update_if_latest_version",
         polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
         concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
         **unsupported: Any,
@@ -214,32 +254,32 @@ class Queues:
         Queue._validate_queue(name=name, concurrency=concurrency, global_concurrency=global_concurrency, polling_interval_sec=polling_interval_sec, unsupported=unsupported)
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
-        await instance._engine.ensure_queue(name, limit)
-        await instance._engine.set_worker_concurrency(name, worker_concurrency)
-        if limit is None:
-            limit = _stored_limit(await instance._engine.get_queue(name))
+        if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
+            raise DBOSException(f"Invalid on_conflict: {on_conflict}")
+        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update")
+        limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
     @classmethod
     def retrieve_queue(cls, name: str) -> Queue | None:
         instance = _dbos()._running()
         known = instance._queues.get(name)
-        if known is not None:
-            return known
         concurrency = instance._blocking(instance._engine.get_queue, name)
         if concurrency is None:
             return None
+        if known is not None:
+            return known
         return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod
     async def retrieve_queue_async(cls, name: str) -> Queue | None:
         instance = _dbos()._running()
         known = instance._queues.get(name)
-        if known is not None:
-            return known
         concurrency = await instance._engine.get_queue(name)
         if concurrency is None:
             return None
+        if known is not None:
+            return known
         return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod

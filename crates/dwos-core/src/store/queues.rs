@@ -21,6 +21,67 @@ fn check_queue_name(name: &str) -> Result<(), Error> {
 }
 
 impl Store {
+    pub async fn register_queue(
+        &self,
+        name: &str,
+        global: Option<NonZeroU32>,
+        worker: Option<NonZeroU32>,
+        update: bool,
+    ) -> Result<(), Error> {
+        check_queue_name(name)?;
+        let global = global.unwrap_or(NonZeroU32::MAX);
+        if worker.is_some_and(|worker| worker > global) {
+            return Err(Error::InvalidConfig(
+                "worker concurrency exceeds global concurrency".to_owned(),
+            ));
+        }
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            let conflict = match self.dialect {
+                Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
+                Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
+            };
+            sqlx::query(self.sql(&format!("INSERT INTO workflow_queues (name, concurrency, worker_concurrency) VALUES (?, ?, ?) {conflict}")))
+                .bind(name).bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).execute(&mut *tx).await?;
+            sqlx::query(self.sql(&format!("SELECT name FROM workflow_queues WHERE name = ? {}", self.dialect.lock_row())))
+                .bind(name).fetch_one(&mut *tx).await?;
+            if update {
+                sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ?, worker_concurrency = ?, deleted = 0 WHERE name = ?"))
+                    .bind(i64::from(global.get())).bind(worker.map(|n| i64::from(n.get()))).bind(name).execute(&mut *tx).await?;
+            } else {
+                sqlx::query(self.sql("UPDATE workflow_queues SET deleted = 0 WHERE name = ?"))
+                    .bind(name).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+            Ok(())
+        }).await
+    }
+
+    pub async fn delete_queue(&self, name: &str) -> Result<(), Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            sqlx::query(self.sql("UPDATE workflow_queues SET deleted = 1 WHERE name = ?"))
+                .bind(name)
+                .execute(&self.pool)
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn list_queues(&self) -> Result<Vec<(String, u32)>, Error> {
+        self.attempt(|| async {
+            let rows = sqlx::query(self.sql(
+                "SELECT name, concurrency FROM workflow_queues WHERE deleted = 0 ORDER BY name",
+            ))
+            .fetch_all(&self.pool)
+            .await?;
+            rows.iter()
+                .map(|row| Ok((row.try_get("name")?, get_u32(row, "concurrency")?)))
+                .collect()
+        })
+        .await
+    }
     pub async fn set_worker_concurrency(
         &self,
         name: &str,
@@ -42,6 +103,38 @@ impl Store {
             .bind(name)
             .execute(&mut *tx)
             .await?;
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn set_global_concurrency(
+        &self,
+        name: &str,
+        limit: Option<NonZeroU32>,
+    ) -> Result<(), Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            self.lock_queue(&mut tx, name).await?;
+            let limit = limit.unwrap_or(NonZeroU32::MAX);
+            let worker: Option<i64> = sqlx::query_scalar(
+                self.sql("SELECT worker_concurrency FROM workflow_queues WHERE name = ?"),
+            )
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await?;
+            if worker.is_some_and(|worker| worker > i64::from(limit.get())) {
+                return Err(Error::InvalidConfig(
+                    "global concurrency is below worker concurrency".to_owned(),
+                ));
+            }
+            sqlx::query(self.sql("UPDATE workflow_queues SET concurrency = ? WHERE name = ?"))
+                .bind(i64::from(limit.get()))
+                .bind(name)
+                .execute(&mut *tx)
+                .await?;
             tx.commit().await?;
             Ok(())
         })
@@ -70,11 +163,12 @@ impl Store {
     pub async fn get_queue(&self, name: &str) -> Result<Option<NonZeroU32>, Error> {
         check_queue_name(name)?;
         self.attempt(|| async {
-            let row =
-                sqlx::query(self.sql("SELECT concurrency FROM workflow_queues WHERE name = ?"))
-                    .bind(name)
-                    .fetch_optional(&self.pool)
-                    .await?;
+            let row = sqlx::query(
+                self.sql("SELECT concurrency FROM workflow_queues WHERE name = ? AND deleted = 0"),
+            )
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
             row.map(|row| {
                 NonZeroU32::new(get_u32(&row, "concurrency")?)
                     .ok_or_else(|| Error::Corrupt(format!("queue {name} has zero concurrency")))
@@ -136,7 +230,7 @@ impl Store {
         queue: &str,
     ) -> Result<u32, Error> {
         let row = sqlx::query(self.sql(&format!(
-            "SELECT concurrency FROM workflow_queues WHERE name = ? {}",
+            "SELECT concurrency FROM workflow_queues WHERE name = ? AND deleted = 0 {}",
             self.dialect.lock_row(),
         )))
         .bind(queue)

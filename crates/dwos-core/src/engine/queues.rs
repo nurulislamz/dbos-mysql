@@ -6,6 +6,32 @@ use super::{Begin, Engine};
 use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
 
 impl Engine {
+    pub async fn set_global_concurrency(
+        &self,
+        name: &str,
+        limit: Option<NonZeroU32>,
+    ) -> Result<(), Error> {
+        self.store.set_global_concurrency(name, limit).await
+    }
+    pub async fn register_queue(
+        &self,
+        name: &str,
+        global: Option<NonZeroU32>,
+        worker: Option<NonZeroU32>,
+        update: bool,
+    ) -> Result<(), Error> {
+        self.store
+            .register_queue(name, global, worker, update)
+            .await
+    }
+
+    pub async fn delete_queue(&self, name: &str) -> Result<(), Error> {
+        self.store.delete_queue(name).await
+    }
+
+    pub async fn list_queues(&self) -> Result<Vec<(String, u32)>, Error> {
+        self.store.list_queues().await
+    }
     pub async fn set_worker_concurrency(
         &self,
         name: &str,

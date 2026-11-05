@@ -246,6 +246,36 @@ all_dbs!(queue_enqueue_saves_application_version, backend, {
     );
 });
 
+all_dbs!(queue_management_preserves_waiting_work, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    engine
+        .register_queue("q", NonZeroU32::new(3), NonZeroU32::new(1), true)
+        .await
+        .unwrap();
+    engine
+        .register_queue("q", NonZeroU32::new(4), None, false)
+        .await
+        .unwrap();
+    assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 3);
+    assert_eq!(engine.get_worker_concurrency("q").await.unwrap(), Some(1));
+    engine.enqueue("q", begin("waiting")).await.unwrap();
+    engine.delete_queue("q").await.unwrap();
+    assert!(engine.list_queues().await.unwrap().is_empty());
+    assert!(engine.claim_queue("q", &names()).await.is_err());
+    engine
+        .register_queue("q", NonZeroU32::new(2), None, true)
+        .await
+        .unwrap();
+    assert_eq!(engine.list_queues().await.unwrap(), [("q".to_string(), 2)]);
+    assert_eq!(
+        engine.claim_queue("q", &names()).await.unwrap()[0]
+            .lease
+            .workflow_id,
+        "waiting"
+    );
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())

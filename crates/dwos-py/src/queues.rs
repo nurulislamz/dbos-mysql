@@ -25,6 +25,84 @@ fn delay_ms(seconds: Option<f64>) -> PyResult<Option<i64>> {
 
 #[pymethods]
 impl PyEngine {
+    #[pyo3(signature = (name, global=None, worker=None, update=true, *, blocking=false))]
+    fn register_queue<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        global: Option<u32>,
+        worker: Option<u32>,
+        update: bool,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let parse = |value: Option<u32>| {
+            value
+                .map(|value| {
+                    NonZeroU32::new(value).ok_or_else(|| {
+                        to_py(Error::InvalidConfig(
+                            "queue concurrency must be positive".to_owned(),
+                        ))
+                    })
+                })
+                .transpose()
+        };
+        let global = parse(global)?;
+        let worker = parse(worker)?;
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .register_queue(&name, global, worker, update)
+                .await
+                .map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn delete_queue<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.delete_queue(&name).await.map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (*, blocking=false))]
+    fn list_queues<'py>(&self, py: Python<'py>, blocking: bool) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.list_queues().await.map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (name, limit=None, *, blocking=false))]
+    fn set_global_concurrency<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        limit: Option<u32>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let limit = limit
+            .map(|value| {
+                NonZeroU32::new(value).ok_or_else(|| {
+                    to_py(Error::InvalidConfig(
+                        "global concurrency must be positive".to_owned(),
+                    ))
+                })
+            })
+            .transpose()?;
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .set_global_concurrency(&name, limit)
+                .await
+                .map_err(to_py)
+        })
+    }
     #[pyo3(signature = (name, limit=None, *, blocking=false))]
     fn set_worker_concurrency<'py>(
         &self,
