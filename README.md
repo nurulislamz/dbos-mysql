@@ -14,7 +14,6 @@ There is no extra server. A running copy of your program is the coordinator. Whe
 | Python | Runs your function and returns the result. Holds no step, result, or lease decisions |
 | Postgres, MySQL 8.4 or SQLite | Stores the workflow and each finished step |
 | TypeScript SDK | Not part of this version |
-| Queues and durable sleep | Not part of this version |
 
 Crash detection uses leases that expire. A dead process loses the workflow, and another running copy can take it.
 
@@ -26,6 +25,127 @@ Crash detection uses leases that expire. A dead process loses the workflow, and 
 - Python contains no step, result, or lease decisions.
 
 The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
+
+## Feature checklist
+
+Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py) at commit `236142b`, where the SDK's API comes from. The DBOS marks come from this project's earlier checklist and have not been rechecked against that commit.
+
+| Mark | Meaning |
+|---|---|
+| ✅ | Built and passing its own tests |
+| 🚧 | Written, but not fully verified yet |
+| 📅 | Planned or deferred |
+| ❌ | Not planned, or not supported |
+| ❓ | Not checked yet |
+
+### Databases
+
+| Feature | DBOS | rust-dwos |
+|---|---|---|
+| Postgres | ✅ | 🚧 Newest features not tested here. A restart incident is unexplained |
+| SQLite | ✅ | ✅ One machine only |
+| MySQL 8.4 | ❌ | ✅ |
+
+### Core workflows
+
+| Feature | DBOS | rust-dwos |
+|---|---|---|
+| Workflow and step state storage | ✅ | ✅ Rust store |
+| Stale owners blocked from saving results | ✅ | ✅ Rust store |
+| `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
+| Async and sync functions | ✅ | ✅ |
+| `SetWorkflowID`, one run per workflow ID | ✅ | ✅ |
+| Replaying saved steps and stored errors | ✅ | ✅ |
+| Changed code detected during replay | ✅ | ✅ |
+| Step retries | ✅ | ✅ |
+| Per-attempt step timeout (`timeout_seconds`) | ❓ | ✅ A timed-out sync body keeps running on its thread |
+| Step heartbeat (`DBOS.heartbeat()`) | ❓ | ✅ Separate from lease renewal |
+| Child workflows | ✅ | ✅ |
+| `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ |
+| `list_workflows`, `list_workflow_steps` | ✅ | ✅ |
+| Crash recovery | ✅ | 🚧 Crash tests last ran before the newest features |
+| Recovery attempt limit | ✅ | ✅ |
+
+### Coordination and control
+
+| Feature | DBOS | rust-dwos |
+|---|---|---|
+| Durable sleep | ✅ | ✅ |
+| `send`, `recv` | ✅ | ✅ |
+| `set_event`, `get_event` | ✅ | ✅ |
+| Workflow timeouts | ✅ | ✅ |
+| Queues | ✅ | ✅ FIFO, with one global concurrency limit |
+| Queue rate limits, priorities, partitions | ❓ | 📅 Deferred |
+| Cancel and resume | ✅ | ✅ |
+| Fork and rewind | ✅ | 📅 |
+| Deleting old workflows | ✅ | 📅 |
+| `run_step`, `wait_first` | ✅ | 📅 |
+| Schedules | ✅ | 📅 Not started |
+| Streams | ✅ | 📅 |
+| Debouncer | ✅ | 📅 |
+| External client (`DBOSClient`) | ✅ | 📅 |
+| App database transactions (datasources) | ✅ | 📅 |
+| Patching and app versions | ✅ | 📅 |
+| Pydantic AI integration | ✅ | 📅 |
+| Kafka | ✅ | ❌ |
+| Class-based workflows | ✅ | ❌ |
+| External object storage | ✅ | ❌ |
+| Sharding | ✅ | ❌ |
+
+### Performance
+
+No benchmark exists in this repository, and nothing has been measured side by side with DBOS. The times below are single samples on SQLite on a busy machine.
+
+| Check | DBOS | rust-dwos |
+|---|---|---|
+| Workflows and steps per second | ❓ | ❓ Not measured |
+| Extra time per step | ❓ | ❓ Not measured |
+| Memory and connections per process | ❓ | ❓ Not measured |
+| Behaviour with a large backlog | ❓ | ❓ Not measured. Recovery takes at most 50 workflows per interval |
+| Wake on a message from the same engine | ❓ | ✅ About 10-17 ms |
+| Wake on a message from another process | ❓ | ✅ Within about 250 ms |
+| Queue enqueue to workflow start, same engine | ❓ | ✅ About 11 ms |
+| Cancel reaches a sleeping workflow | ❓ | ✅ About 4 ms on the same engine. About 250 ms from another process |
+| Database reads while waiting | ❓ | 🚧 4 reads per second per sleeper, and per waiter with no local wake |
+
+### Security
+
+| Check | DBOS | rust-dwos |
+|---|---|---|
+| Authentication and roles | ✅ | ❌ |
+| Safe stored format | ❓ | 🚧 Pickle by default, so database write access can run code. JSON is an option |
+| Encrypted database connections | ❓ | 🚧 TLS is compiled in. Not tested |
+| Memory safety | ❓ | ✅ `dwos-core` forbids `unsafe` code |
+| Dependency audit | ❓ | 📅 Not run |
+| Independent security review | ❓ | 📅 Not done |
+| Viewer access | ❓ | 🚧 Local only, with a host check and a content security policy. It has no login |
+
+### Reliability
+
+| Check | DBOS | rust-dwos |
+|---|---|---|
+| `kill -9`, pause and terminate tests | ❓ | 🚧 Passed on SQLite and MySQL before the newest features |
+| Database restart tests | ❓ | 🚧 Passed on MySQL. One Postgres rerun failed |
+| Long-running stress tests | ❓ | 🚧 One SQLite stress test hung in 1 of 3 runs. Cause unknown |
+| DBOS's own tests | ✅ | 🚧 A subset is adapted, see [`MANIFEST.md`](tests/upstream/MANIFEST.md) |
+| Production use | ❓ | ❌ Not production ready |
+
+### Operations
+
+| Check | DBOS | rust-dwos |
+|---|---|---|
+| OpenTelemetry tracing | ✅ | ❌ |
+| Web view of workflows | ❓ | ✅ Read-only |
+| Schema upgrades that keep existing rows | ❓ | ✅ Numbered migrations |
+| Reading rows written by another SDK | ❓ | ❓ Not tested |
+
+### Design differences
+
+| Topic | DBOS | rust-dwos |
+|---|---|---|
+| Core language | Python | Rust, with a Python SDK |
+| Crash detection | Executor IDs and ownership tokens | Leases that expire |
+| Custom exceptions after replay | Restored as their own type | Restored when the class is loaded and can be rebuilt. Otherwise `DBOSRecordedError` |
 
 ## Guarantees
 
