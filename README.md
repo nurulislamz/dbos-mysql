@@ -24,7 +24,7 @@ Crash detection uses leases that expire. A dead process loses the workflow, and 
 - A shutdown is not stored as a final error.
 - Python contains no step, result, or lease decisions.
 
-The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
+To learn and use it, read the [docs](docs/index.md). To browse them as a site, run `uv run --group docs mkdocs serve`. The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
 
 ## Feature checklist
 
@@ -77,7 +77,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | `send`, `recv` | ✅ | ✅ |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
-| Queues | ✅ | ✅ FIFO, with one global concurrency limit. The latest registration sets the limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
+| Queues | ✅ | ✅ FIFO, with one global concurrency limit. The latest registration with a limit sets it, and registering with none keeps the stored limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
 | Queue rate limits, priorities, partitions | ✅ | 📅 Deferred |
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |
@@ -121,7 +121,7 @@ No benchmark exists in this repository, and nothing has been measured side by si
 | Safe stored format | ❓ | 🚧 Pickle by default, so database write access can run code. JSON is an option |
 | Encrypted database connections | ❓ | 🚧 Tested on MySQL and Postgres when the URL requires TLS. Without that, a connection can use plain text |
 | Memory safety | ❓ | ✅ `dwos-core` forbids `unsafe` code |
-| Dependency audit | ❓ | 🚧 `cargo audit` 2026-11-05: one advisory, `rsa`, whose affected code is not reached. Python dependencies have no lock file and were not audited |
+| Dependency audit | ❓ | 🚧 `cargo audit` 2026-11-05: one advisory, `rsa`, whose affected code is not reached. Accepted, because the client holds no private key. `pip-audit` of the installed Python packages found nothing, but they have no lock file |
 | Independent security review | ❓ | 📅 Not done |
 | Viewer access | ❓ | 🚧 Local only, with a host check and a content security policy. It has no login |
 

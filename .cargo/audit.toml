@@ -1,0 +1,3 @@
+[advisories]
+# rsa: the attack recovers a private key, and this client only encrypts with the server's public key.
+ignore = ["RUSTSEC-2023-0071"]

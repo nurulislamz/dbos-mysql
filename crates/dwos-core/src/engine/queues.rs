@@ -14,6 +14,10 @@ impl Engine {
         self.store.ensure_queue(name, concurrency).await
     }
 
+    pub async fn ensure_queue_exists(&self, name: &str) -> Result<(), Error> {
+        self.store.ensure_queue_exists(name).await
+    }
+
     pub async fn enqueue(&self, queue: &str, begin: Begin<'_>) -> Result<String, Error> {
         self.enqueue_with(queue, begin, &WorkflowOptions::default())
             .await

@@ -18,7 +18,7 @@ Workflow management supports cancellation, resume and filtered listing. Events a
 
 ## Queues
 
-Register a durable queue with `ensure_queue(name, NonZeroU32)`, submit with `enqueue(name, Begin)`, and ask for executable descriptors with `claim_queue(name, registered_names)`. The latest registration sets the limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. Enqueue returns an ID, never an executable run. Use an explicit workflow ID or a durable parent step when submission itself must be idempotent.
+Register a durable queue with `ensure_queue(name, NonZeroU32)`, submit with `enqueue(name, Begin)`, and ask for executable descriptors with `claim_queue(name, registered_names)`. `ensure_queue_exists(name)` creates a queue with no limit and leaves an existing limit alone. The latest `ensure_queue` sets the limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. Enqueue returns an ID, never an executable run. Use an explicit workflow ID or a durable parent step when submission itself must be idempotent.
 
 Queue membership is separate from the existing workflow row. One queue transaction revokes expired tokens, counts remaining owners and admits compatible work in FIFO order. This enforces global lease-owner concurrency across processes. Ordinary recovery and direct resume claims cannot bypass admission. Unsupported functions/formats still occupy capacity while owned. Relative timeout budgets begin on first admission; inherited deadlines may expire while waiting. Cancellation, finish and release free capacity through the existing workflow state.
 

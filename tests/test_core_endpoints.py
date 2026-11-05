@@ -215,6 +215,12 @@ async def test_wake_queue(engine: _native.Engine) -> None:
     engine.wake_queue("q")
 
 
+async def test_ensure_queue_with_no_limit_keeps_the_stored_limit(engine: _native.Engine) -> None:
+    await engine.ensure_queue("capped", 2)
+    await engine.ensure_queue("capped")
+    assert await engine.get_queue("capped") == 2
+
+
 async def test_delete_workflows(engine: _native.Engine) -> None:
     await _run(engine, "pending")
     assert await engine.delete_workflows(["pending"]) == []

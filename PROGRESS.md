@@ -37,15 +37,15 @@ Work from the top. Task numbers continue from the history table below.
 | 26 | Commit the current schedule work | done | user ok | Clean `git status`; focused schedule tests pass |
 | 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | done | | New Rust test on all 3: the owner keeps its lease and the row stays put |
 | 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | done | | New Rust test on all 3: no run after the change. Same cron still catches up |
-| 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING`, and never a child a parent could replay | in progress | | Merged. `tests/retention.rs` (60) passed on all 3 on its branch. Left: rerun on merged code once test MySQL is healthy |
+| 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING`, and never a child a parent could replay | done | | `tests/retention.rs` (60) and `tests/migrations.rs` (45) on all 3 on merged code |
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | done | | New Rust test on all 3: the new limit applies to the next claim |
-| 31 | Python bindings for task 29 | in progress | 29 | `tests/test_retention.py` and endpoint tests pass on SQLite and Postgres. Left: MySQL once test MySQL is healthy |
+| 31 | Python bindings for task 29 | done | 29 | `tests/test_retention.py` and endpoint delete tests pass on all 3 |
 | 32 | Measure queue claims with a large backlog. Each slot re-scans pending rows while holding the queue row lock, which also blocks enqueues. Fix it only if too slow | todo | D4 | Numbers for 100k waiting and 100k finished rows, within the D4 limit |
 | 33 | Full Rust suite 3 times. Clippy and format | todo | 27-32 | Zero failures. Also the proof for the stress hang and MySQL row lock fixes |
 | 34 | Full Python suite. This finishes task 22 | todo | 31 | Zero failures, including the copied sleep, timeout, event and queue tests. Expect some SDK bugs, because this has not passed yet |
 | 35 | Settle the Postgres late starts: record first attempt time and retry count in `_write_ledger`, report them in `harness.py`, and rerun. Skipped if D2 is MySQL only | todo | D2, D3 | Late rows show retries and a first attempt before the save, or a core bug is found and fixed |
 | 36 | Finish task 5: `kill -9` and every fault, on the newest code | todo | 33, 34, 35, D3 | Crash suite clean, including `db_restart` with several seeds |
-| 37 | Security: dependency audit and a TLS connection test | in progress | 33 | TLS tests pass on MySQL and on a throwaway Postgres with TLS. The audit found one advisory, `rsa` RUSTSEC-2023-0071, with no upstream fix and its affected code not reached. Left: accept that risk, audit the Python dependencies, which have no lock file, and rerun the audit at the end |
+| 37 | Security: dependency audit and a TLS connection test | in progress | 33 | TLS tests pass on MySQL and on a throwaway Postgres with TLS. `rsa` RUSTSEC-2023-0071 is accepted and recorded in `.cargo/audit.toml`. `pip-audit` of the installed Python packages found nothing, though they have no lock file. Left: rerun both audits at the end |
 | 38 | Update the README marks and lift the "not production ready" warning | todo | 33-37 | Every mark matches a passing proof |
 
 ### Decisions for the user
@@ -139,6 +139,8 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 - SDK code is copied from DBOS, not rewritten. Python tests of calls into Rust only check that the call connects and succeeds. Core rules are tested only in Rust.
 - The user expanded core scope to durable sleep, workflow management, events/messages and queues, then paused SDK work and restricted checks to Rust. MessagePack remains deferred by the user.
 - The five feature worktrees were closed after merging core changes. Branches remain. Deferred SDK/binding/UI edits were archived under `.worktrees/deferred-sdk-20261104/`; each archive was restored and byte-compared before removal.
+- Accepted risk, `rsa` RUSTSEC-2023-0071: the attack recovers a private key, and the client holds none. It is only used to encrypt a password on non-TLS MySQL logins.
+- `register_queue` with no limit keeps the stored limit, so one process cannot lift the cap for all. A new queue then has no limit.
 
 ## Postgres restart incident
 
@@ -151,7 +153,7 @@ Core review found missing ownership checks before step execution decisions, a le
 - The test MySQL container hit its 2 GB memory cap and started swapping, after 25 hours of creating test databases. `CREATE TABLE` then took over 80 s and tests failed with `timed out creating a test database`. This is the test server, not the product, but full runs will hit it too.
 - A child attached to a second parent by explicit ID is not protected from deletion, and that parent's replay would rerun it. Read in the code, not tested.
 - On MySQL, deleting by age can wait on a locked parent of a candidate row, up to the 10 s lock timeout, then retries.
-- `register_queue` with no limit overwrites a stored limit with unlimited, for every process.
+- The memory problem above comes back: one migrations run took the test MySQL from 0.8 GB to 1.9 GB, mostly memory MySQL's own accounting does not show.
 - `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. `.worktrees/HANDOFF.md` traces this to a bug in the test, not the product, with the fix in `tests/queue_races.rs`. Task 33 proves it in full runs.
 - On MySQL, a queue claim could hold a live owner's row lock. `.worktrees/HANDOFF.md` reports this fixed by reading candidates first and then locking each row, with the queue race tests passing. Task 33 reruns them.
 - The SDK's sleep, timeouts, cancel, resume, events, messages and queues now have copied tests under `tests/upstream`. The handoff reports 141 focused tests passed, but the full Python suite has not passed yet. Task 34 covers it.

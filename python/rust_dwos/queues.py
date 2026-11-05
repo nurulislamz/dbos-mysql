@@ -94,6 +94,10 @@ class Queue:
         return dbos.WorkflowHandleAsync(workflow_id)
 
 
+def _stored_limit(concurrency: int) -> int | None:
+    return None if concurrency == 2**32 - 1 else concurrency
+
+
 class Queues:
     @classmethod
     def register_queue(
@@ -110,6 +114,8 @@ class Queues:
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
         instance._blocking(instance._engine.ensure_queue, name, limit)
+        if limit is None:
+            limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
     @classmethod
@@ -127,6 +133,8 @@ class Queues:
         limit = concurrency if global_concurrency is None else global_concurrency
         instance = _dbos()._running()
         await instance._engine.ensure_queue(name, limit)
+        if limit is None:
+            limit = _stored_limit(await instance._engine.get_queue(name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
 
     @classmethod
@@ -138,7 +146,7 @@ class Queues:
         concurrency = instance._blocking(instance._engine.get_queue, name)
         if concurrency is None:
             return None
-        return Queue(name, None if concurrency == 2**32 - 1 else concurrency, token=_INTERNAL_QUEUE_CONSTRUCTION)
+        return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod
     async def retrieve_queue_async(cls, name: str) -> Queue | None:
@@ -149,7 +157,7 @@ class Queues:
         concurrency = await instance._engine.get_queue(name)
         if concurrency is None:
             return None
-        return Queue(name, None if concurrency == 2**32 - 1 else concurrency, token=_INTERNAL_QUEUE_CONSTRUCTION)
+        return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
 
     @classmethod
     def enqueue_workflow(cls, queue_name: str, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:

@@ -28,7 +28,7 @@ impl PyEngine {
         })
     }
 
-    /// `None` means no limit, which the core stores as the largest concurrency.
+    /// `None` keeps an existing queue's limit. A new queue then has no limit.
     #[pyo3(signature = (name, concurrency=None, *, blocking=false))]
     fn ensure_queue<'py>(
         &self,
@@ -37,17 +37,22 @@ impl PyEngine {
         concurrency: Option<u32>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let limit = match concurrency {
-            None => NonZeroU32::MAX,
-            Some(value) => NonZeroU32::new(value).ok_or_else(|| {
-                to_py(Error::InvalidConfig(
-                    "queue concurrency must be at least 1".to_owned(),
-                ))
-            })?,
-        };
+        let limit = concurrency
+            .map(|value| {
+                NonZeroU32::new(value).ok_or_else(|| {
+                    to_py(Error::InvalidConfig(
+                        "queue concurrency must be at least 1".to_owned(),
+                    ))
+                })
+            })
+            .transpose()?;
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
-            engine.ensure_queue(&name, limit).await.map_err(to_py)
+            match limit {
+                Some(limit) => engine.ensure_queue(&name, limit).await,
+                None => engine.ensure_queue_exists(&name).await,
+            }
+            .map_err(to_py)
         })
     }
 

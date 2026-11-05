@@ -555,3 +555,17 @@ all_dbs!(an_empty_or_unreadable_queue_waits_its_interval, backend, {
     }
     assert_eq!(engine.waiting_keys(), 0);
 });
+
+all_dbs!(registering_with_no_limit_keeps_the_stored_limit, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = Engine::connect(&db.url, config()).await.unwrap();
+    engine.ensure_queue_exists("open").await.unwrap();
+    assert_eq!(
+        engine.get_queue("open").await.unwrap(),
+        Some(NonZeroU32::MAX)
+    );
+    let limit = NonZeroU32::new(3).unwrap();
+    engine.ensure_queue("capped", limit).await.unwrap();
+    engine.ensure_queue_exists("capped").await.unwrap();
+    assert_eq!(engine.get_queue("capped").await.unwrap(), Some(limit));
+});

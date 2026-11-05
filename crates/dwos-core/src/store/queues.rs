@@ -64,6 +64,26 @@ impl Store {
         .await
     }
 
+    /// Creates a queue with no limit, and leaves an existing queue's limit alone.
+    pub async fn ensure_queue_exists(&self, name: &str) -> Result<(), Error> {
+        check_queue_name(name)?;
+        let conflict = match self.dialect {
+            Dialect::MySql => "ON DUPLICATE KEY UPDATE name = name",
+            Dialect::Postgres | Dialect::Sqlite => "ON CONFLICT (name) DO NOTHING",
+        };
+        self.attempt(|| async {
+            sqlx::query(self.sql(&format!(
+                "INSERT INTO workflow_queues (name, concurrency) VALUES (?, ?) {conflict}"
+            )))
+            .bind(name)
+            .bind(i64::from(u32::MAX))
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn lock_queue(
         &self,
         tx: &mut Transaction<'static, Any>,
