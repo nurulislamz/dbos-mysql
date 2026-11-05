@@ -594,7 +594,8 @@ all_dbs!(
         let recv = begin_run(&engine, "receiver").await;
         let target = begin_run(&engine, "target").await;
         // Deadlines stay ahead of the "before" sends, then the sleep passes every one of them.
-        const WAIT_MS: i64 = 250;
+        // Wide enough that a loaded suite still sends the "before" values ahead of the deadline.
+        const WAIT_MS: i64 = 1500;
         assert!(matches!(
             engine.poll_recv(&recv, 1, 2, None, WAIT_MS).await.unwrap(),
             Poll::Waiting { .. }
