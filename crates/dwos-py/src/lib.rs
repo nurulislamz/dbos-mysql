@@ -14,6 +14,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
 
+mod attributes;
 mod events;
 mod queues;
 mod retention;
@@ -135,6 +136,7 @@ pub(crate) struct PyWorkflow {
     authenticated_user: Option<String>,
     assumed_role: Option<String>,
     authenticated_roles: Option<String>,
+    attributes: Option<String>,
     queue_name: Option<String>,
 }
 
@@ -164,6 +166,7 @@ impl From<Workflow> for PyWorkflow {
             authenticated_user: row.authenticated_user,
             assumed_role: row.assumed_role,
             authenticated_roles: row.authenticated_roles,
+            attributes: row.attributes,
             queue_name: row.queue_name,
         }
     }
@@ -453,7 +456,7 @@ impl PyEngine {
         self.0.close();
     }
 
-    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, blocking=false))]
+    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, attributes=None, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn begin<'py>(
         &self,
@@ -467,6 +470,7 @@ impl PyEngine {
         timeout_ms: Option<i64>,
         ignore_propagated_deadline: bool,
         reuse_policy: Option<String>,
+        attributes: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -475,7 +479,8 @@ impl PyEngine {
         let parent_step_id = parent
             .as_ref()
             .and_then(|run| run.step_id_unless_in_step(in_step));
-        let options = start_options(reuse_policy.as_deref())?;
+        let mut options = start_options(reuse_policy.as_deref())?;
+        options.attributes = attributes;
         dispatch(py, blocking, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),

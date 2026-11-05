@@ -95,6 +95,7 @@ pub struct Workflow {
     pub authenticated_user: Option<String>,
     pub assumed_role: Option<String>,
     pub authenticated_roles: Option<String>,
+    pub attributes: Option<String>,
     pub queue_name: Option<String>,
     pub priority: Option<i64>,
     pub queue_partition_key: Option<String>,
@@ -114,6 +115,7 @@ pub struct WorkflowOptions {
     pub authenticated_user: Option<String>,
     pub assumed_role: Option<String>,
     pub authenticated_roles: Option<String>,
+    pub attributes: Option<String>,
     /// What to do when the workflow id already has a row.
     pub reuse: ReusePolicy,
 }

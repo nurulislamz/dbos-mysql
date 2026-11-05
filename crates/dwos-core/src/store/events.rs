@@ -75,7 +75,7 @@ fn is_fk_violation(error: &sqlx::Error) -> bool {
     }
 }
 
-struct RecordedWrite {
+pub(super) struct RecordedWrite {
     name: String,
     output: Option<String>,
     error: Option<String>,
@@ -83,7 +83,7 @@ struct RecordedWrite {
     serialization: String,
 }
 
-fn recorded_send(
+pub(super) fn recorded_send(
     workflow_id: &str,
     step_id: u32,
     expected: &'static str,
@@ -632,7 +632,7 @@ impl Store {
 
     /// Replay and the claim window in one read. A recorded step is returned without revoking
     /// an expired lease. A new write revokes that lease first, same as `live_transaction`.
-    async fn read_for_write(
+    pub(super) async fn read_for_write(
         &self,
         mut tx: Transaction<'static, Any>,
         lease: &Lease,
@@ -836,7 +836,7 @@ impl Store {
         }))
     }
 
-    async fn insert_step(
+    pub(super) async fn insert_step(
         &self,
         tx: &mut Transaction<'static, Any>,
         workflow_id: &str,

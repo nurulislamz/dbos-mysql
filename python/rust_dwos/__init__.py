@@ -10,6 +10,7 @@ from rust_dwos.dbos import (
     WorkflowStatus,
     WorkflowStatusString,
 )
+from rust_dwos.attributes import SetWorkflowAttributes
 from rust_dwos.events import SendMessage, WorkflowSerializationFormat
 from rust_dwos.queues import Queue
 from rust_dwos.timeouts import SetWorkflowTimeout, assert_current_dbos_context, get_workflow_start_options
@@ -50,6 +51,7 @@ __all__ = [
     "Queue",
     "SendMessage",
     "WorkflowSerializationFormat",
+    "SetWorkflowAttributes",
     "SetWorkflowID",
     "SetWorkflowTimeout",
     "StepStatus",

@@ -7,8 +7,8 @@ use crate::workflow::{
     check_workflow_name, id_in_use, new_token,
 };
 
-pub(super) const START_COLUMNS: &str = "application_version, application_name, executor_id, schedule_name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles";
-pub(super) const START_VALUES: &str = "?, ?, ?, ?, ?, ?, ?, ?, ?";
+pub(super) const START_COLUMNS: &str = "application_version, application_name, executor_id, schedule_name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles, attributes";
+pub(super) const START_VALUES: &str = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
 
 impl Store {
     pub(super) fn bind_start_columns<'q>(
@@ -36,6 +36,7 @@ impl Store {
             .bind(options.authenticated_user.as_deref())
             .bind(options.assumed_role.as_deref())
             .bind(options.authenticated_roles.as_deref())
+            .bind(options.attributes.as_deref())
     }
 
     pub async fn start_workflow(&self, new: &NewWorkflow<'_>) -> Result<Started, Error> {
@@ -55,7 +56,17 @@ impl Store {
         }
         check_name("workflow ID", new.workflow_id)?;
         check_name("workflow name", new.name)?;
-        self.check_size(&[Some(new.input)])?;
+        self.check_size(&[Some(new.input), options.attributes.as_deref()])?;
+        if let Some(attributes) = &options.attributes {
+            let parsed: serde_json::Value = serde_json::from_str(attributes).map_err(|error| {
+                Error::InvalidConfig(format!("invalid workflow attributes: {error}"))
+            })?;
+            if !parsed.is_object() {
+                return Err(Error::InvalidConfig(
+                    "workflow attributes must be an object".into(),
+                ));
+            }
+        }
         let token = new_token();
         self.attempt(|| self.start_workflow_once(new, options, &token))
             .await

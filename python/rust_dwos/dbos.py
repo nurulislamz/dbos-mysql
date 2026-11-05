@@ -7,6 +7,7 @@ import concurrent.futures.thread  # registers its exit hook first, so ours runs 
 import contextvars
 import functools
 import inspect
+import json
 import logging
 import os
 import threading
@@ -27,6 +28,7 @@ from rust_dwos.errors import (
     DBOSStepTimeoutError,
     DBOSWorkflowCancelledError,
 )
+from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events
 from rust_dwos.queues import Queue, Queues
 from rust_dwos.retention import Retention
@@ -96,6 +98,7 @@ class WorkflowStatus:
     assumed_role: str | None = None
     authenticated_roles: str | None = None
     queue_name: str | None = None
+    attributes: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -202,6 +205,7 @@ def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
     _current_step.set(None)
     _next_workflow_id.set(None)
     _next_reuse_policy.set(None)
+    _attributes.set(None)
     _timeout_override.set(None)
 
 
@@ -323,7 +327,7 @@ class _DBOSMeta(type):
         return _current_step.get()
 
 
-class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
@@ -444,7 +448,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, meta
             @functools.wraps(function)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 instance = _running()
-                begun = instance._blocking(instance._engine.begin, *_begin_args(info, args, kwargs))
+                begun = instance._blocking(instance._engine.begin, *_begin_args(info, args, kwargs), **start_attributes())
                 if begun.run is not None:
                     return instance._run_sync(info, begun.run, args, kwargs)
                 result = begun.result or instance._waiting(instance._engine.await_result, begun.workflow_id)
@@ -453,7 +457,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, meta
             @functools.wraps(function)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 instance = _running()
-                begun = await instance._engine.begin(*_begin_args(info, args, kwargs))
+                begun = await instance._engine.begin(*_begin_args(info, args, kwargs), **start_attributes())
                 if begun.run is not None:
                     return await instance._run_async(info, begun.run, args, kwargs)
                 result = begun.result or await instance._engine.await_result(begun.workflow_id)
@@ -583,14 +587,14 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, Schedules, Retention, meta
     def start_workflow(cls, function: Callable[..., Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
         instance = _running()
         info = _info_of(function)
-        begun = instance._blocking(instance._engine.begin, *_begin_args(info, args, kwargs))
+        begun = instance._blocking(instance._engine.begin, *_begin_args(info, args, kwargs), **start_attributes())
         return WorkflowHandle(begun.workflow_id, instance._background(info, begun, args, kwargs))
 
     @classmethod
     async def start_workflow_async(cls, function: Callable[..., Any], *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
         instance = _running()
         info = _info_of(function)
-        begun = await instance._engine.begin(*_begin_args(info, args, kwargs))
+        begun = await instance._engine.begin(*_begin_args(info, args, kwargs), **start_attributes())
         if begun.run is not None and info.is_async:
             return WorkflowHandleAsync(begun.workflow_id, instance._task_on_this_loop(info, begun.run, args, kwargs))
         return WorkflowHandleAsync(begun.workflow_id, instance._background(info, begun, args, kwargs))
@@ -979,6 +983,7 @@ def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output
         assumed_role=row.assumed_role,
         authenticated_roles=row.authenticated_roles,
         queue_name=row.queue_name,
+        attributes=json.loads(row.attributes) if row.attributes is not None else None,
     )
 
 

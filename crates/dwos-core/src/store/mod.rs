@@ -10,6 +10,7 @@ use crate::Error;
 use crate::retry::with_retry;
 use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workflow};
 
+mod attributes;
 mod events;
 mod leases;
 mod migrations;
@@ -49,7 +50,7 @@ macro_rules! workflow_select {
             " AS status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, \
              created_at, updated_at, completed_at, serialization, lease_token, started_at_epoch_ms, application_version, \
              application_name, executor_id, forked_from, was_forked_from, schedule_name, class_name, config_name, \
-             authenticated_user, assumed_role, authenticated_roles, \
+             authenticated_user, assumed_role, authenticated_roles, attributes, \
              workflow_timeouts.timeout_ms AS workflow_timeout_ms, workflow_timeouts.deadline_epoch_ms AS workflow_deadline_epoch_ms, \
              workflow_queue_entries.queue_name AS entry_queue_name, workflow_queue_entries.priority AS entry_priority, \
              workflow_queue_entries.partition_key AS entry_partition_key, workflow_queue_entries.deduplication_id AS entry_deduplication_id, \
@@ -228,6 +229,7 @@ fn workflow_from_row(row: &AnyRow) -> Result<Workflow, Error> {
         authenticated_user: row.try_get("authenticated_user")?,
         assumed_role: row.try_get("assumed_role")?,
         authenticated_roles: row.try_get("authenticated_roles")?,
+        attributes: row.try_get("attributes")?,
         queue_name: row.try_get("entry_queue_name")?,
         priority: row.try_get("entry_priority")?,
         queue_partition_key: row.try_get("entry_partition_key")?,

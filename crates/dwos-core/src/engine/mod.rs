@@ -12,6 +12,7 @@ use crate::workflow::{
 };
 use crate::{Error, Store};
 
+mod attributes;
 mod events;
 mod queues;
 mod recovery;

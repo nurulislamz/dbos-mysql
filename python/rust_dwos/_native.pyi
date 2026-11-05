@@ -50,6 +50,7 @@ class WorkflowRow:
     authenticated_user: str | None
     assumed_role: str | None
     authenticated_roles: str | None
+    attributes: str | None
     queue_name: str | None
 
 class StepRow:
@@ -173,6 +174,7 @@ class Engine:
         ignore_propagated_deadline: bool = False,
         reuse_policy: str | None = None,
         *,
+        attributes: str | None = None,
         blocking: bool = False,
     ) -> asyncio.Future[Begun] | Begun: ...
     def begin_step(self, run: Run, name: str, in_step: bool, *, blocking: bool = False) -> asyncio.Future[tuple[int | None, StepReplay | None]] | tuple[int | None, StepReplay | None]: ...
@@ -216,6 +218,7 @@ class Engine:
     def recovery_tick(self, names: list[str]) -> asyncio.Future[list[Claim]]: ...
     def sleep(self, run: Run, seconds: float, in_step: bool, *, blocking: bool = False) -> asyncio.Future[float] | float: ...
     def wait_sleep(self, run: Run, active: ActiveRun, seconds: float, *, blocking: bool = False) -> asyncio.Future[str | None] | str | None: ...
+    def update_workflow_attributes(self, workflow_id: str, attributes: str | None, merge: bool = False, run: Run | None = None, step_id: int | None = None, *, blocking: bool = False) -> asyncio.Future[SendResult] | SendResult: ...
     def send_bulk(self, messages: list[tuple[str, str | None, str, str | None]], serialization: str, run: Run | None = None, step_id: int | None = None, *, blocking: bool = False) -> asyncio.Future[SendResult] | SendResult: ...
     def send(
         self,

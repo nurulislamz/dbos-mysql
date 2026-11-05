@@ -300,6 +300,7 @@ name = "dwos-core"
 version = "0.0.1"
 dependencies = [
  "log",
+ "serde_json",
  "sqlx",
  "tempfile",
  "thiserror",
