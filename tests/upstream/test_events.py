@@ -283,3 +283,15 @@ def test_get_events(dbos: DBOS) -> None:
     events2 = DBOS.get_all_events(handle2.workflow_id)
     assert events2 == {}
 
+
+
+def test_send_bulk_bridge(dbos: DBOS) -> None:
+    from rust_dwos import SendMessage, WorkflowSerializationFormat
+
+    @DBOS.workflow()
+    def receiver() -> list[Any]:
+        return [DBOS.recv(timeout_seconds=10), DBOS.recv(timeout_seconds=10)]
+
+    handle = DBOS.start_workflow(receiver)
+    DBOS.send_bulk([SendMessage(handle.workflow_id, 1), SendMessage(handle.workflow_id, 2)], serialization_type=WorkflowSerializationFormat.PORTABLE)
+    assert handle.get_result() == [1, 2]

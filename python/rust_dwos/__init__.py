@@ -10,6 +10,7 @@ from rust_dwos.dbos import (
     WorkflowStatus,
     WorkflowStatusString,
 )
+from rust_dwos.events import SendMessage, WorkflowSerializationFormat
 from rust_dwos.queues import Queue
 from rust_dwos.timeouts import SetWorkflowTimeout, assert_current_dbos_context, get_workflow_start_options
 from rust_dwos.errors import (
@@ -47,6 +48,8 @@ __all__ = [
     "DBOSWorkflowIDInUseError",
     "MaxRecoveryAttemptsExceededError",
     "Queue",
+    "SendMessage",
+    "WorkflowSerializationFormat",
     "SetWorkflowID",
     "SetWorkflowTimeout",
     "StepStatus",

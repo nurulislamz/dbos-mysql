@@ -252,6 +252,64 @@ impl Store {
         Ok(SendOutcome::Sent)
     }
 
+    pub async fn send_bulk(
+        &self,
+        messages: &[(String, Option<String>, String, Option<String>)],
+        serialization: &str,
+        from: SendFrom<'_>,
+    ) -> Result<SendOutcome, Error> {
+        let mut prepared = Vec::with_capacity(messages.len());
+        for (destination, topic, message, key) in messages {
+            check_name("destination workflow ID", destination)?;
+            check_name("topic", topic_name(topic.as_deref()))?;
+            self.check_size(&[Some(message)])?;
+            let id = match key {
+                Some(key) => {
+                    check_name("idempotency key", key)?;
+                    key.clone()
+                }
+                None => new_token(),
+            };
+            prepared.push(id);
+        }
+        self.attempt(|| async {
+            let mut tx = match from {
+                SendFrom::Outside => self.begin().await?,
+                SendFrom::Step(lease) | SendFrom::Workflow { lease, .. } => self.owned_transaction(lease).await?.0,
+            };
+            match from {
+                SendFrom::Workflow { lease, step_id } => {
+                    let (next, saved) = self.read_for_write(tx, lease, step_id).await?;
+                    tx = next;
+                    if let Some(saved) = saved {
+                        let outcome = recorded_send(&lease.workflow_id, step_id, "DBOS.send_bulk", &saved)?;
+                        tx.commit().await?;
+                        return Ok(outcome);
+                    }
+                }
+                SendFrom::Step(lease) => tx = self.live_transaction(tx, lease).await?,
+                SendFrom::Outside => {}
+            }
+            for ((destination, topic, message, _), id) in messages.iter().zip(&prepared) {
+                let result = sqlx::query(self.sql(&format!(
+                    "INSERT INTO notifications (destination_uuid, topic, message, created_at_epoch_ms, message_uuid, serialization, consumed) VALUES (?, ?, ?, {{NOW}}, ?, ?, 0) {}",
+                    self.dialect.insert_message_if_absent()
+                )))
+                .bind(destination.as_str()).bind(topic_name(topic.as_deref())).bind(message.as_str())
+                .bind(id.as_str()).bind(serialization).execute(&mut *tx).await;
+                if let Err(error) = result {
+                    if is_fk_violation(&error) { return Err(Error::SendDestinationNotFound(destination.clone())); }
+                    return Err(error.into());
+                }
+            }
+            if let SendFrom::Workflow { lease, step_id } = from {
+                self.insert_step(&mut tx, &lease.workflow_id, step_id, "DBOS.send_bulk", &StepRecord::default(), serialization).await?;
+            }
+            tx.commit().await?;
+            Ok(SendOutcome::Sent)
+        }).await
+    }
+
     /// Reads messages recorded no later than the persisted deadline, including after recovery.
     pub async fn poll_recv(
         &self,

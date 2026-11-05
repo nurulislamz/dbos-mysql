@@ -1193,3 +1193,47 @@ all_dbs!(cancelling_a_workflow_wakes_await_result, backend, {
     }
     panic!("no cancel reached await_result through the wakeup");
 });
+
+all_dbs!(bulk_send_is_atomic_and_replays, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    begin_run(&engine, "dest").await;
+    let run = begin_run(&engine, "sender").await;
+    let bad = vec![
+        ("dest".into(), None, "1".into(), None),
+        ("missing".into(), None, "2".into(), None),
+    ];
+    assert!(
+        engine
+            .send_bulk(&bad, PORTABLE_JSON, None, None)
+            .await
+            .is_err()
+    );
+    assert!(
+        engine
+            .store()
+            .list_messages("dest")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let messages = vec![
+        ("dest".into(), None, "1".into(), None),
+        ("dest".into(), None, "2".into(), None),
+    ];
+    assert_eq!(
+        engine
+            .send_bulk(&messages, PORTABLE_JSON, Some(&run), Some(1))
+            .await
+            .unwrap(),
+        SendOutcome::Sent
+    );
+    assert_eq!(
+        engine
+            .send_bulk(&messages, PORTABLE_JSON, Some(&run), Some(1))
+            .await
+            .unwrap(),
+        SendOutcome::Replayed
+    );
+    assert_eq!(engine.store().list_messages("dest").await.unwrap().len(), 2);
+});

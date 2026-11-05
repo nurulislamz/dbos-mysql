@@ -46,6 +46,33 @@ impl Engine {
         Ok(outcome)
     }
 
+    pub async fn send_bulk(
+        &self,
+        messages: &[(String, Option<String>, String, Option<String>)],
+        serialization: &str,
+        run: Option<&Run>,
+        step_id: Option<u32>,
+    ) -> Result<SendOutcome, Error> {
+        let from = match (run, step_id) {
+            (Some(run), Some(step_id)) => SendFrom::Workflow {
+                lease: &run.lease,
+                step_id,
+            },
+            (Some(run), None) => SendFrom::Step(&run.lease),
+            (None, None) => SendFrom::Outside,
+            (None, Some(_)) => {
+                return Err(Error::InvalidConfig(
+                    "a send step ID requires a workflow run".into(),
+                ));
+            }
+        };
+        let outcome = self.store.send_bulk(messages, serialization, from).await?;
+        for (destination, _, _, _) in messages {
+            self.wakeups.wake(&WakeKey::Workflow(destination.clone()));
+        }
+        Ok(outcome)
+    }
+
     pub async fn poll_recv(
         &self,
         run: &Run,

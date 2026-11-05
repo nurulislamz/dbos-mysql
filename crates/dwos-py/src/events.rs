@@ -114,6 +114,27 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (messages, serialization, run=None, step_id=None, *, blocking=false))]
+    fn send_bulk<'py>(
+        &self,
+        py: Python<'py>,
+        messages: Vec<(String, Option<String>, String, Option<String>)>,
+        serialization: String,
+        run: Option<PyRef<'py, PyRun>>,
+        step_id: Option<u32>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        let run = run.map(|run| run.0.clone());
+        dispatch(py, blocking, async move {
+            let outcome = engine
+                .send_bulk(&messages, &serialization, run.as_deref(), step_id)
+                .await
+                .map_err(to_py)?;
+            Ok(PySendResult::from(outcome))
+        })
+    }
+
     #[pyo3(signature = (run, step_id, timeout_step_id, timeout_ms, topic=None, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn poll_recv<'py>(
