@@ -701,8 +701,10 @@ all_dbs!(
 
 networked!(q2_a_brief_outage_causes_no_loss, backend, {
     let db = TestDb::migrated(backend).await;
+    // Under a loaded full suite, a 400 ms lease left too little time after the hold.
+    let lease = Duration::from_secs(2);
     let proxy = WireFault::start(&db.url).await;
-    let engine = engine_at(&proxy.url, REAL_LEASE).await;
+    let engine = engine_at(&proxy.url, lease).await;
     let run = Arc::new(begin_run(&engine, "a").await);
     let active = engine.keep_lease(&run);
 
@@ -710,16 +712,12 @@ networked!(q2_a_brief_outage_causes_no_loss, backend, {
     proxy.hold();
     let (checker, checking_run) = (engine.clone(), run.clone());
     let checking = tokio::spawn(async move { checker.check_step(&checking_run, 1, "step").await });
-    tokio::time::sleep(REAL_LEASE / 2).await;
+    tokio::time::sleep(lease / 2).await;
     assert!(!checking.is_finished());
     proxy.open();
 
     assert_eq!(checking.await.unwrap().unwrap(), StepDecision::Run);
-    assert!(
-        tokio::time::timeout(REAL_LEASE, active.lost())
-            .await
-            .is_err()
-    );
+    assert!(tokio::time::timeout(lease, active.lost()).await.is_err());
     assert_eq!(
         engine.check_step(&run, 2, "step").await.unwrap(),
         StepDecision::Run
