@@ -159,7 +159,7 @@ impl PyEngine {
             engine.get_limiter(&name).await.map_err(to_py)
         })
     }
-    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, partition_concurrency=None, partition_worker_concurrency=None, partition_limit=None, partition_period=None, polling_interval=0.25, *, blocking=false))]
+    #[pyo3(signature = (name, global=None, worker=None, update=true, limit=None, period=None, partition_concurrency=None, partition_worker_concurrency=None, partition_limit=None, partition_period=None, polling_interval=1.0, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn register_queue<'py>(
         &self,

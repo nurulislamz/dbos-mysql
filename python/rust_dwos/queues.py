@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
     from rust_dwos.dbos import WorkflowHandle, WorkflowHandleAsync
 
-DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 0.25
+DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
 
 
 class QueueRateLimit(TypedDict):

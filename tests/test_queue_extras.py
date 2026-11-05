@@ -62,6 +62,7 @@ def test_enqueue_by_name_with_options(dbos: DBOS) -> None:
 
 def test_queue_management(dbos: DBOS) -> None:
     queue = DBOS.register_queue("management", global_concurrency=3)
+    assert queue.polling_interval_sec == 1.0
     DBOS.register_queue("management", global_concurrency=4, on_conflict="never_update")
     assert queue.global_concurrency == 3
     queue.set_global_concurrency(2)
