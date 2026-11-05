@@ -31,7 +31,7 @@ from rust_dwos.errors import (
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
-from rust_dwos.retention import Retention
+from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
 from rust_dwos.sleep import Sleep
@@ -61,6 +61,10 @@ class DBOSConfig(TypedDict):
     serializer: NotRequired[Literal["json", "pickle"]]
     log_level: NotRequired[str]
     console_log_level: NotRequired[str]
+    # Finished workflows older than retention_hours, or beyond the newest retention_rows, are deleted every interval.
+    retention_hours: NotRequired[float]
+    retention_rows: NotRequired[int]
+    retention_interval_seconds: NotRequired[float]
 
 
 class WorkflowStatusString(Enum):
@@ -341,6 +345,7 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
         global _instance
         _check_config_keys(config)
+        retention_policy_of(config)
         if _instance is not None:
             raise DBOSException("DBOS is already configured. Call DBOS.destroy() first")
         _instance = super().__new__(cls)
@@ -368,6 +373,7 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
         self._queues: dict[str, Queue] = {}
         self._listening_queues: set[str] | None = None
         self._queue_loops: list[concurrent.futures.Future[Any]] = []
+        self._retention_policy = retention_policy_of(config)
 
     @classmethod
     def launch(cls) -> None:
@@ -400,6 +406,7 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
             raise
         self._recovery = self._workflows.submit(self._recovery_loop())
         self._schedules = self._workflows.submit(self._schedule_loop())
+        self._retention_task = self._workflows.submit(self._retention_loop())
 
     def _blocking(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         # Waits on this thread with the GIL released. No event loop is involved, so a step pays no thread hops.
@@ -436,9 +443,10 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
             _cancel_task(self._app_loop_watch)
         self._recovery.cancel()
         self._schedules.cancel()
+        self._retention_task.cancel()
         for loop in self._queue_loops:
             loop.cancel()
-        concurrent.futures.wait([*active, self._recovery, self._schedules, *self._queue_loops], timeout=self._shutdown_timeout)
+        concurrent.futures.wait([*active, self._recovery, self._schedules, self._retention_task, *self._queue_loops], timeout=self._shutdown_timeout)
         self._workflows.stop()
         self._state.stop()
         with self._active_lock:

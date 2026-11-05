@@ -270,6 +270,33 @@ impl Store {
     }
 }
 
+impl Store {
+    /// The database clock, in epoch milliseconds. Retention cutoffs use it, not this machine's clock.
+    pub async fn db_now_ms(&self) -> Result<i64, Error> {
+        self.attempt(|| async {
+            Ok(sqlx::query_scalar(self.sql("SELECT {NOW}"))
+                .fetch_one(&self.pool)
+                .await?)
+        })
+        .await
+    }
+
+    /// The `completed_at` of the `rank`-th most recent finished row (1 is the newest), or None if
+    /// there are fewer finished rows than that. Rows older than it are past the newest `rank`.
+    pub async fn completed_at_of_row(&self, rank: u32) -> Result<Option<i64>, Error> {
+        self.attempt(|| async {
+            Ok(sqlx::query_scalar(self.sql(
+                "SELECT completed_at FROM workflow_status WHERE status <> 'PENDING' AND completed_at IS NOT NULL \
+                 ORDER BY completed_at DESC LIMIT 1 OFFSET ?",
+            ))
+            .bind(i64::from(rank) - 1)
+            .fetch_optional(&self.pool)
+            .await?)
+        })
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

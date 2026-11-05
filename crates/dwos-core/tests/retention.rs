@@ -770,3 +770,45 @@ async fn mysql_age_delete_leaves_a_batch_behind_a_locked_parent() {
     assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 1);
     assert!(!exists(&store, "child").await);
 }
+
+all_dbs!(retention_limits_remove_only_what_they_name, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    seed_finished(&store, "old", 3, 100).await;
+    seed_finished(&store, "new", 2, 300).await;
+    start_pending(&store, "running", None).await;
+    for hours in [0.0, f64::NAN, -1.0] {
+        assert!(matches!(
+            engine.apply_retention(Some(hours), None, 10).await,
+            Err(Error::InvalidConfig(_))
+        ));
+    }
+    assert!(matches!(
+        engine.apply_retention(None, Some(0), 10).await,
+        Err(Error::InvalidConfig(_))
+    ));
+    // The newest 3 finished rows reach back to completed_at 100, so nothing is past the limit.
+    assert_eq!(engine.apply_retention(None, Some(3), 10).await.unwrap(), 0);
+    // The newest 2 leave the three rows at 100 behind.
+    assert_eq!(engine.apply_retention(None, Some(2), 10).await.unwrap(), 3);
+    assert!(!exists(&store, "old0").await);
+    assert!(exists(&store, "new0").await);
+    assert!(exists(&store, "running").await);
+
+    // Time limit: rows at 300 ms are long past an hour. Only "fresh" completed within the hour.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    seed_finished(&store, "stale", 2, now - 10 * 3_600_000).await;
+    seed_finished(&store, "fresh", 1, now - 600_000).await;
+    assert_eq!(
+        engine.apply_retention(Some(1.0), None, 10).await.unwrap(),
+        4
+    );
+    assert!(!exists(&store, "new0").await);
+    assert!(!exists(&store, "stale0").await);
+    assert!(exists(&store, "fresh0").await);
+    assert!(exists(&store, "running").await);
+});
