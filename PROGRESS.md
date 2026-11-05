@@ -1,6 +1,6 @@
 # Progress
 
-Now: durable sleep, workflow deadlines, cancel/resume/list, events, messages, durable FIFO queues and lease/retry fixes are merged and verified in the Rust core on `main`. The SDK is paused by the user; current checks cover only `dwos-core`. The original Postgres crash incident is still unresolved.
+Now: core hardening is merged on `main`: expired-lease refusal, keeper timing, numbered schema migrations and queue race fixes. The Python SDK was restarted on 2026-11-05. See `.worktrees/HANDOFF.md` for the next steps. Two things block readiness: the Postgres late-start incident is still unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -24,14 +24,17 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | 15 | Recovered message/event wait deadline semantics | done | core | 11 | Merged `f7405f7`; cross-database Rust event checks pass; event revisions preserve values that arrived before the deadline |
 | 16 | Reject invalid step names before executing bodies | done | core | 10 | Merged `38edcdb`; NUL/overlong names reject before Run on all three databases |
 | 17 | Zero retry delay under overflowing backoff | done | core | 8 | Merged `e058ec3`; focused Rust regression passes |
+| 18 | Refuse and revoke expired leases at execution decisions; keeper reports loss before expiry | done | core | 10 | `tests/step_fencing.rs` (90 tests) on all three databases |
+| 19 | Numbered schema migrations that keep existing rows | done | core | 8 | `tests/migrations.rs` (45 tests) from real historic schemas on all three databases |
+| 20 | Queue admission races: MySQL recovery mid-scan, oversized timeout | done | core | 13 | `tests/queue_races.rs` (74 tests). The stress test hung once on SQLite, see Known problems |
+| 21 | Rust-only late-start reproduction | blocked | core | 8 | `tests/late_start_restart.rs` (ignored by default): 0 late starts in 45 restarts at real settings, cause unproven |
+| 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Code written. Existing Python tests only; the new features have never run. No smoke tests yet |
 
 ## Verification
 
-The final merged Rust core passed **459 tests, one ignored, zero failures**, across SQLite, MySQL and Postgres. Core clippy with warnings denied and formatting passed. Final logs: `/tmp/dwos-core-final-tests.log`, `/tmp/dwos-core-final-clippy.log`. The independent queue implementation review found no actionable blocker; the renewal/revocation race was reviewed in code but lacks a focused deterministic race test.
+On 2026-11-05 the merged core passed **669 tests, 2 ignored, zero failures** in 2 of 3 full runs across SQLite, MySQL and Postgres. In the third run the SQLite stress test hung and was killed. The other 267 tests that had finished in that run passed. Clippy with warnings denied and formatting pass.
 
-Earlier integration logs remain at `/tmp/dwos-core-integration-tests.log` (partial output plus suite totals) and `/tmp/dwos-core-timeout-integration-tests.log`. Focused queue, event-policy and invalid-name logs are under `/tmp/dwos-core-*.log`.
-
-Python/SDK and crash results below are historical first-version results. They do not validate the new Rust APIs. The user restricted further work and tests to the core Rust platform.
+Python and crash results below are historical first-version results. They do not validate the new Rust APIs.
 
 | Database | Rust tests | Python tests | Crash tests |
 |---|---|---|---|
@@ -60,7 +63,8 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 - One store through `sqlx` `Any`. See `docs/PLAN.md`.
 - Leases for crash detection.
 - Stored values use pickle by default, because only admins and the program write to the database. JSON is opt-out through config. The config decides, never a row's tag.
-- All work lives on `main`. Old branches and worktrees were deleted on 2026-11-04.
+- All work lives on `main`. Old branches and worktrees were deleted on 2026-11-04, and again on 2026-11-05.
+- SDK code is copied from DBOS, not rewritten. Python tests of calls into Rust only check that the call connects and succeeds. Core rules are tested only in Rust.
 - The user expanded core scope to durable sleep, workflow management, events/messages and queues, then paused SDK work and restricted checks to Rust. MessagePack remains deferred by the user.
 - The five feature worktrees were closed after merging core changes. Branches remain. Deferred SDK/binding/UI edits were archived under `.worktrees/deferred-sdk-20261104/`; each archive was restored and byte-compared before removal.
 
@@ -68,20 +72,20 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 
 The completed rerun had two clean runs and one failed run: seed `1838798794`, 153 seconds, `db_restart=1`. It reported `wf-127` step 2 and `wf-301` step 3 starting after their saves. The earlier failure had the same shape. Treat these as real until proven otherwise; load is not an explanation.
 
-Core review found missing ownership checks before step execution decisions, a lease keeper that counted renewal time from the acknowledgment rather than the request, and claim retry handling that could lose committed descriptors after a lost acknowledgment. These are fixed independently with Rust checks. The exact incident is not reproduced or proven resolved. The supplied original log path was unavailable in this environment. No further Python chaos run is authorized under the current Rust-only testing scope.
+Core review found missing ownership checks before step execution decisions, a lease keeper that counted renewal time from the acknowledgment rather than the request, and claim retry handling that could lose committed descriptors after a lost acknowledgment. These are fixed independently with Rust checks. The exact incident is not reproduced or proven resolved. The supplied original log path was unavailable in this environment. A Rust reproduction now exists in `crates/dwos-core/tests/late_start_restart.rs`. It found no core bug and did not reproduce the incident at real settings. With the side-effect retry stretched to 1 s it produced 2 late stamps, both after `check_step` returned `Run` well before the save. This supports a harness artifact and does not prove it. Python chaos runs are still paused. To settle it, record the first attempt time and retry count in `_write_ledger` in `tests/chaos/worker.py`, and report them in `harness.py`.
 
 ## Known problems
 
+- `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung in 1 of 3 full suite runs. It ran over 11 minutes, past its 90 s limit, with every thread idle. The cause is unknown and may be in the test or in the product.
+- On MySQL, a queue claim can hold a live owner's row lock. `finish` waited about 10 s in one run. No over-admission was seen, but a healthy short lease could expire during the wait. The statement that takes the lock is not known. See the `shortcut:` comment in `tests/queue_races.rs`.
+- The SDK's sleep, timeouts, cancel, resume, events, messages and queues have never run. The `sys.exit()` fix is also unproven.
 - The bar "Python contains no step, result, or lease decisions" is not fully met. Still in `dbos.py`: a step called inside a step or outside a workflow just runs; a value that cannot be encoded becomes a failure; the retry loop sleeps and picks the exception type, with delays and limits from Rust; after a lost lease Python cancels the body and waits for the stored result.
 - `sys.exit()` inside a background workflow probably kills the `dbos-workflows` thread. Not tested or fixed.
 - Background recovery now waits one interval first. With the default one second, a restart recovers up to 1.5s later, and a backlog recovers at most one batch of 50 per interval.
 - A real error raised during the shutdown window is no longer final. The workflow runs again after restart.
 - JSON values follow the DBOS `portable_json` shape, but reading rows across SDKs is untested.
 - With the default pickle, the web viewer shows stored values as base64, so it is less useful for debugging.
-- MySQL counters became `BIGINT`. Nothing was released, so there is no migration, and old test databases need recreating.
-- There is no general migration runner for older changes to existing columns or status CHECK constraints. Existing databases from before `CANCELLED` support need an offline schema upgrade; do not discard wanted workflow history. New feature tables are additive.
 - A stored error can name any `Exception` class already loaded in the process. It cannot import anything or run a constructor, but that class's `__str__` can still run later.
-- The core now supports read-only sessions on all three databases; wiring the viewer to that API remains deferred SDK work.
 - The viewer's browser checks used SQLite and Chromium only. Its API tests ran on all 3.
 - The stopped container `dbos-mysql-chaos-mysql-1` can be removed.
 - Ports: 13307 test MySQL, 13308 crash MySQL, 13309 test Postgres, 13310 crash Postgres.
