@@ -15,6 +15,7 @@ use crate::{Error, Store};
 mod events;
 mod queues;
 mod recovery;
+mod retention;
 mod schedules;
 mod sleep;
 mod steps;

@@ -81,7 +81,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Queue rate limits, priorities, partitions | ✅ | 📅 Deferred |
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |
-| Deleting old workflows | ✅ | 📅 |
+| Deleting old workflows | ✅ | 🚧 In the Rust core (`delete_workflows`, `delete_finished_before`). The Python binding is still to come |
 | `run_step`, `wait_first` | ✅ | 📅 |
 | Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
 | Streams | ✅ | 📅 |

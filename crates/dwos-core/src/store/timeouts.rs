@@ -5,7 +5,7 @@ use sqlx::{Any, AnyConnection, Transaction};
 use super::{Dialect, Store};
 use crate::Error;
 
-const RECHECK_CHUNK: usize = 200;
+pub(super) const RECHECK_CHUNK: usize = 200;
 
 impl Store {
     /// Cancel every pending workflow whose stored deadline has passed, using the database clock.
