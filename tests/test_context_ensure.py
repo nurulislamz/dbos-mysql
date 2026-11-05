@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, DBOSContextEnsure, assert_current_dbos_context
+from rust_dwos import DBOS, DBOSConfig, DBOSContextEnsure, DBOSException, assert_current_dbos_context
 
 
 def test_ensure_context(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -36,3 +36,19 @@ def test_executor_id_config(config: DBOSConfig, monkeypatch: pytest.MonkeyPatch)
         assert DBOS.executor_id == "configured"
     finally:
         DBOS.destroy(destroy_registry=True)
+
+
+def test_ensure_context_unwinds_and_reuses(dbos: DBOS) -> None:
+    ensure = DBOSContextEnsure()
+    with pytest.raises(ValueError):
+        with ensure:
+            raise ValueError("boom")
+    with pytest.raises(AssertionError):
+        assert_current_dbos_context()
+    with ensure as context:
+        assert ensure.created_ctx and assert_current_dbos_context() is context
+        # Unlike DBOS, one instance cannot be entered twice: DBOS would clear the outer context early.
+        with pytest.raises(DBOSException, match="already in use"), ensure:
+            pass
+    with pytest.raises(AssertionError):
+        assert_current_dbos_context()
