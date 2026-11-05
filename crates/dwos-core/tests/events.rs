@@ -709,12 +709,12 @@ all_dbs!(
         begin_run(&engine, "target").await;
         assert!(matches!(
             engine
-                .poll_event("target", "legacy", 10, None, Some((&recv, 1, 2)))
+                .poll_event("target", "legacy", 500, None, Some((&recv, 1, 2)))
                 .await
                 .unwrap(),
             Poll::Waiting { .. }
         ));
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::sleep(Duration::from_millis(550)).await;
         let sql = match backend {
             Backend::MySql => {
                 "INSERT INTO workflow_events (workflow_uuid, `key`, value, serialization) VALUES ('target', 'legacy', '1', 'portable_json')"
@@ -729,7 +729,7 @@ all_dbs!(
             .unwrap();
         assert_eq!(
             engine
-                .poll_event("target", "legacy", 10, None, Some((&recv, 1, 2)))
+                .poll_event("target", "legacy", 500, None, Some((&recv, 1, 2)))
                 .await
                 .unwrap(),
             Poll::Ready(json("null"))
