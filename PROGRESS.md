@@ -8,7 +8,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 
 "Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
 
-**Not usable yet.** Most features are built. What is left is 2 bug fixes, 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+**Not usable yet.** Most features are built. What is left is 1 bug fix, 1 missing feature, and proof. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
 
 ### Features in the minimum
 
@@ -21,8 +21,8 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | Child workflows, `start_workflow`, handles | Built | Prove: 33, 34 |
 | Durable sleep and workflow timeouts | Built | Prove: 33, 34 |
 | `send`, `recv`, `set_event`, `get_event` | Built | Prove: 33, 34 |
-| FIFO queues with a concurrency limit | Built, with a bug, and the limit cannot change | Fix: 27, 30 |
-| Cancel and resume | Built, with a bug | Fix: 27 |
+| FIFO queues with a concurrency limit | Built, but the limit cannot change | Fix: 30 |
+| Cancel and resume | Built. Resuming a live workflow onto a queue does nothing and raises no error | Prove: 33, 34 |
 | Cron schedules | Built | Prove: 33, 34 |
 | Schema upgrades that keep rows | Built | Prove: 33 |
 | Listing workflows and steps | Built | Prove: 33, 34 |
@@ -35,7 +35,7 @@ Work from the top. Task numbers continue from the history table below.
 | # | Task | Status | Needs | Proof |
 |---|---|---|---|---|
 | 26 | Commit the current schedule work | done | user ok | Clean `git status`; focused schedule tests pass |
-| 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | todo | | New Rust test on all 3: the owner keeps its lease and the row stays put |
+| 27 | Fix: resuming onto a queue must not take a workflow from a live owner (`place_on_queue`) | done | | New Rust test on all 3: the owner keeps its lease and the row stays put |
 | 28 | Fix: changing a schedule's cron must not fire a past tick (`ensure_schedule`) | done | | New Rust test on all 3: no run after the change. Same cron still catches up |
 | 29 | Build: delete old workflows, by ID and by age, in batches. Never `PENDING` | todo | | New Rust test on all 3: child rows go with the workflow; `PENDING` rows stay |
 | 30 | Fix: a deploy can change a queue's limit. It now fails `ensure_queue` at startup | todo | | New Rust test on all 3: the new limit applies to the next claim |
