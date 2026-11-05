@@ -114,6 +114,18 @@ impl Store {
 
         let mut claimed = Vec::with_capacity(rows.len());
         for row in rows {
+            // MySQL reads the NOT EXISTS above from a view older than this locked row, so a queue
+            // member committed during the scan looks ordinary. Only a queue claim may admit it.
+            let workflow_id: String = row.try_get("workflow_uuid")?;
+            let queued = sqlx::query(
+                self.sql("SELECT 1 FROM workflow_queue_entries WHERE workflow_uuid = ?"),
+            )
+            .bind(workflow_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?;
+            if queued.is_some() {
+                continue;
+            }
             if let Some(claim) = self
                 .claim_locked_row(&mut tx, &row, request_token, duration)
                 .await?
