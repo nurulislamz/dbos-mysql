@@ -363,6 +363,7 @@ class Queues:
         instance = _dbos()._running()
         if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
             raise DBOSException(f"Invalid on_conflict: {on_conflict}")
+        # shortcut: update_if_latest_version overwrites like always_update, since no latest app version is stored yet; upgrade with app versions.
         instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None, polling_interval_sec)
         limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
         return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))

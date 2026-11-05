@@ -875,6 +875,13 @@ impl Store {
             partition_row.try_get("partition_worker_concurrency")?;
         let partition_rate: Option<i64> = partition_row.try_get("partition_rate_limit")?;
         let partition_period: Option<i64> = partition_row.try_get("partition_rate_period_ms")?;
+        // Rows older than the longest window count toward no limit, so they go.
+        // shortcut: admissions are kept only while a limiter is set, so a new limiter starts with an empty window; count workflow starts instead if that matters.
+        if let Some(horizon) = [period, partition_period].into_iter().flatten().max() {
+            sqlx::query(self.sql("DELETE FROM workflow_queue_admissions WHERE queue_name = ? AND admitted_at_ms <= ?"))
+                .bind(queue).bind(cutoff.saturating_sub(horizon)).execute(&mut *tx).await?;
+        }
+        let limited = rate.is_some() || partition_rate.is_some();
         let mut claimed = Vec::new();
         let (mut last_priority, mut last_sequence) = (-1_i64, 0_i64);
         let (compatible, binds) = self.compatible_clause();
@@ -988,8 +995,10 @@ impl Store {
                     .claim_locked_row(&mut tx, &row, request_token, duration)
                     .await?
                 {
-                    sqlx::query(self.sql("INSERT INTO workflow_queue_admissions (queue_name, partition_key, admitted_at_ms) SELECT queue_name, partition_key, {NOW} FROM workflow_queue_entries WHERE workflow_uuid = ?"))
-                        .bind(workflow_id.as_str()).execute(&mut *tx).await?;
+                    if limited {
+                        sqlx::query(self.sql("INSERT INTO workflow_queue_admissions (queue_name, partition_key, admitted_at_ms) SELECT queue_name, partition_key, {NOW} FROM workflow_queue_entries WHERE workflow_uuid = ?"))
+                            .bind(workflow_id.as_str()).execute(&mut *tx).await?;
+                    }
                     sqlx::query(self.sql("UPDATE workflow_queue_entries SET admitted_at_ms = {NOW} WHERE workflow_uuid = ?"))
                         .bind(workflow_id.as_str()).execute(&mut *tx).await?;
                     claimed.push(claim);

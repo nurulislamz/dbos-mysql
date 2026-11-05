@@ -1038,3 +1038,35 @@ all_dbs!(registering_with_no_limit_keeps_the_stored_limit, backend, {
     engine.ensure_queue_exists("capped").await.unwrap();
     assert_eq!(engine.get_queue("capped").await.unwrap(), Some(limit));
 });
+
+all_dbs!(admissions_are_kept_only_for_the_limiter_window, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 4).await;
+    let mut connection = sqlx::AnyConnection::connect(&db.url).await.unwrap();
+    engine.enqueue("q", begin("free")).await.unwrap();
+    assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_queue_admissions")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    engine
+        .set_limiter("q", Some((NonZeroU32::new(5).unwrap(), 60_000)))
+        .await
+        .unwrap();
+    engine.enqueue("q", begin("old")).await.unwrap();
+    assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+    sqlx::query("UPDATE workflow_queue_admissions SET admitted_at_ms = 0")
+        .execute(&mut connection)
+        .await
+        .unwrap();
+    engine.enqueue("q", begin("new")).await.unwrap();
+    assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_queue_admissions")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    connection.close().await.unwrap();
+});
