@@ -107,6 +107,8 @@ pub struct Workflow {
 /// Row fields a start can set. A version or application left `None` comes from the store's identity.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkflowOptions {
+    pub deduplication_id: Option<String>,
+    pub duplication_policy: Option<ReusePolicy>,
     pub application_version: Option<String>,
     pub application_name: Option<String>,
     pub schedule_name: Option<String>,

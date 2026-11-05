@@ -12,7 +12,7 @@ from rust_dwos.dbos import (
 )
 from rust_dwos.attributes import SetWorkflowAttributes
 from rust_dwos.events import SendMessage, WorkflowSerializationFormat
-from rust_dwos.queues import Queue
+from rust_dwos.queues import Queue, SetEnqueueOptions
 from rust_dwos.timeouts import SetWorkflowTimeout, assert_current_dbos_context, get_workflow_start_options
 from rust_dwos.errors import (
     DBOSAwaitedWorkflowCancelledError,
@@ -22,6 +22,7 @@ from rust_dwos.errors import (
     DBOSLeaseLostError,
     DBOSMaxStepRetriesExceeded,
     DBOSNonExistentWorkflowError,
+    DBOSQueueDeduplicatedError,
     DBOSRecordedError,
     DBOSStepNondeterminismError,
     DBOSStepTimeoutError,
@@ -41,6 +42,7 @@ __all__ = [
     "DBOSLeaseLostError",
     "DBOSMaxStepRetriesExceeded",
     "DBOSNonExistentWorkflowError",
+    "DBOSQueueDeduplicatedError",
     "DBOSRecordedError",
     "DBOSStepNondeterminismError",
     "DBOSStepTimeoutError",
@@ -53,6 +55,7 @@ __all__ = [
     "WorkflowSerializationFormat",
     "SetWorkflowAttributes",
     "SetWorkflowID",
+    "SetEnqueueOptions",
     "SetWorkflowTimeout",
     "StepStatus",
     "StoreError",

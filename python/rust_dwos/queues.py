@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 from typing import TYPE_CHECKING, Any
 
 from rust_dwos.errors import DBOSException
@@ -18,6 +19,24 @@ RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
 # the exported Queue is usable as a type but not as a constructor: a queue can
 # only come from DBOS.register_queue or DBOS.retrieve_queue.
 _INTERNAL_QUEUE_CONSTRUCTION = object()
+_enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("dbos_enqueue_options", default={})
+
+
+class SetEnqueueOptions:
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy}
+        self._token: contextvars.Token[dict[str, Any]] | None = None
+
+    def __enter__(self) -> SetEnqueueOptions:
+        if self._token is not None:
+            raise DBOSException("This SetEnqueueOptions is already in use")
+        self._token = _enqueue_options.set(self.options)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._token is not None:
+            _enqueue_options.reset(self._token)
+            self._token = None
 
 
 def _dbos() -> Any:
@@ -84,13 +103,13 @@ class Queue:
     def enqueue(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
         dbos = _dbos()
         instance = dbos._running()
-        workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs))
+        workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get())
         return dbos.WorkflowHandle(workflow_id)
 
     async def enqueue_async(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
         dbos = _dbos()
         instance = dbos._running()
-        workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs))
+        workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get())
         return dbos.WorkflowHandleAsync(workflow_id)
 
 

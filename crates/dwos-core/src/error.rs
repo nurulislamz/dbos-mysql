@@ -10,6 +10,13 @@ pub enum Error {
     WorkflowNotFound(String),
     #[error("queue {0} does not exist")]
     QueueNotFound(String),
+    #[error(
+        "Queue {queue} already has an active workflow with deduplication ID {deduplication_id}"
+    )]
+    QueueDeduplicated {
+        queue: String,
+        deduplication_id: String,
+    },
     #[error("Workflow {0} is cancelled. Aborting function.")]
     WorkflowCancelled(String),
     #[error("Non-existent `send` destination workflow ID: {0}")]

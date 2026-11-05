@@ -73,6 +73,55 @@ all_dbs!(queue_claim_filters_application_identity, backend, {
     assert_eq!(claims[0].lease.workflow_id, "matching");
 });
 
+all_dbs!(queue_deduplication, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 3).await;
+    let options = WorkflowOptions {
+        deduplication_id: Some("key".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        engine
+            .enqueue_with("q", begin("first"), &options)
+            .await
+            .unwrap(),
+        "first"
+    );
+    assert!(matches!(
+        engine.enqueue_with("q", begin("second"), &options).await,
+        Err(Error::QueueDeduplicated { .. })
+    ));
+    let existing = WorkflowOptions {
+        duplication_policy: Some(ReusePolicy::ReturnExisting),
+        ..options.clone()
+    };
+    assert_eq!(
+        engine
+            .enqueue_with("q", begin("second"), &existing)
+            .await
+            .unwrap(),
+        "first"
+    );
+    let claim = engine
+        .claim_queue("q", &names())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    engine
+        .finish(&run(claim), Outcome::Success("{}".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .enqueue_with("q", begin("second"), &options)
+            .await
+            .unwrap(),
+        "second"
+    );
+});
+
 async fn queue(engine: &Engine, concurrency: u32) {
     engine
         .ensure_queue("q", NonZeroU32::new(concurrency).unwrap())

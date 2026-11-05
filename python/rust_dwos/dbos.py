@@ -200,12 +200,15 @@ def _running() -> DBOS:
 
 
 def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
+    from rust_dwos.queues import _enqueue_options
+
     _current_run.set(run)
     _current_active.set(active)
     _current_step.set(None)
     _next_workflow_id.set(None)
     _next_reuse_policy.set(None)
     _attributes.set(None)
+    _enqueue_options.set({})
     _timeout_override.set(None)
 
 

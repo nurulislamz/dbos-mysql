@@ -203,6 +203,13 @@ impl Store {
         check_queue_name(queue)?;
         check_name("workflow ID", new.workflow_id)?;
         check_name("workflow name", new.name)?;
+        if let Some(id) = &options.deduplication_id {
+            check_name("deduplication ID", id)?;
+        } else if options.duplication_policy.is_some() {
+            return Err(Error::InvalidConfig(
+                "duplication_policy requires a deduplication ID".to_owned(),
+            ));
+        }
         if let Some(parent) = new.parent_workflow_id {
             check_name("parent workflow ID", parent)?;
         }
@@ -259,6 +266,21 @@ impl Store {
             check_workflow_name(new, &existing.name)?;
         }
         if owner.as_deref() == Some(token) {
+            if let Some(id) = &options.deduplication_id {
+                let existing: Option<String> = sqlx::query_scalar(self.sql(
+                    "SELECT workflow_queue_entries.workflow_uuid FROM workflow_queue_entries JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid WHERE workflow_queue_entries.queue_name = ? AND workflow_queue_entries.deduplication_id = ? AND workflow_status.status IN ('PENDING', 'ENQUEUED', 'DELAYED') LIMIT 1",
+                )).bind(queue).bind(id.as_str()).fetch_optional(&mut *tx).await?;
+                if let Some(existing) = existing {
+                    if options.duplication_policy == Some(ReusePolicy::ReturnExisting) {
+                        tx.rollback().await?;
+                        return Ok(existing);
+                    }
+                    return Err(Error::QueueDeduplicated {
+                        queue: queue.to_owned(),
+                        deduplication_id: id.clone(),
+                    });
+                }
+            }
             if let Some(timeout) = new.timeout_ms {
                 let created: i64 = row.try_get("created_at")?;
                 created.checked_add(timeout).ok_or_else(|| {
@@ -266,9 +288,9 @@ impl Store {
                 })?;
             }
             sqlx::query(self.sql(
-                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms) VALUES (?, ?, ?)",
+                "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id) VALUES (?, ?, ?, ?)",
             ))
-            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).execute(&mut *tx).await?;
+            .bind(new.workflow_id).bind(queue).bind(new.timeout_ms).bind(options.deduplication_id.as_deref()).execute(&mut *tx).await?;
             if let Some(deadline) = new.deadline_epoch_ms {
                 sqlx::query(self.sql(
                     "INSERT INTO workflow_timeouts (workflow_uuid, timeout_ms, deadline_epoch_ms) VALUES (?, NULL, ?)",

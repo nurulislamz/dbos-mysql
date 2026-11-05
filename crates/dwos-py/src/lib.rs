@@ -31,11 +31,13 @@ create_exception!(_native, DBOSNonExistentWorkflowError, DBOSException);
 create_exception!(_native, DBOSLeaseLostError, DBOSException);
 create_exception!(_native, DBOSWorkflowCancelledError, DBOSException);
 create_exception!(_native, DBOSWorkflowIDInUseError, DBOSException);
+create_exception!(_native, DBOSQueueDeduplicatedError, DBOSException);
 
 pub(crate) fn to_py(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
         Error::ConflictingWorkflow { .. } => DBOSConflictingWorkflowError::new_err(message),
+        Error::QueueDeduplicated { .. } => DBOSQueueDeduplicatedError::new_err(message),
         Error::WorkflowIdInUse {
             workflow_id,
             status,
@@ -739,6 +741,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?;
     m.add("DBOSException", py.get_type::<DBOSException>())?;
     m.add("StoreError", py.get_type::<StoreError>())?;
+    m.add(
+        "DBOSQueueDeduplicatedError",
+        py.get_type::<DBOSQueueDeduplicatedError>(),
+    )?;
     m.add(
         "DBOSConflictingWorkflowError",
         py.get_type::<DBOSConflictingWorkflowError>(),
