@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use super::wakeup::WakeKey;
 use super::{Begin, Engine};
-use crate::{Claimed, Error, NewWorkflow};
+use crate::{Claimed, Error, NewWorkflow, WorkflowOptions};
 
 impl Engine {
     pub async fn get_queue(&self, name: &str) -> Result<Option<NonZeroU32>, Error> {
@@ -15,11 +15,21 @@ impl Engine {
     }
 
     pub async fn enqueue(&self, queue: &str, begin: Begin<'_>) -> Result<String, Error> {
+        self.enqueue_with(queue, begin, &WorkflowOptions::default())
+            .await
+    }
+
+    pub async fn enqueue_with(
+        &self,
+        queue: &str,
+        begin: Begin<'_>,
+        options: &WorkflowOptions,
+    ) -> Result<String, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
         let workflow_id = self.workflow_id_for_begin(&begin).await?;
         let enqueued = self
             .store
-            .enqueue_workflow(
+            .enqueue_workflow_with(
                 queue,
                 &NewWorkflow {
                     workflow_id: &workflow_id,
@@ -32,6 +42,7 @@ impl Engine {
                     timeout_ms,
                     deadline_epoch_ms,
                 },
+                options,
             )
             .await?;
         self.wake_queue(queue);

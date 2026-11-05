@@ -414,3 +414,21 @@ async def test_workflow_recovery_async(dbos: DBOS, config: DBOSConfig, database:
     stat = await DBOS.get_workflow_status_async(workflow_id)
     assert stat
     assert stat.recovery_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_main_loop(dbos: DBOS, config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    dbos = DBOS(config=config)
+    DBOS.launch()
+
+    await DBOS.register_queue_async("queue")
+
+    @DBOS.workflow()
+    async def test_workflow() -> int:
+        await DBOS.sleep_async(0.1)
+        return id(asyncio.get_running_loop())
+
+    # Verify the enqueued task is submitted into the main event loop
+    handle = await DBOS.enqueue_workflow_async("queue", test_workflow)
+    assert await handle.get_result() == id(asyncio.get_running_loop())

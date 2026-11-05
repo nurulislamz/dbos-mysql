@@ -2,6 +2,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use dwos_core::{Begin, Error, ParentStep, recovery_limit};
+
+use super::start_options;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 
@@ -49,7 +51,7 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, *, blocking=false))]
+    #[pyo3(signature = (queue, name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn enqueue<'py>(
         &self,
@@ -63,6 +65,7 @@ impl PyEngine {
         in_step: bool,
         timeout_ms: Option<i64>,
         ignore_propagated_deadline: bool,
+        reuse_policy: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -71,13 +74,14 @@ impl PyEngine {
         let parent_step_id = parent
             .as_ref()
             .and_then(|run| run.step_id_unless_in_step(in_step));
+        let options = start_options(reuse_policy.as_deref())?;
         dispatch(py, blocking, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
                 _ => None,
             };
             engine
-                .enqueue(
+                .enqueue_with(
                     &queue,
                     Begin {
                         name: &name,
@@ -88,6 +92,7 @@ impl PyEngine {
                         timeout_ms,
                         ignore_propagated_deadline,
                     },
+                    &options,
                 )
                 .await
                 .map_err(to_py)

@@ -19,6 +19,21 @@ def _millis(value: str | None) -> int | None:
     return int(datetime.fromisoformat(value).timestamp() * 1000)
 
 
+def _handles(instance: Any, handle: Any, workflow_ids: list[str], claims: list[Any]) -> list[Any]:
+    by_id = {claim.workflow_id: claim for claim in claims}
+    handles = []
+    for workflow_id in workflow_ids:
+        claim = by_id.get(workflow_id)
+        if claim is None:
+            handles.append(handle(workflow_id))
+            continue
+        started = instance._resume(claim)
+        handles.append(handle(started.workflow_id, started._local))
+    if len(by_id) < len(workflow_ids):
+        instance._wake_queues()
+    return handles
+
+
 def _dbos() -> Any:
     from rust_dwos import dbos
 
@@ -59,43 +74,52 @@ def _filters(
 
 class WorkflowManagement:
     @classmethod
-    def cancel_workflow(cls, workflow_id: str) -> None:
+    def cancel_workflow(cls, workflow_id: str, *, cancel_children: bool = False) -> None:
+        cls.cancel_workflows([workflow_id], cancel_children=cancel_children)
+
+    @classmethod
+    async def cancel_workflow_async(cls, workflow_id: str, *, cancel_children: bool = False) -> None:
+        await cls.cancel_workflows_async([workflow_id], cancel_children=cancel_children)
+
+    @classmethod
+    def cancel_workflows(cls, workflow_ids: list[str], *, cancel_children: bool = False) -> None:
         dbos = _dbos()
         instance = dbos._running()
-        dbos.logger.info(f"Cancelling workflow: {workflow_id}")
-        instance._blocking(instance._engine.cancel_workflow, workflow_id)
+        dbos.logger.info(f"Cancelling workflow(s): {workflow_ids}")
+        instance._blocking(instance._engine.cancel_workflows, workflow_ids, cancel_children)
         instance._wake_queues()
 
     @classmethod
-    async def cancel_workflow_async(cls, workflow_id: str) -> None:
+    async def cancel_workflows_async(cls, workflow_ids: list[str], *, cancel_children: bool = False) -> None:
         dbos = _dbos()
         instance = dbos._running()
-        dbos.logger.info(f"Cancelling workflow: {workflow_id}")
-        await instance._engine.cancel_workflow(workflow_id)
+        dbos.logger.info(f"Cancelling workflow(s): {workflow_ids}")
+        await instance._engine.cancel_workflows(workflow_ids, cancel_children)
         instance._wake_queues()
 
     @classmethod
-    def resume_workflow(cls, workflow_id: str) -> WorkflowHandle[Any]:
-        dbos = _dbos()
-        instance = dbos._running()
-        dbos.logger.info(f"Resuming workflow: {workflow_id}")
-        claim = instance._blocking(instance._engine.resume_workflow, workflow_id, list(dbos._registry))
-        if claim is not None:
-            return instance._resume(claim)
-        instance._wake_queues()
-        return dbos.WorkflowHandle(workflow_id)
+    def resume_workflow(cls, workflow_id: str, *, queue_name: str | None = None) -> WorkflowHandle[Any]:
+        return cls.resume_workflows([workflow_id], queue_name=queue_name)[0]
 
     @classmethod
-    async def resume_workflow_async(cls, workflow_id: str) -> WorkflowHandleAsync[Any]:
+    async def resume_workflow_async(cls, workflow_id: str, *, queue_name: str | None = None) -> WorkflowHandleAsync[Any]:
+        return (await cls.resume_workflows_async([workflow_id], queue_name=queue_name))[0]
+
+    @classmethod
+    def resume_workflows(cls, workflow_ids: list[str], *, queue_name: str | None = None) -> list[WorkflowHandle[Any]]:
         dbos = _dbos()
         instance = dbos._running()
-        dbos.logger.info(f"Resuming workflow: {workflow_id}")
-        claim = await instance._engine.resume_workflow(workflow_id, list(dbos._registry))
-        if claim is not None:
-            handle = instance._resume(claim)
-            return dbos.WorkflowHandleAsync(handle.workflow_id, handle._local)
-        instance._wake_queues()
-        return dbos.WorkflowHandleAsync(workflow_id)
+        dbos.logger.info(f"Resuming workflow(s): {workflow_ids}")
+        claims = instance._blocking(instance._engine.resume_workflows, workflow_ids, list(dbos._registry), queue_name)
+        return _handles(instance, dbos.WorkflowHandle, workflow_ids, claims)
+
+    @classmethod
+    async def resume_workflows_async(cls, workflow_ids: list[str], *, queue_name: str | None = None) -> list[WorkflowHandleAsync[Any]]:
+        dbos = _dbos()
+        instance = dbos._running()
+        dbos.logger.info(f"Resuming workflow(s): {workflow_ids}")
+        claims = await instance._engine.resume_workflows(workflow_ids, list(dbos._registry), queue_name)
+        return _handles(instance, dbos.WorkflowHandleAsync, workflow_ids, claims)
 
     @classmethod
     def list_workflows(

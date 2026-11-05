@@ -1,6 +1,6 @@
 # Progress
 
-Now: core hardening is merged on `main`: expired-lease refusal, keeper timing, numbered schema migrations and queue race fixes. The Python SDK was restarted on 2026-11-05. See `.worktrees/HANDOFF.md` for the next steps. Two things block readiness: the Postgres late-start incident is still unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
+Now: id reuse, child cancel, bulk resume onto a queue, and migrations 007–012 are on `main`. Queue rate limits, priorities and partitions are columns only. The Python SDK was restarted on 2026-11-05. See `.worktrees/HANDOFF.md` for the older next steps. Two things block readiness: the Postgres late-start incident is still unexplained, and `stress_owners_stay_within_the_limit_and_every_workflow_ends::sqlite` hung once in 3 suite runs, past its own 90 s limit.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -28,7 +28,8 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 | 19 | Numbered schema migrations that keep existing rows | done | core | 8 | `tests/migrations.rs` (45 tests) from real historic schemas on all three databases |
 | 20 | Queue admission races: MySQL recovery mid-scan, oversized timeout | done | core | 13 | `tests/queue_races.rs` (74 tests). The stress test hung once on SQLite, see Known problems |
 | 21 | Rust-only late-start reproduction | blocked | core | 8 | `tests/late_start_restart.rs` (ignored by default): 0 late starts in 45 restarts at real settings, cause unproven |
-| 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Code written. Existing Python tests only; the new features have never run. No smoke tests yet |
+| 22 | Python SDK on the core APIs | in progress | sdk | 8-13 | Existing Python tests pass. Id reuse, cancel children, bulk resume and `get_result(polling_interval_sec=)` have focused SQLite and MySQL tests. The full suite was not re-run |
+| 23 | Workflow id reuse, child cancel, queue resume, schema 007–012 | done | sdk | 22 | Focused Rust and Python tests on SQLite and MySQL. Postgres not run for this slice |
 
 ## Verification
 

@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use sqlx::{Any, Row, Transaction};
 
-use super::{Dialect, SELECT_WORKFLOW, Store, check_name, get_u32};
+use super::{Dialect, SELECT_WORKFLOW, Store, check_name, get_u32, workflow_from_row};
 use crate::Error;
-use crate::workflow::{Claimed, NewWorkflow, check_workflow_name, new_token};
+use crate::workflow::{
+    Claimed, NewWorkflow, ReusePolicy, WorkflowOptions, check_workflow_name, id_in_use, new_token,
+};
 
 fn check_queue_name(name: &str) -> Result<(), Error> {
     check_name("queue name", name)?;
@@ -87,10 +89,91 @@ impl Store {
         Ok(concurrency)
     }
 
+    /// Puts each resumable workflow on `queue` and clears its deadline, so admission, not the old
+    /// timeout, decides when it runs. SUCCESS and ERROR are left alone. One missing id rolls back.
+    pub async fn place_on_queue(&self, workflow_ids: &[String], queue: &str) -> Result<(), Error> {
+        check_queue_name(queue)?;
+        if workflow_ids.is_empty() {
+            return Ok(());
+        }
+        for id in workflow_ids {
+            check_name("workflow ID", id)?;
+        }
+        self.attempt(|| self.place_on_queue_once(workflow_ids, queue))
+            .await
+    }
+
+    async fn place_on_queue_once(&self, workflow_ids: &[String], queue: &str) -> Result<(), Error> {
+        let mut tx = self.begin().await?;
+        self.lock_queue(&mut tx, queue).await?;
+        for id in workflow_ids {
+            let row = sqlx::query(self.sql(&format!(
+                "SELECT status FROM workflow_status WHERE workflow_uuid = ? {}",
+                self.dialect.lock_row(),
+            )))
+            .bind(id.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| Error::WorkflowNotFound(id.clone()))?;
+            let status: String = row.try_get("status")?;
+            if status == "SUCCESS" || status == "ERROR" {
+                continue;
+            }
+            sqlx::query(self.sql(
+                "UPDATE workflow_status SET status = 'PENDING', lease_token = NULL, claim_after = {NOW}, \
+                 recovery_attempts = 0, completed_at = NULL, started_at_epoch_ms = NULL, updated_at = {NOW} \
+                 WHERE workflow_uuid = ?",
+            ))
+            .bind(id.as_str())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(self.sql("DELETE FROM workflow_timeouts WHERE workflow_uuid = ?"))
+                .bind(id.as_str())
+                .execute(&mut *tx)
+                .await?;
+            let entry: Option<String> =
+                sqlx::query_scalar(self.sql(
+                    "SELECT workflow_uuid FROM workflow_queue_entries WHERE workflow_uuid = ?",
+                ))
+                .bind(id.as_str())
+                .fetch_optional(&mut *tx)
+                .await?;
+            if entry.is_some() {
+                sqlx::query(self.sql(
+                    "UPDATE workflow_queue_entries SET queue_name = ? WHERE workflow_uuid = ?",
+                ))
+                .bind(queue)
+                .bind(id.as_str())
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                sqlx::query(self.sql(
+                    "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms) VALUES (?, ?, NULL)",
+                ))
+                .bind(id.as_str())
+                .bind(queue)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn enqueue_workflow(
         &self,
         queue: &str,
         new: &NewWorkflow<'_>,
+    ) -> Result<String, Error> {
+        self.enqueue_workflow_with(queue, new, &WorkflowOptions::default())
+            .await
+    }
+
+    pub async fn enqueue_workflow_with(
+        &self,
+        queue: &str,
+        new: &NewWorkflow<'_>,
+        options: &WorkflowOptions,
     ) -> Result<String, Error> {
         check_queue_name(queue)?;
         check_name("workflow ID", new.workflow_id)?;
@@ -110,7 +193,7 @@ impl Store {
         }
         self.check_size(&[Some(new.input)])?;
         let token = new_token();
-        self.attempt(|| self.enqueue_workflow_once(queue, new, &token))
+        self.attempt(|| self.enqueue_workflow_once(queue, new, options, &token))
             .await
     }
 
@@ -118,6 +201,7 @@ impl Store {
         &self,
         queue: &str,
         new: &NewWorkflow<'_>,
+        options: &WorkflowOptions,
         token: &str,
     ) -> Result<String, Error> {
         let mut tx = self.begin().await?;
@@ -142,8 +226,13 @@ impl Store {
             .fetch_one(&mut *tx)
             .await?;
         let owner: Option<String> = row.try_get("lease_token")?;
-        let recorded_name: String = row.try_get("name")?;
-        check_workflow_name(new, &recorded_name)?;
+        if owner.as_deref() != Some(token) {
+            let existing = workflow_from_row(&row)?;
+            if options.reuse == ReusePolicy::Reject {
+                return Err(id_in_use(&existing));
+            }
+            check_workflow_name(new, &existing.name)?;
+        }
         if owner.as_deref() == Some(token) {
             if let Some(timeout) = new.timeout_ms {
                 let created: i64 = row.try_get("created_at")?;

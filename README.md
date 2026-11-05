@@ -53,16 +53,19 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Workflow and step state storage | ✅ | ✅ Rust store |
 | Stale owners blocked from saving results | ✅ | ✅ Rust store |
 | `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
+| `validate_args`, `pydantic_args_validator` | ✅ | 🚧 Implemented; workflow execution not verified |
+| `DBOSContextEnsure` | ✅ | 📅 |
+| `DBOS.asyncio_wait` | ✅ | 📅 |
 | Async and sync functions | ✅ | ✅ |
-| `SetWorkflowID`, one run per workflow ID | ✅ | ✅ |
+| `SetWorkflowID`, one run per workflow ID | ✅ | ✅ `reject` and `return-existing`. Other reuse policies are not in this API |
 | Replaying saved steps and stored errors | ✅ | ✅ |
 | Changed code detected during replay | ✅ | ✅ |
 | Step retries | ✅ | ✅ |
-| Per-attempt step timeout (`timeout_seconds`) | ❓ | ✅ A timed-out sync body keeps running on its thread |
-| Step heartbeat (`DBOS.heartbeat()`) | ❓ | ✅ Separate from lease renewal |
+| Per-attempt step timeout (`timeout_seconds`) | ✅ Async steps only | ✅ A timed-out sync body keeps running on its thread |
+| Step heartbeat (`DBOS.heartbeat()`) | ❌ | ✅ Separate from lease renewal |
 | Child workflows | ✅ | ✅ |
-| `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ |
-| `list_workflows`, `list_workflow_steps` | ✅ | ✅ |
+| `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ `get_result(polling_interval_sec=)` sets the longest wait between polls. Omitting it keeps the 250 ms cap |
+| `list_workflows`, `list_workflow_steps` | ✅ | 🚧 Filters on queue, version, fork and auth fields are missing |
 | Crash recovery | ✅ | 🚧 Crash tests last ran before the newest features |
 | Recovery attempt limit | ✅ | ✅ |
 
@@ -74,9 +77,9 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | `send`, `recv` | ✅ | ✅ |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
-| Queues | ✅ | ✅ FIFO, with one global concurrency limit |
-| Queue rate limits, priorities, partitions | ❓ | 📅 Deferred |
-| Cancel and resume | ✅ | ✅ |
+| Queues | ✅ | ✅ FIFO, with one global concurrency limit. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
+| Queue rate limits, priorities, partitions | ✅ | 📅 Deferred |
+| Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |
 | Deleting old workflows | ✅ | 📅 |
 | `run_step`, `wait_first` | ✅ | 📅 |
@@ -90,15 +93,17 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Kafka | ✅ | ❌ |
 | Class-based workflows | ✅ | ❌ |
 | External object storage | ✅ | ❌ |
-| Sharding | ✅ | ❌ |
+| Sharding | ✅ Enterprise only | ❌ |
+| `auto_upgrade` | ✅ Enterprise only | ❌ |
+| SQL functions `dbos.enqueue_workflow`, `dbos.send_message` | ✅ | ❌ They need DBOS's exact `dbos.` schema |
 
 ### Performance
 
-No benchmark exists in this repository, and nothing has been measured side by side with DBOS. The times below are single samples on SQLite on a busy machine.
+No benchmark exists in this repository, and nothing has been measured side by side with DBOS. The times below are single samples on SQLite on a busy machine. DBOS's own published figures are about 1,000 workflows per second per Postgres vCPU, and 20K on 16 vCPU. Those are vendor figures, not checked here.
 
 | Check | DBOS | rust-dwos |
 |---|---|---|
-| Workflows and steps per second | ❓ | ❓ Not measured |
+| Workflows and steps per second | ✅ Vendor figure: about 1,000 per Postgres vCPU, 20K on 16 vCPU | ❓ Not measured |
 | Extra time per step | ❓ | ❓ Not measured |
 | Memory and connections per process | ❓ | ❓ Not measured |
 | Behaviour with a large backlog | ❓ | ❓ Not measured. Recovery takes at most 50 workflows per interval |
@@ -128,16 +133,20 @@ No benchmark exists in this repository, and nothing has been measured side by si
 | Database restart tests | ❓ | 🚧 Passed on MySQL. One Postgres rerun failed |
 | Long-running stress tests | ❓ | 🚧 One SQLite stress test hung in 1 of 3 runs. Cause unknown |
 | DBOS's own tests | ✅ | 🚧 A subset is adapted, see [`MANIFEST.md`](tests/upstream/MANIFEST.md) |
-| Production use | ❓ | ❌ Not production ready |
+| Production use | ✅ | ❌ Not production ready |
 
 ### Operations
 
 | Check | DBOS | rust-dwos |
 |---|---|---|
-| OpenTelemetry tracing | ✅ | ❌ |
-| Web view of workflows | ❓ | ✅ Read-only |
-| Schema upgrades that keep existing rows | ❓ | ✅ Numbered migrations |
-| Reading rows written by another SDK | ❓ | ❓ Not tested |
+| OpenTelemetry tracing | ✅ | 📅 |
+| `log_level`, `console_log_level` | ✅ | 🚧 Configured; launch test not verified |
+| Custom `Serializer` | ✅ | 📅 Core format tags accept only JSON and pickle |
+| OpenAI Agents, Google ADK, LlamaIndex integrations | ✅ | 📅 |
+| Web view of workflows | ✅ Through the DBOS Console | ✅ Read-only, built in |
+| Conductor (DBOS's hosted service) and what depends on it | ✅ | ❌ Not built. It is DBOS's own service: connection, alerting, Prometheus through Conductor, retention, autoscaling, audit logs, RBAC, API keys, `dbosctl`, MCP |
+| Schema upgrades that keep existing rows | ✅ | ✅ Numbered migrations |
+| Reading rows written by another SDK | ✅ | ❌ Not supported. The tables are not DBOS's `dbos.` schema |
 
 ### Design differences
 
@@ -146,6 +155,20 @@ No benchmark exists in this repository, and nothing has been measured side by si
 | Core language | Python | Rust, with a Python SDK |
 | Crash detection | Executor IDs and ownership tokens | Leases that expire |
 | Custom exceptions after replay | Restored as their own type | Restored when the class is loaded and can be rebuilt. Otherwise `DBOSRecordedError` |
+
+## Refused or turned off
+
+What this project rejects or does not run, so nothing fails silently.
+
+| What | What happens |
+|---|---|
+| Unknown `DBOSConfig` keys | `DBOSException` naming the keys |
+| Queue options that are not supported | `DBOSException` naming the options |
+| Using DBOS after `os.fork` | `DBOSException`. Call `DBOS.launch()` in the child |
+| MessagePack | Not built. The user deferred it |
+| Python chaos tests (`tests/chaos`) | Paused until the Postgres late-start incident is settled, so crash marks above are older than the newest features |
+| Ignored tests | `cargo test` reports the ignored Rust tests. See `PROGRESS.md` |
+| Dropped upstream tests | Listed with reasons in [`MANIFEST.md`](tests/upstream/MANIFEST.md) |
 
 ## Guarantees
 

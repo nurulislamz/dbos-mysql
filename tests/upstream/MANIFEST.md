@@ -9,7 +9,7 @@ Results come from 3 full runs against SQLite and MySQL 8.4. `pass/fail` in a res
 - **rewritten**: written again in pytest from the upstream scenario.
 - **dropped**: not carried over.
 
-Counts: adapted: 34, dropped: 5, passing: 16, rewritten: 11. Every test that was not dropped passes on both backends. The workflow-management rows were run once, on SQLite, MySQL and Postgres.
+Counts: adapted: 36, dropped: 4, passing: 17, rewritten: 11. Every test that was not dropped passes on both backends. The workflow-management rows were run once, on SQLite, MySQL and Postgres. The reuse-policy and handles rows passed on SQLite and MySQL.
 
 | Test | Source | Commit | Status | SQLite | MySQL | Reason |
 |---|---|---|---|---|---|---|
@@ -48,6 +48,8 @@ Counts: adapted: 34, dropped: 5, passing: 16, rewritten: 11. Every test that was
 | `test_recovery_workflow` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_recovery_workflow_step` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_reject_name_mismatch_throws_in_use` | dbos-transact-ts `tests/oaoo.test.ts` reject-name-mismatch-throws-in-use | 306b732 | rewritten | pass | pass | Rewritten in pytest. Reuse policy is out of scope, so this checks the default conflict error, which still names the recorded workflow. |
+| `test_invalid_reuse_policy`, `test_reject_reuse_policy` | dbos-transact-py `tests/test_duplication_policy.py` | 236142b | adapted | pass | pass | The two cases that only need `SetWorkflowID(workflow_id_reuse_policy=)`. Dedup, enqueue options and the client are still out. |
+| `test_polling_interval_must_be_positive`, `test_cancel_children_bulk_resume_and_poll_interval` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Connects `polling_interval_sec`, `cancel_children`, `cancel_workflows` and `resume_workflows`. The rules are in the Rust tests. |
 | `test_resume_nonexistent_workflow` | dbos-transact-py `tests/test_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
 | `test_resume_nonexistent_workflow_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
 | `test_resume_workflow_async` | dbos-transact-py `tests/test_async_workflow_management.py` | 236142b | adapted | pass | pass | Copied from the deferred workflow-management archive. One run passed on SQLite, MySQL and Postgres. |
@@ -73,9 +75,13 @@ Counts: adapted: 34, dropped: 5, passing: 16, rewritten: 11. Every test that was
 | `test_workflow_recovery_async` | dbos-transact-py `tests/test_async.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_workflow_returns_none` | dbos-transact-py `tests/test_dbos.py` | 236142b | adapted | pass | pass | Internal SQL replaced with `Database.expire_lease`. |
 | `test_workflow_with_task_cancellation` | dbos-transact-py `tests/test_async.py` | 236142b | adapted | pass | pass | `DBOS.sleep_async` replaced with `asyncio.sleep`: durable sleep is out of scope for 0.1. |
-| `test_main_loop` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Tests the event loop an enqueued workflow runs on. Queues are out of scope for 0.1. Loop choice is still checked by `test_start_workflow_async` and `test_workflow_recovery_async`. |
+| `test_main_loop` | dbos-transact-py `tests/test_async.py` | 236142b | passing | pass | pass | Brought back now that queues exist. Copied unchanged. Run on SQLite and MySQL. |
 | `test_asyncio_wait` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork, which are not in the 0.1 API. Its step assertions moved to `test_recorded_step_output`. |
 | `test_asyncio_wait_all_completed` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. Replaced by `test_parallel_steps_replay_from_recorded_results`. |
 | `test_asyncio_wait_first_exception` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. |
 | `test_asyncio_wait_timeout` | dbos-transact-py `tests/test_async.py` | 236142b | dropped | not run | not run | Needs `DBOS.asyncio_wait` and fork. |
 | `test_error_serialization` | dbos-transact-py `tests/test_failures.py` | 236142b | adapted | pass | pass | Tests the JSON format, while upstream tests pickle. Pickle round trips are in `tests/test_pickle_option.py`. Keeps the step-retry round trip. Queue, auth, and client exceptions are not in this API. A custom exception keeps its type without running its constructor, and only a class not loaded in this process comes back as `DBOSRecordedError`. |
+
+| `test_pydantic_validation_variadic_params`, `test_pydantic_validator_concurrent_first_calls` | dbos-transact-py `tests/test_serialization.py` | 236142b | adapted | unit pass | not run | Direct validator scenarios; workflow execution remains unverified. |
+| `test_workflow_pydantic_validation` | dbos-transact-py `tests/test_serialization.py` | 236142b | adapted | blocked | not run | SQLite launch hangs before the test. |
+| `test_log_config` | dbos-transact-py `tests/test_config.py` | 236142b | adapted | blocked | blocked | SQLite launch hangs; sandbox denies MySQL sockets. |

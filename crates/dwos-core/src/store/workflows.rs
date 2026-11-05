@@ -3,11 +3,51 @@ use sqlx::Row;
 use super::{SELECT_WORKFLOW, Store, check_name, millis, require_owner, workflow_from_row};
 use crate::Error;
 use crate::workflow::{
-    Lease, NewWorkflow, Outcome, Started, Status, Workflow, check_workflow_name, new_token,
+    Lease, NewWorkflow, Outcome, ReusePolicy, Started, Status, Workflow, WorkflowOptions,
+    check_workflow_name, id_in_use, new_token,
 };
 
+pub(super) const START_COLUMNS: &str = "application_version, application_name, executor_id, schedule_name, class_name, config_name, authenticated_user, assumed_role, authenticated_roles";
+pub(super) const START_VALUES: &str = "?, ?, ?, ?, ?, ?, ?, ?, ?";
+
 impl Store {
+    pub(super) fn bind_start_columns<'q>(
+        &self,
+        query: sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments>,
+        options: &'q WorkflowOptions,
+    ) -> sqlx::query::Query<'q, sqlx::Any, sqlx::any::AnyArguments> {
+        query
+            .bind(
+                options
+                    .application_version
+                    .as_deref()
+                    .or(self.identity.application_version.as_deref()),
+            )
+            .bind(
+                options
+                    .application_name
+                    .as_deref()
+                    .or(self.identity.application_name.as_deref()),
+            )
+            .bind(self.identity.executor_id.as_deref())
+            .bind(options.schedule_name.as_deref())
+            .bind(options.class_name.as_deref())
+            .bind(options.config_name.as_deref())
+            .bind(options.authenticated_user.as_deref())
+            .bind(options.assumed_role.as_deref())
+            .bind(options.authenticated_roles.as_deref())
+    }
+
     pub async fn start_workflow(&self, new: &NewWorkflow<'_>) -> Result<Started, Error> {
+        self.start_workflow_with(new, &WorkflowOptions::default())
+            .await
+    }
+
+    pub async fn start_workflow_with(
+        &self,
+        new: &NewWorkflow<'_>,
+        options: &WorkflowOptions,
+    ) -> Result<Started, Error> {
         if new.timeout_ms.is_some_and(|timeout| timeout <= 0) {
             return Err(Error::InvalidConfig(
                 "workflow timeout must be positive".to_owned(),
@@ -17,18 +57,20 @@ impl Store {
         check_name("workflow name", new.name)?;
         self.check_size(&[Some(new.input)])?;
         let token = new_token();
-        self.attempt(|| self.start_workflow_once(new, &token)).await
+        self.attempt(|| self.start_workflow_once(new, options, &token))
+            .await
     }
 
     async fn start_workflow_once(
         &self,
         new: &NewWorkflow<'_>,
+        options: &WorkflowOptions,
         token: &str,
     ) -> Result<Started, Error> {
         let mut tx = self.begin().await?;
-        sqlx::query(self.sql(&format!(
-            "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, max_recovery_attempts, parent_workflow_id, serialization, created_at, updated_at) \
-             VALUES (?, ?, 'PENDING', ?, {{NOW}} + ?, ?, ?, ?, ?, {{NOW}}, {{NOW}}) {}",
+        let query = sqlx::query(self.sql(&format!(
+            "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, lease_token, max_recovery_attempts, parent_workflow_id, serialization, started_at_epoch_ms, {START_COLUMNS}, created_at, updated_at) \
+             VALUES (?, ?, 'PENDING', ?, {{NOW}} + ?, ?, ?, ?, ?, {{NOW}}, {START_VALUES}, {{NOW}}, {{NOW}}) {}",
             self.dialect.insert_if_absent()
         )))
         .bind(new.workflow_id)
@@ -38,9 +80,10 @@ impl Store {
         .bind(token)
         .bind(i64::from(new.max_recovery_attempts))
         .bind(new.parent_workflow_id)
-        .bind(new.serialization)
-        .execute(&mut *tx)
-        .await?;
+        .bind(new.serialization);
+        self.bind_start_columns(query, options)
+            .execute(&mut *tx)
+            .await?;
 
         // Compare tokens: a duplicate insert reports 1 row on MySQL and 0 on the others.
         let row = sqlx::query(self.sql(SELECT_WORKFLOW))
@@ -84,9 +127,13 @@ impl Store {
             ));
         }
         let existing = workflow_from_row(&row)?;
+        // Reject wins over a name mismatch: the id is already taken, whichever function holds it.
+        if options.reuse == ReusePolicy::Reject {
+            return Err(id_in_use(&existing));
+        }
         check_workflow_name(new, &existing.name)?;
         tx.commit().await?;
-        Ok(Started::Existing(existing))
+        Ok(Started::Existing(Box::new(existing)))
     }
 
     pub async fn get_workflow(&self, workflow_id: &str) -> Result<Option<Workflow>, Error> {

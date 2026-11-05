@@ -29,8 +29,40 @@ const SQLITE_POOL_SIZE: u32 = 5;
 const PACKET_MARGIN: u64 = 4096;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SQLITE_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(40);
-const SELECT_WORKFLOW: &str = "SELECT workflow_uuid, name, status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, created_at, updated_at, completed_at, serialization, lease_token, (SELECT timeout_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_timeout_ms, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms \
-     FROM workflow_status WHERE workflow_uuid = ?";
+// A row on a queue that was never admitted reads as ENQUEUED or DELAYED, though it stays PENDING.
+macro_rules! status_expr {
+    () => {
+        "CASE WHEN workflow_status.status = 'PENDING' AND workflow_status.lease_token IS NULL \
+         AND workflow_status.started_at_epoch_ms IS NULL AND workflow_queue_entries.workflow_uuid IS NOT NULL \
+         THEN CASE WHEN workflow_status.claim_after > {NOW} THEN 'DELAYED' ELSE 'ENQUEUED' END \
+         ELSE workflow_status.status END"
+    };
+}
+macro_rules! workflow_select {
+    () => {
+        concat!(
+            "SELECT workflow_status.workflow_uuid, name, ",
+            status_expr!(),
+            " AS status, inputs, output, error, recovery_attempts, max_recovery_attempts, parent_workflow_id, \
+             created_at, updated_at, completed_at, serialization, lease_token, started_at_epoch_ms, application_version, \
+             application_name, executor_id, forked_from, was_forked_from, schedule_name, class_name, config_name, \
+             authenticated_user, assumed_role, authenticated_roles, \
+             workflow_timeouts.timeout_ms AS workflow_timeout_ms, workflow_timeouts.deadline_epoch_ms AS workflow_deadline_epoch_ms, \
+             workflow_queue_entries.queue_name AS entry_queue_name, workflow_queue_entries.priority AS entry_priority, \
+             workflow_queue_entries.partition_key AS entry_partition_key, workflow_queue_entries.deduplication_id AS entry_deduplication_id, \
+             workflow_queue_entries.admitted_at_ms AS entry_admitted_at_ms, workflow_queue_entries.delay_until_ms AS entry_delay_until_ms \
+             FROM workflow_status \
+             LEFT JOIN workflow_timeouts ON workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid \
+             LEFT JOIN workflow_queue_entries ON workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid"
+        )
+    };
+}
+const STATUS_EXPR: &str = status_expr!();
+const SELECT_WORKFLOWS: &str = workflow_select!();
+const SELECT_WORKFLOW: &str = concat!(
+    workflow_select!(),
+    " WHERE workflow_status.workflow_uuid = ?"
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Dialect {
@@ -181,6 +213,24 @@ fn workflow_from_row(row: &AnyRow) -> Result<Workflow, Error> {
         serialization: row.try_get("serialization")?,
         timeout_ms: row.try_get("workflow_timeout_ms")?,
         deadline_epoch_ms: row.try_get("workflow_deadline_epoch_ms")?,
+        started_at_ms: row.try_get("started_at_epoch_ms")?,
+        application_version: row.try_get("application_version")?,
+        application_name: row.try_get("application_name")?,
+        executor_id: row.try_get("executor_id")?,
+        forked_from: row.try_get("forked_from")?,
+        was_forked_from: row.try_get::<i64, _>("was_forked_from")? != 0,
+        schedule_name: row.try_get("schedule_name")?,
+        class_name: row.try_get("class_name")?,
+        config_name: row.try_get("config_name")?,
+        authenticated_user: row.try_get("authenticated_user")?,
+        assumed_role: row.try_get("assumed_role")?,
+        authenticated_roles: row.try_get("authenticated_roles")?,
+        queue_name: row.try_get("entry_queue_name")?,
+        priority: row.try_get("entry_priority")?,
+        queue_partition_key: row.try_get("entry_partition_key")?,
+        deduplication_id: row.try_get("entry_deduplication_id")?,
+        dequeued_at_ms: row.try_get("entry_admitted_at_ms")?,
+        delay_until_ms: row.try_get("entry_delay_until_ms")?,
     })
 }
 
@@ -262,6 +312,16 @@ pub struct Store {
     retries: Arc<AtomicU64>,
     pickle: bool,
     read_only: bool,
+    identity: Arc<Identity>,
+}
+
+/// Who this process is. It decides what recovery and queues may claim, and is stamped on the rows.
+/// A field left `None` turns off that check, as in tests that drive the store directly.
+#[derive(Clone, Debug, Default)]
+pub struct Identity {
+    pub executor_id: Option<String>,
+    pub application_version: Option<String>,
+    pub application_name: Option<String>,
 }
 
 impl Store {
@@ -294,6 +354,7 @@ impl Store {
                 retries: Arc::new(AtomicU64::new(0)),
                 pickle: false,
                 read_only,
+                identity: Arc::default(),
             });
         }
 
@@ -315,6 +376,7 @@ impl Store {
             retries: Arc::new(AtomicU64::new(0)),
             pickle: false,
             read_only,
+            identity: Arc::default(),
         })
     }
 
@@ -322,6 +384,26 @@ impl Store {
     pub fn with_pickle(mut self) -> Self {
         self.pickle = true;
         self
+    }
+
+    pub fn with_identity(mut self, identity: Identity) -> Self {
+        self.identity = Arc::new(identity);
+        self
+    }
+
+    /// Conditions a claim adds, each with its one bind. Unversioned and unowned rows suit anyone.
+    fn compatible_clause(&self) -> (String, Vec<&str>) {
+        let mut clause = String::new();
+        let mut binds = Vec::new();
+        if let Some(version) = &self.identity.application_version {
+            clause.push_str(" AND (workflow_status.application_version IS NULL OR workflow_status.application_version = ?)");
+            binds.push(version.as_str());
+        }
+        if let Some(name) = &self.identity.application_name {
+            clause.push_str(" AND (workflow_status.application_name IS NULL OR workflow_status.application_name = ?)");
+            binds.push(name.as_str());
+        }
+        (clause, binds)
     }
 
     fn readable_formats(&self) -> String {

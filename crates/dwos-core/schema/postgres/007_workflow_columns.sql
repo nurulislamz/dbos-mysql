@@ -1,0 +1,12 @@
+ALTER TABLE workflow_status ADD COLUMN started_at_epoch_ms BIGINT;
+ALTER TABLE workflow_status ADD COLUMN application_version TEXT;
+ALTER TABLE workflow_status ADD COLUMN application_name TEXT;
+ALTER TABLE workflow_status ADD COLUMN executor_id TEXT;
+ALTER TABLE workflow_status ADD COLUMN forked_from TEXT;
+ALTER TABLE workflow_status ADD COLUMN was_forked_from BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE workflow_status ADD COLUMN schedule_name TEXT;
+ALTER TABLE workflow_status ADD COLUMN class_name TEXT;
+ALTER TABLE workflow_status ADD COLUMN config_name TEXT;
+ALTER TABLE workflow_status ADD COLUMN authenticated_user TEXT;
+ALTER TABLE workflow_status ADD COLUMN assumed_role TEXT;
+ALTER TABLE workflow_status ADD COLUMN authenticated_roles TEXT;

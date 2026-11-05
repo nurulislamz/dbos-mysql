@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
     Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
-    StepRecord, Workflow, WorkflowFilter, new_token,
+    StepRecord, Workflow, WorkflowFilter, WorkflowOptions, new_token,
 };
 use crate::{Error, Store};
 
@@ -217,7 +217,7 @@ fn final_result(workflow: &Workflow) -> Result<Option<WorkflowResult>, Error> {
         ))
     };
     let outcome = match workflow.status {
-        Status::Pending => return Ok(None),
+        Status::Pending | Status::Enqueued | Status::Delayed => return Ok(None),
         Status::Success => {
             FinalOutcome::Success(workflow.output.clone().ok_or_else(|| missing("output"))?)
         }
@@ -306,6 +306,14 @@ impl Engine {
     }
 
     pub async fn begin(&self, begin: Begin<'_>) -> Result<Begun, Error> {
+        self.begin_with(begin, &WorkflowOptions::default()).await
+    }
+
+    pub async fn begin_with(
+        &self,
+        begin: Begin<'_>,
+        options: &WorkflowOptions,
+    ) -> Result<Begun, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
         let workflow_id = self.workflow_id_for_begin(&begin).await?;
         let new = NewWorkflow {
@@ -319,7 +327,7 @@ impl Engine {
             timeout_ms,
             deadline_epoch_ms,
         };
-        match self.store.start_workflow(&new).await? {
+        match self.store.start_workflow_with(&new, options).await? {
             Started::Owned(lease, deadline_epoch_ms) => Ok(Begun::Run(Run::new(
                 lease,
                 self.serialization().to_owned(),
@@ -463,17 +471,33 @@ impl Engine {
     }
 
     pub async fn await_result(&self, workflow_id: &str) -> Result<WorkflowResult, Error> {
+        self.await_result_within(workflow_id, None).await
+    }
+
+    /// `interval` is the longest wait between polls. `None` keeps the engine cap. A local wake
+    /// still returns at once.
+    pub async fn await_result_within(
+        &self,
+        workflow_id: &str,
+        interval: Option<Duration>,
+    ) -> Result<WorkflowResult, Error> {
+        let interval = interval.unwrap_or(POLL_MAX);
+        if interval.is_zero() {
+            return Err(Error::InvalidConfig(
+                "polling_interval_sec must be positive".to_owned(),
+            ));
+        }
         let waiter = self
             .wakeups
             .waiter(vec![WakeKey::Workflow(workflow_id.to_owned())]);
-        let mut delay = POLL_MIN;
+        let mut delay = POLL_MIN.min(interval);
         loop {
             let workflow = self.get_status(workflow_id).await?;
             if let Some(result) = final_result(&workflow)? {
                 return Ok(result);
             }
             waiter.wait(delay).await;
-            delay = (delay * 2).min(POLL_MAX);
+            delay = (delay * 2).min(interval);
         }
     }
 

@@ -11,6 +11,7 @@ from rust_dwos._native import (
     DBOSStepNondeterminismError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
+    DBOSWorkflowIDInUseError,
     StoreError,
 )
 
@@ -86,6 +87,7 @@ _MESSAGE_EXCEPTIONS = (
     DBOSStepNondeterminismError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
+    DBOSWorkflowIDInUseError,
     StoreError,
 )
 
@@ -118,6 +120,7 @@ __all__ = [
     "DBOSStepTimeoutError",
     "DBOSUnexpectedStepError",
     "DBOSWorkflowCancelledError",
+    "DBOSWorkflowIDInUseError",
     "MaxRecoveryAttemptsExceededError",
     "StoreError",
 ]

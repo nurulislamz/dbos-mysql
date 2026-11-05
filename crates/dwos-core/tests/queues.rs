@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use dwos_core::{
-    Begin, Begun, Claimed, Engine, EngineConfig, Error, Outcome, ParentStep, Run, Status,
-    StepDecision,
+    Begin, Begun, Claimed, Engine, EngineConfig, Error, Outcome, ParentStep, ReusePolicy, Run,
+    Status, StepDecision, WorkflowOptions,
 };
 use sqlx::Connection;
 
@@ -104,6 +104,33 @@ all_dbs!(fifo_and_identity_survive_duplicate_enqueue, backend, {
         ["z-first", "a-second", "m-third"]
     );
     assert!(claimed.iter().all(|row| row.recovery_attempts == 1));
+});
+
+all_dbs!(reject_reuse_policy_refuses_a_queued_id, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 3).await;
+    let reject = WorkflowOptions {
+        reuse: ReusePolicy::Reject,
+        ..WorkflowOptions::default()
+    };
+    assert_eq!(
+        engine.enqueue_with("q", begin("a"), &reject).await.unwrap(),
+        "a"
+    );
+    let error = engine
+        .enqueue_with("q", begin("a"), &reject)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::WorkflowIdInUse { ref status, .. } if status == "ENQUEUED"),
+        "{error:?}"
+    );
+    assert_eq!(
+        engine.get_status("a").await.unwrap().status,
+        Status::Enqueued
+    );
+    assert_eq!(engine.get_status("a").await.unwrap().input, "{}");
 });
 
 all_dbs!(
@@ -265,12 +292,16 @@ all_dbs!(relative_timeout_starts_on_first_admission, backend, {
     engine.enqueue("q", timed).await.unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
     let waiting = engine.get_status("timed").await.unwrap();
-    assert_eq!(waiting.status, Status::Pending);
+    assert_eq!(waiting.status, Status::Enqueued);
+    assert_eq!(waiting.queue_name.as_deref(), Some("q"));
     assert_eq!(waiting.deadline_epoch_ms, None);
     let before_admission = engine.store().now_ms().await.unwrap();
     let claimed = engine.claim_queue("q", &names()).await.unwrap();
     assert_eq!(claimed.len(), 1);
     assert!(claimed[0].deadline_epoch_ms.unwrap() >= before_admission + 100);
+    let admitted = engine.get_status("timed").await.unwrap();
+    assert_eq!(admitted.status, Status::Pending);
+    assert!(admitted.started_at_ms.is_some());
 });
 
 all_dbs!(

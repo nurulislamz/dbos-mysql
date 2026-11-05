@@ -58,6 +58,36 @@ const POSTGRES: &[Migration] = &[
         "SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'workflow_status'::regclass \
          AND conname = 'workflow_status_status_check' AND pg_get_constraintdef(oid) NOT LIKE '%CANCELLED%'",
     ),
+    plain(
+        7,
+        include_str!("../../schema/postgres/007_workflow_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_status' AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_status' AND column_name = 'started_at_epoch_ms')",
+    ),
+    plain(
+        8,
+        include_str!("../../schema/postgres/008_step_started_at.sql"),
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'operation_outputs' AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'operation_outputs' AND column_name = 'started_at_epoch_ms')",
+    ),
+    plain(
+        9,
+        include_str!("../../schema/postgres/009_queue_entry_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_queue_entries' AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_queue_entries' AND column_name = 'priority')",
+    ),
+    plain(
+        10,
+        include_str!("../../schema/postgres/010_queue_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_queues' AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_queues' AND column_name = 'worker_concurrency')",
+    ),
+    plain(
+        11,
+        include_str!("../../schema/postgres/011_workflow_attributes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_attributes')",
+    ),
+    plain(
+        12,
+        include_str!("../../schema/postgres/012_workflow_indexes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_workflow_status_parent')",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -102,6 +132,36 @@ const MYSQL: &[Migration] = &[
         ),
         rebuilds: None,
     },
+    plain(
+        7,
+        include_str!("../../schema/mysql/007_workflow_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND COLUMN_NAME = 'started_at_epoch_ms')",
+    ),
+    plain(
+        8,
+        include_str!("../../schema/mysql/008_step_started_at.sql"),
+        "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_outputs' AND NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_outputs' AND COLUMN_NAME = 'started_at_epoch_ms')",
+    ),
+    plain(
+        9,
+        include_str!("../../schema/mysql/009_queue_entry_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_queue_entries' AND NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_queue_entries' AND COLUMN_NAME = 'priority')",
+    ),
+    plain(
+        10,
+        include_str!("../../schema/mysql/010_queue_columns.sql"),
+        "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_queues' AND NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_queues' AND COLUMN_NAME = 'worker_concurrency')",
+    ),
+    plain(
+        11,
+        include_str!("../../schema/mysql/011_workflow_attributes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_attributes')",
+    ),
+    plain(
+        12,
+        include_str!("../../schema/mysql/012_workflow_indexes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_status' AND INDEX_NAME = 'ix_workflow_status_parent')",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -134,6 +194,36 @@ const SQLITE: &[Migration] = &[
         ),
         rebuilds: None,
     },
+    plain(
+        7,
+        include_str!("../../schema/sqlite/007_workflow_columns.sql"),
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_status' AND sql NOT LIKE '%started_at_epoch_ms%'",
+    ),
+    plain(
+        8,
+        include_str!("../../schema/sqlite/008_step_started_at.sql"),
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'operation_outputs' AND sql NOT LIKE '%started_at_epoch_ms%'",
+    ),
+    plain(
+        9,
+        include_str!("../../schema/sqlite/009_queue_entry_columns.sql"),
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_queue_entries' AND sql NOT LIKE '%priority%'",
+    ),
+    plain(
+        10,
+        include_str!("../../schema/sqlite/010_queue_columns.sql"),
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_queues' AND sql NOT LIKE '%worker_concurrency%'",
+    ),
+    plain(
+        11,
+        include_str!("../../schema/sqlite/011_workflow_attributes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_attributes')",
+    ),
+    plain(
+        12,
+        include_str!("../../schema/sqlite/012_workflow_indexes.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_workflow_status_parent')",
+    ),
 ];
 
 fn migrations(dialect: Dialect) -> &'static [Migration] {

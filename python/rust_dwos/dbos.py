@@ -33,6 +33,7 @@ from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encod
 from rust_dwos.sleep import Sleep
 from rust_dwos.timeouts import _timeout_override, timeout_start_args
 from rust_dwos.workflow_management import WorkflowManagement
+from rust_dwos.validation import make_pydantic_args_validator, pydantic_args_validator, ValidateArgsCallable
 
 logger = logging.getLogger("dbos")
 
@@ -54,10 +55,14 @@ class DBOSConfig(TypedDict):
     max_concurrent_recoveries: NotRequired[int]
     shutdown_timeout_seconds: NotRequired[float]
     serializer: NotRequired[Literal["json", "pickle"]]
+    log_level: NotRequired[str]
+    console_log_level: NotRequired[str]
 
 
 class WorkflowStatusString(Enum):
     PENDING = "PENDING"
+    ENQUEUED = "ENQUEUED"
+    DELAYED = "DELAYED"
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
     MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
@@ -98,24 +103,42 @@ class _Workflow:
     codec: Codec
     is_async: bool
     max_recovery_attempts: int | None
+    validate_args: ValidateArgsCallable | None = None
 
 
 _current_run: contextvars.ContextVar[_native.Run | None] = contextvars.ContextVar("dbos_run", default=None)
 _current_step: contextvars.ContextVar[StepStatus | None] = contextvars.ContextVar("dbos_step", default=None)
 _next_workflow_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("dbos_next_id", default=None)
+_next_reuse_policy: contextvars.ContextVar[str | None] = contextvars.ContextVar("dbos_reuse_policy", default=None)
 _current_active: contextvars.ContextVar[_native.ActiveRun | None] = contextvars.ContextVar("dbos_active", default=None)
 
 
 class SetWorkflowID:
-    def __init__(self, workflow_id: str) -> None:
+    def __init__(
+        self,
+        workflow_id: str,
+        *,
+        workflow_id_reuse_policy: Literal["return-existing", "reject"] | None = None,
+    ) -> None:
+        if workflow_id_reuse_policy not in (None, "return-existing", "reject"):
+            raise DBOSException(
+                f"Invalid workflow_id_reuse_policy {workflow_id_reuse_policy}. "
+                "Must be either 'return-existing' or 'reject'."
+            )
         self._workflow_id = workflow_id
+        self._reuse_policy = workflow_id_reuse_policy
         self._token: contextvars.Token[str | None] | None = None
+        self._reuse_token: contextvars.Token[str | None] | None = None
 
     def __enter__(self) -> SetWorkflowID:
         self._token = _next_workflow_id.set(self._workflow_id)
+        self._reuse_token = _next_reuse_policy.set(self._reuse_policy)
         return self
 
     def __exit__(self, *_: object) -> None:
+        if self._reuse_token is not None:
+            _next_reuse_policy.reset(self._reuse_token)
+            self._reuse_token = None
         if self._token is not None:
             _next_workflow_id.reset(self._token)
             self._token = None
@@ -167,6 +190,7 @@ def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
     _current_active.set(active)
     _current_step.set(None)
     _next_workflow_id.set(None)
+    _next_reuse_policy.set(None)
     _timeout_override.set(None)
 
 
@@ -187,9 +211,10 @@ class WorkflowHandle[T]:
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    def get_result(self) -> T:
+    def get_result(self, *, polling_interval_sec: float | None = None) -> T:
+        _check_poll(polling_interval_sec)
         if self._local is not None:
-            result = self._row_before_body(self._local)
+            result = self._row_before_body(self._local, polling_interval_sec)
             if result is not None:
                 return _decode_result(result)
             try:
@@ -197,15 +222,15 @@ class WorkflowHandle[T]:
             except DBOSAwaitedWorkflowCancelledError:
                 pass  # It may have been resumed since, so the stored row decides.
         instance = _running()
-        return _decode_result(instance._waiting(instance._engine.await_result, self.workflow_id))
+        return _decode_result(instance._waiting(instance._engine.await_result, *_result_args(self.workflow_id, polling_interval_sec)))
 
-    def _row_before_body(self, local: concurrent.futures.Future[T]) -> _native.WorkflowResult | None:
+    def _row_before_body(self, local: concurrent.futures.Future[T], polling_interval_sec: float | None) -> _native.WorkflowResult | None:
         # None means the body answers: it finished, or no row can be read.
         if local.done():
             return None
         try:
             instance = _running()
-            stored = instance._state.submit(_call(instance._engine.await_result, self.workflow_id))
+            stored = instance._state.submit(_call(instance._engine.await_result, *_result_args(self.workflow_id, polling_interval_sec)))
         except DBOSException:
             return None
         try:
@@ -232,26 +257,27 @@ class WorkflowHandleAsync[T]:
     def get_workflow_id(self) -> str:
         return self.workflow_id
 
-    async def get_result(self) -> T:
+    async def get_result(self, *, polling_interval_sec: float | None = None) -> T:
+        _check_poll(polling_interval_sec)
         local = self._local
         if isinstance(local, asyncio.Task) and local.get_loop() is not asyncio.get_running_loop():
             local = None
         if local is not None:
             watched = local if isinstance(local, asyncio.Task) else asyncio.wrap_future(local)
             watched.add_done_callback(_retrieve_exception)
-            result = None if local.done() else await self._row_before_body(watched)
+            result = None if local.done() else await self._row_before_body(watched, polling_interval_sec)
             if result is not None:
                 return _decode_result(result)
             try:
                 return await asyncio.shield(watched)
             except DBOSAwaitedWorkflowCancelledError:
                 pass  # It may have been resumed since, so the stored row decides.
-        return _decode_result(await _running()._engine.await_result(self.workflow_id))
+        return _decode_result(await _running()._engine.await_result(*_result_args(self.workflow_id, polling_interval_sec)))
 
-    async def _row_before_body(self, watched: asyncio.Future[T]) -> _native.WorkflowResult | None:
+    async def _row_before_body(self, watched: asyncio.Future[T], polling_interval_sec: float | None) -> _native.WorkflowResult | None:
         # None means the body answers: it finished, or no row can be read.
         try:
-            stored = asyncio.ensure_future(_running()._engine.await_result(self.workflow_id))
+            stored = asyncio.ensure_future(_running()._engine.await_result(*_result_args(self.workflow_id, polling_interval_sec)))
         except DBOSException:
             return None
         stored.add_done_callback(_retrieve_exception)
@@ -291,6 +317,7 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
         global _instance
+        _check_config_keys(config)
         if _instance is not None:
             raise DBOSException("DBOS is already configured. Call DBOS.destroy() first")
         _instance = super().__new__(cls)
@@ -298,6 +325,14 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
 
     def __init__(self, *, config: DBOSConfig) -> None:
         self._config = config
+        if "log_level" in config or "console_log_level" in config:
+            logger.setLevel(config.get("log_level", "INFO"))
+            handler = next((h for h in logger.handlers if h.name == "__dbos_console_log_handler__"), None)
+            if handler is None:
+                handler = logging.StreamHandler()
+                handler.name = "__dbos_console_log_handler__"
+                logger.addHandler(handler)
+            handler.setLevel(config.get("console_log_level", config.get("log_level", "INFO")))
         self._shutdown_timeout = float(config.get("shutdown_timeout_seconds", 5.0))
         self._engine: Any = None
         self._pid = os.getpid()
@@ -381,10 +416,11 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
             keeper.stop()
 
     @classmethod
-    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS) -> Callable[..., Any]:
+    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS, validate_args: ValidateArgsCallable | None = None) -> Callable[..., Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             is_async = inspect.iscoroutinefunction(function)
-            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts)
+            validator = make_pydantic_args_validator(function) if validate_args is pydantic_args_validator else validate_args
+            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts, validator)
             _register(info)
 
             @functools.wraps(function)
@@ -555,13 +591,15 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         return WorkflowHandleAsync(workflow_id)
 
     @classmethod
-    def get_result(cls, workflow_id: str) -> Any:
+    def get_result(cls, workflow_id: str, *, polling_interval_sec: float | None = None) -> Any:
+        _check_poll(polling_interval_sec)
         instance = _running()
-        return _decode_result(instance._waiting(instance._engine.await_result, workflow_id))
+        return _decode_result(instance._waiting(instance._engine.await_result, *_result_args(workflow_id, polling_interval_sec)))
 
     @classmethod
-    async def get_result_async(cls, workflow_id: str) -> Any:
-        return _decode_result(await _running()._engine.await_result(workflow_id))
+    async def get_result_async(cls, workflow_id: str, *, polling_interval_sec: float | None = None) -> Any:
+        _check_poll(polling_interval_sec)
+        return _decode_result(await _running()._engine.await_result(*_result_args(workflow_id, polling_interval_sec)))
 
     @classmethod
     def get_workflow_status(cls, workflow_id: str) -> WorkflowStatus | None:
@@ -649,7 +687,8 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
 
         async def guarded() -> Any:
             try:
-                return await info.function(*args, **kwargs)
+                validated_args, validated_kwargs = info.validate_args(args, kwargs) if info.validate_args else (args, kwargs)
+                return await info.function(*validated_args, **validated_kwargs)
             except SystemExit:
                 return _SYSTEM_EXIT
 
@@ -697,7 +736,8 @@ class DBOS(Sleep, WorkflowManagement, Events, Queues, metaclass=_DBOSMeta):
         context = contextvars.copy_context()
         context.run(_bind_run, run, active)
         try:
-            value = context.run(info.function, *args, **kwargs)
+            validated_args, validated_kwargs = info.validate_args(args, kwargs) if info.validate_args else (args, kwargs)
+            value = context.run(info.function, *validated_args, **validated_kwargs)
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
         except (DBOSWorkflowCancelledError, DBOSLeaseLostError):
             self._stop_keeper(active)
@@ -830,9 +870,28 @@ def _at_exit() -> None:
 atexit.register(_at_exit)
 
 
+def _check_poll(polling_interval_sec: float | None) -> None:
+    if polling_interval_sec is not None and not polling_interval_sec > 0:
+        raise DBOSException("polling_interval_sec must be positive")
+
+
+def _result_args(workflow_id: str, polling_interval_sec: float | None) -> tuple[Any, ...]:
+    # Leave the interval off unless asked, so a stand-in engine can keep the one-argument method.
+    if polling_interval_sec is None:
+        return (workflow_id,)
+    return (workflow_id, polling_interval_sec)
+
+
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
     text = info.codec.encode_input(args, kwargs, _running()._engine.serialization)
-    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None, *timeout_start_args())
+    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None, *timeout_start_args(), _next_reuse_policy.get())
+
+
+def _check_config_keys(config: DBOSConfig) -> None:
+    known = DBOSConfig.__required_keys__ | DBOSConfig.__optional_keys__
+    unknown = sorted(set(config) - known)
+    if unknown:
+        raise DBOSException(f"Unknown DBOSConfig keys: {', '.join(unknown)}. Supported keys: {', '.join(sorted(known))}")
 
 
 def _info_of(function: Callable[..., Any]) -> _Workflow:

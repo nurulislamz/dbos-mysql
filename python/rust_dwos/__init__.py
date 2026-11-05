@@ -1,3 +1,4 @@
+from rust_dwos.validation import make_pydantic_args_validator, pydantic_args_validator
 from rust_dwos._native import StoreError
 from rust_dwos.dbos import (
     DBOS,
@@ -24,6 +25,7 @@ from rust_dwos.errors import (
     DBOSStepTimeoutError,
     DBOSUnexpectedStepError,
     DBOSWorkflowCancelledError,
+    DBOSWorkflowIDInUseError,
     MaxRecoveryAttemptsExceededError,
 )
 
@@ -42,6 +44,7 @@ __all__ = [
     "DBOSStepTimeoutError",
     "DBOSUnexpectedStepError",
     "DBOSWorkflowCancelledError",
+    "DBOSWorkflowIDInUseError",
     "MaxRecoveryAttemptsExceededError",
     "Queue",
     "SetWorkflowID",
@@ -54,4 +57,6 @@ __all__ = [
     "WorkflowStatusString",
     "assert_current_dbos_context",
     "get_workflow_start_options",
+    "make_pydantic_args_validator",
+    "pydantic_args_validator",
 ]

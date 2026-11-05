@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use dwos_core::{Error, Outcome, Started, Status, StepRecord, Store};
+use dwos_core::{Error, Outcome, ReusePolicy, Started, Status, StepRecord, Store, WorkflowOptions};
 use sqlx::Connection;
 use sqlx::mysql::MySqlConnection;
 use sqlx::postgres::PgConnection;
@@ -109,6 +109,58 @@ all_dbs!(same_id_with_another_name_conflicts, backend, {
         "{error:?}"
     );
     assert_eq!(store.get_workflow("a").await.unwrap().unwrap().name, "wf");
+});
+
+all_dbs!(reject_reuse_policy_refuses_an_existing_id, backend, {
+    let (_db, store) = setup(backend).await;
+    let reject = WorkflowOptions {
+        reuse: ReusePolicy::Reject,
+        ..WorkflowOptions::default()
+    };
+    start(&store, &workflow("a", LONG)).await;
+    let error = store
+        .start_workflow_with(&workflow("a", LONG), &reject)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::WorkflowIdInUse { ref status, ref name, .. } if status == "PENDING" && name == "wf"),
+        "{error:?}"
+    );
+    assert_eq!(store.get_workflow("a").await.unwrap().unwrap().input, "{}");
+
+    let mut other = workflow("a", LONG);
+    other.name = "other";
+    let mismatch = store
+        .start_workflow_with(&other, &reject)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(mismatch, Error::WorkflowIdInUse { ref name, .. } if name == "wf"),
+        "{mismatch:?}"
+    );
+
+    store
+        .finish_workflow(
+            &start(&store, &workflow("done", LONG)).await,
+            &Outcome::Success("1".to_owned()),
+        )
+        .await
+        .unwrap();
+    let finished = store
+        .start_workflow_with(&workflow("done", LONG), &reject)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(finished, Error::WorkflowIdInUse { ref status, .. } if status == "SUCCESS"),
+        "{finished:?}"
+    );
+    let Started::Owned(_, _) = store
+        .start_workflow_with(&workflow("fresh", LONG), &reject)
+        .await
+        .unwrap()
+    else {
+        panic!("a new id still starts");
+    };
 });
 
 all_dbs!(ids_are_case_sensitive, backend, {

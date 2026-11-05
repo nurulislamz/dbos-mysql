@@ -537,3 +537,215 @@ all_dbs!(
         ));
     }
 );
+
+fn with_parent<'a>(id: &'a str, parent: &'a Run) -> Begin<'a> {
+    let mut child = begin(Some(id));
+    child.parent = Some(dwos_core::ParentStep {
+        run: parent,
+        step_id: parent.next_step_id(),
+    });
+    child
+}
+
+async fn must_run(engine: &Engine, begin: Begin<'_>) -> Run {
+    match engine.begin(begin).await.unwrap() {
+        Begun::Run(run) => run,
+        other => panic!("expected to run, got {other:?}"),
+    }
+}
+
+all_dbs!(cancel_children_reaches_descendants_only, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    let parent = begin_run(&engine, "p").await;
+    let child = must_run(&engine, with_parent("c", &parent)).await;
+    must_run(&engine, with_parent("g", &child)).await;
+    engine
+        .finish(&child, Outcome::Success("ok".to_owned()))
+        .await
+        .unwrap();
+    begin_run(&engine, "other").await;
+
+    let alone = begin_run(&engine, "alone").await;
+    must_run(&engine, with_parent("kept", &alone)).await;
+    engine
+        .cancel_workflows(&["alone".to_owned()], false)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("alone").await.unwrap().status,
+        Status::Cancelled
+    );
+    assert_eq!(
+        engine.get_status("kept").await.unwrap().status,
+        Status::Pending
+    );
+
+    engine
+        .cancel_workflows(&["p".to_owned()], true)
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.get_status("p").await.unwrap().status,
+        Status::Cancelled
+    );
+    assert_eq!(
+        engine.get_status("c").await.unwrap().status,
+        Status::Success
+    );
+    assert_eq!(
+        engine.get_status("g").await.unwrap().status,
+        Status::Cancelled
+    );
+    assert_eq!(
+        engine.get_status("other").await.unwrap().status,
+        Status::Pending
+    );
+});
+
+all_dbs!(resume_onto_a_queue_waits_for_admission, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    engine
+        .ensure_queue("q", std::num::NonZeroU32::new(1).unwrap())
+        .await
+        .unwrap();
+    engine
+        .ensure_queue("other", std::num::NonZeroU32::new(1).unwrap())
+        .await
+        .unwrap();
+    begin_run(&engine, "a").await;
+    engine.cancel_workflow("a").await.unwrap();
+    let error = engine
+        .resume_workflows(&["a".to_owned()], &names(), Some("missing"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::QueueNotFound(ref name) if name == "missing"),
+        "{error:?}"
+    );
+    assert_eq!(
+        engine.get_status("a").await.unwrap().status,
+        Status::Cancelled
+    );
+
+    assert!(
+        engine
+            .resume_workflows(&["a".to_owned()], &names(), Some("q"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let row = engine.get_status("a").await.unwrap();
+    assert_eq!(row.status, Status::Enqueued);
+    assert_eq!(row.queue_name.as_deref(), Some("q"));
+    assert!(
+        engine
+            .store()
+            .claim_one("a", &names(), LONG)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    assert!(
+        engine
+            .resume_workflows(&["a".to_owned()], &names(), Some("other"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    assert_eq!(
+        engine
+            .claim_queue("other", &names())
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
+            .lease
+            .workflow_id,
+        "a"
+    );
+
+    let done = begin_run(&engine, "done").await;
+    engine
+        .finish(&done, Outcome::Success("1".to_owned()))
+        .await
+        .unwrap();
+    assert!(
+        engine
+            .resume_workflows(&["done".to_owned()], &names(), Some("q"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        engine.get_status("done").await.unwrap().status,
+        Status::Success
+    );
+});
+
+all_dbs!(bulk_resume_claims_each_row_or_none, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    begin_run(&engine, "a").await;
+    begin_run(&engine, "b").await;
+    engine
+        .cancel_workflows(&["a".to_owned(), "b".to_owned()], false)
+        .await
+        .unwrap();
+    let claims = engine
+        .resume_workflows(&["a".to_owned(), "b".to_owned()], &names(), None)
+        .await
+        .unwrap();
+    let mut ids: Vec<_> = claims
+        .iter()
+        .map(|claim| claim.lease.workflow_id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["a", "b"]);
+
+    begin_run(&engine, "c").await;
+    engine.cancel_workflow("c").await.unwrap();
+    let error = engine
+        .resume_workflows(&["c".to_owned(), "missing".to_owned()], &names(), None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::WorkflowNotFound(ref ids) if ids.contains("missing")),
+        "{error:?}"
+    );
+    assert_eq!(
+        engine.get_status("c").await.unwrap().status,
+        Status::Cancelled
+    );
+});
+
+all_dbs!(
+    await_result_interval_does_not_delay_a_finished_workflow,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db, config()).await;
+        let run = begin_run(&engine, "a").await;
+        engine
+            .finish(&run, Outcome::Success("1".to_owned()))
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let result = engine
+            .await_result_within("a", Some(Duration::from_secs(30)))
+            .await
+            .unwrap();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(result.outcome, FinalOutcome::Success("1".to_owned()));
+        assert!(matches!(
+            engine
+                .await_result_within("a", Some(Duration::ZERO))
+                .await
+                .unwrap_err(),
+            Error::InvalidConfig(_)
+        ));
+    }
+);

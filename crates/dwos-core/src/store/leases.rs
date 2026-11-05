@@ -96,11 +96,12 @@ impl Store {
             tx.commit().await?;
             return Ok(claimed);
         }
+        let (compatible, binds) = self.compatible_clause();
         let select_sql = self.sql(&format!(
             "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms, {{NOW}} AS now_ms FROM workflow_status \
              WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND NOT EXISTS \
              (SELECT 1 FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
-             AND serialization IN ({}) AND name IN ({}) \
+             AND serialization IN ({}) AND name IN ({}){compatible} \
              ORDER BY claim_after, workflow_uuid LIMIT ? {}",
             self.readable_formats(),
             vec!["?"; names.len()].join(", "),
@@ -109,6 +110,9 @@ impl Store {
         let mut select = sqlx::query(select_sql);
         for name in names {
             select = select.bind(name.as_str());
+        }
+        for bind in binds {
+            select = select.bind(bind);
         }
         let rows = select.bind(i64::from(limit)).fetch_all(&mut *tx).await?;
 
@@ -169,11 +173,13 @@ impl Store {
         .await?;
         sqlx::query(self.sql(
             "UPDATE workflow_status SET lease_token = ?, recovery_attempts = ?, \
-             claim_after = {NOW} + ?, updated_at = {NOW} WHERE workflow_uuid = ?",
+             claim_after = {NOW} + ?, updated_at = {NOW}, started_at_epoch_ms = COALESCE(started_at_epoch_ms, {NOW}), \
+             executor_id = COALESCE(?, executor_id) WHERE workflow_uuid = ?",
         ))
         .bind(request_token)
         .bind(i64::from(attempts))
         .bind(millis(duration))
+        .bind(self.identity.executor_id.as_deref())
         .bind(workflow_id.as_str())
         .execute(&mut **tx)
         .await?;

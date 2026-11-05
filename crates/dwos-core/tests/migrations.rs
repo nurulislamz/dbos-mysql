@@ -90,11 +90,41 @@ fn current_init(backend: Backend) -> &'static str {
     }
 }
 
+/// What 001 no longer holds, because a shipped file is never edited.
+fn files_after_init(backend: Backend) -> [&'static str; 6] {
+    match backend {
+        Backend::Sqlite => [
+            include_str!("../schema/sqlite/007_workflow_columns.sql"),
+            include_str!("../schema/sqlite/008_step_started_at.sql"),
+            include_str!("../schema/sqlite/009_queue_entry_columns.sql"),
+            include_str!("../schema/sqlite/010_queue_columns.sql"),
+            include_str!("../schema/sqlite/011_workflow_attributes.sql"),
+            include_str!("../schema/sqlite/012_workflow_indexes.sql"),
+        ],
+        Backend::MySql => [
+            include_str!("../schema/mysql/007_workflow_columns.sql"),
+            include_str!("../schema/mysql/008_step_started_at.sql"),
+            include_str!("../schema/mysql/009_queue_entry_columns.sql"),
+            include_str!("../schema/mysql/010_queue_columns.sql"),
+            include_str!("../schema/mysql/011_workflow_attributes.sql"),
+            include_str!("../schema/mysql/012_workflow_indexes.sql"),
+        ],
+        Backend::Postgres => [
+            include_str!("../schema/postgres/007_workflow_columns.sql"),
+            include_str!("../schema/postgres/008_step_started_at.sql"),
+            include_str!("../schema/postgres/009_queue_entry_columns.sql"),
+            include_str!("../schema/postgres/010_queue_columns.sql"),
+            include_str!("../schema/postgres/011_workflow_attributes.sql"),
+            include_str!("../schema/postgres/012_workflow_indexes.sql"),
+        ],
+    }
+}
+
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6],
-        Backend::MySql => vec![1, 2, 3, 4, 5, 6],
-        Backend::Postgres => vec![1, 2],
+        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12],
+        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12],
     }
 }
 
@@ -655,7 +685,7 @@ async fn recorded(pool: &AnyPool) -> Vec<i64> {
 
 /// The structure of the engine's tables, in a form a fresh database and an upgraded one can share.
 async fn fingerprint(pool: &AnyPool, backend: Backend) -> Vec<String> {
-    const TABLES: [&str; 8] = [
+    const TABLES: [&str; 9] = [
         "workflow_status",
         "operation_outputs",
         "notifications",
@@ -664,6 +694,7 @@ async fn fingerprint(pool: &AnyPool, backend: Backend) -> Vec<String> {
         "workflow_event_history",
         "workflow_queues",
         "workflow_queue_entries",
+        "workflow_attributes",
     ];
     let mut lines = Vec::new();
     match backend {
@@ -858,6 +889,12 @@ all_dbs!(an_empty_database_gets_the_current_shape, backend, {
         .execute(bare.pool())
         .await
         .unwrap();
+    for file in files_after_init(backend) {
+        sqlx::raw_sql(AssertSqlSafe(file.to_owned()))
+            .execute(bare.pool())
+            .await
+            .unwrap();
+    }
     // The bare database has no version table, which fingerprints ignore except on Postgres.
     sqlx::raw_sql("CREATE TABLE dwos_schema_migrations (version BIGINT NOT NULL PRIMARY KEY)")
         .execute(bare.pool())
@@ -1327,7 +1364,8 @@ all_dbs!(
         let (db, store, seeded) = old_database(backend, shape(backend, "5ff4d0c")).await;
         let identity = match backend {
             Backend::Sqlite => {
-                "SELECT rootpage || ':' || sql FROM sqlite_master WHERE name = 'workflow_status'"
+                // A rebuild moves the root page. Added columns change `sql`, and that is not a rewrite.
+                "SELECT CAST(rootpage AS TEXT) FROM sqlite_master WHERE name = 'workflow_status'"
             }
             Backend::MySql => {
                 "SELECT CAST(GROUP_CONCAT(TABLE_ID ORDER BY NAME) AS CHAR) FROM information_schema.INNODB_TABLES \

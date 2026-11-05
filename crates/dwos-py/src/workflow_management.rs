@@ -16,38 +16,82 @@ fn statuses(values: Option<Vec<String>>) -> PyResult<Option<Vec<Status>>> {
 
 #[pymethods]
 impl PyEngine {
-    #[pyo3(signature = (workflow_id, *, blocking=false))]
+    #[pyo3(signature = (workflow_id, cancel_children=false, *, blocking=false))]
     fn cancel_workflow<'py>(
         &self,
         py: Python<'py>,
         workflow_id: String,
+        cancel_children: bool,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
-            engine.cancel_workflow(&workflow_id).await.map_err(to_py)
+            engine
+                .cancel_workflows(&[workflow_id], cancel_children)
+                .await
+                .map_err(to_py)
         })
     }
 
-    #[pyo3(signature = (workflow_id, names, *, blocking=false))]
+    #[pyo3(signature = (workflow_ids, cancel_children=false, *, blocking=false))]
+    fn cancel_workflows<'py>(
+        &self,
+        py: Python<'py>,
+        workflow_ids: Vec<String>,
+        cancel_children: bool,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .cancel_workflows(&workflow_ids, cancel_children)
+                .await
+                .map_err(to_py)
+        })
+    }
+
+    #[pyo3(signature = (workflow_id, names, queue_name=None, *, blocking=false))]
     fn resume_workflow<'py>(
         &self,
         py: Python<'py>,
         workflow_id: String,
         names: Vec<String>,
+        queue_name: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
         dispatch(py, blocking, async move {
             Ok(
                 match engine
-                    .resume_workflow(&workflow_id, &names)
+                    .resume_workflows(&[workflow_id], &names, queue_name.as_deref())
                     .await
                     .map_err(to_py)?
+                    .into_iter()
+                    .next()
                 {
                     Some(claim) => Some(claims_to_py(vec![claim])?.remove(0)),
                     None => None,
                 },
+            )
+        })
+    }
+
+    #[pyo3(signature = (workflow_ids, names, queue_name=None, *, blocking=false))]
+    fn resume_workflows<'py>(
+        &self,
+        py: Python<'py>,
+        workflow_ids: Vec<String>,
+        names: Vec<String>,
+        queue_name: Option<String>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            claims_to_py(
+                engine
+                    .resume_workflows(&workflow_ids, &names, queue_name.as_deref())
+                    .await
+                    .map_err(to_py)?,
             )
         })
     }

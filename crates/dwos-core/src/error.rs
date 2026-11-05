@@ -28,6 +28,12 @@ pub enum Error {
         recorded_name: String,
         requested_name: String,
     },
+    #[error("Workflow ID {workflow_id} is already in use by workflow {name} with status {status}.")]
+    WorkflowIdInUse {
+        workflow_id: String,
+        status: String,
+        name: String,
+    },
     #[error(
         "during workflow {workflow_id} step {step_id}, {recorded_name} was recorded when {expected_name} was expected. Check that your workflow is deterministic"
     )]

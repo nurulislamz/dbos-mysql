@@ -10,6 +10,10 @@ pub const PY_PICKLE: &str = "py_pickle";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {
     Pending,
+    /// Waiting on a queue and never admitted. Derived from the row, which stays `PENDING`.
+    Enqueued,
+    /// Like `Enqueued`, but its start time has not come.
+    Delayed,
     Success,
     Error,
     MaxRecoveryAttemptsExceeded,
@@ -20,6 +24,8 @@ impl Status {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "PENDING",
+            Self::Enqueued => "ENQUEUED",
+            Self::Delayed => "DELAYED",
             Self::Success => "SUCCESS",
             Self::Error => "ERROR",
             Self::MaxRecoveryAttemptsExceeded => "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
@@ -30,6 +36,8 @@ impl Status {
     pub fn parse(value: &str) -> Result<Self, Error> {
         match value {
             "PENDING" => Ok(Self::Pending),
+            "ENQUEUED" => Ok(Self::Enqueued),
+            "DELAYED" => Ok(Self::Delayed),
             "SUCCESS" => Ok(Self::Success),
             "ERROR" => Ok(Self::Error),
             "MAX_RECOVERY_ATTEMPTS_EXCEEDED" => Ok(Self::MaxRecoveryAttemptsExceeded),
@@ -75,12 +83,67 @@ pub struct Workflow {
     pub serialization: String,
     pub timeout_ms: Option<i64>,
     pub deadline_epoch_ms: Option<i64>,
+    pub started_at_ms: Option<i64>,
+    pub application_version: Option<String>,
+    pub application_name: Option<String>,
+    pub executor_id: Option<String>,
+    pub forked_from: Option<String>,
+    pub was_forked_from: bool,
+    pub schedule_name: Option<String>,
+    pub class_name: Option<String>,
+    pub config_name: Option<String>,
+    pub authenticated_user: Option<String>,
+    pub assumed_role: Option<String>,
+    pub authenticated_roles: Option<String>,
+    pub queue_name: Option<String>,
+    pub priority: Option<i64>,
+    pub queue_partition_key: Option<String>,
+    pub deduplication_id: Option<String>,
+    pub dequeued_at_ms: Option<i64>,
+    pub delay_until_ms: Option<i64>,
+}
+
+/// Row fields a start can set. A version or application left `None` comes from the store's identity.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct WorkflowOptions {
+    pub application_version: Option<String>,
+    pub application_name: Option<String>,
+    pub schedule_name: Option<String>,
+    pub class_name: Option<String>,
+    pub config_name: Option<String>,
+    pub authenticated_user: Option<String>,
+    pub assumed_role: Option<String>,
+    pub authenticated_roles: Option<String>,
+    /// What to do when the workflow id already has a row.
+    pub reuse: ReusePolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReusePolicy {
+    /// An existing workflow id returns the stored row.
+    #[default]
+    ReturnExisting,
+    /// An existing workflow id is an error. A new id still starts.
+    Reject,
+}
+
+impl ReusePolicy {
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        match value {
+            "return-existing" => Ok(Self::ReturnExisting),
+            "reject" => Ok(Self::Reject),
+            other => Err(Error::InvalidConfig(format!(
+                "Invalid workflow_id_reuse_policy {other}. Must be either 'return-existing' or 'reject'."
+            ))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Started {
     Owned(Lease, Option<i64>),
-    Existing(Workflow),
+    // `Workflow` is much larger than `Lease`. Boxing keeps the two arms the same size.
+    Existing(Box<Workflow>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -114,7 +177,7 @@ pub enum Outcome {
     Error(String),
 }
 
-/// Filters for `list_workflows`. Queue, fork, auth and app-version fields are not stored.
+/// Filters for `list_workflows`. Queue, fork, auth and app-version fields are stored but not filterable yet.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkflowFilter {
     pub workflow_ids: Option<Vec<String>>,
@@ -157,6 +220,14 @@ pub(crate) fn new_token() -> String {
 
 pub(crate) fn attempts_exhausted(attempts: u32, max_attempts: u32) -> bool {
     attempts > max_attempts.saturating_add(1)
+}
+
+pub(crate) fn id_in_use(existing: &Workflow) -> Error {
+    Error::WorkflowIdInUse {
+        workflow_id: existing.workflow_id.clone(),
+        status: existing.status.as_str().to_owned(),
+        name: existing.name.clone(),
+    }
 }
 
 pub(crate) fn check_workflow_name(new: &NewWorkflow<'_>, recorded_name: &str) -> Result<(), Error> {

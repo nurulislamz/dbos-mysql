@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use dwos_core::{
     ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Ended, Engine, EngineConfig,
-    Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, Run,
-    StepAttempts, StepDecision, StepExpiry, StepPolicy, StepWatch, Workflow, WorkflowResult,
-    pickle_from_serializer, recovery_limit, recovery_limit_of,
+    Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, ReusePolicy,
+    Run, StepAttempts, StepDecision, StepExpiry, StepPolicy, StepWatch, Workflow, WorkflowOptions,
+    WorkflowResult, pickle_from_serializer, recovery_limit, recovery_limit_of,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3::create_exception;
@@ -27,11 +27,24 @@ create_exception!(_native, DBOSStepNondeterminismError, DBOSException);
 create_exception!(_native, DBOSNonExistentWorkflowError, DBOSException);
 create_exception!(_native, DBOSLeaseLostError, DBOSException);
 create_exception!(_native, DBOSWorkflowCancelledError, DBOSException);
+create_exception!(_native, DBOSWorkflowIDInUseError, DBOSException);
 
 pub(crate) fn to_py(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
         Error::ConflictingWorkflow { .. } => DBOSConflictingWorkflowError::new_err(message),
+        Error::WorkflowIdInUse {
+            workflow_id,
+            status,
+            name,
+        } => Python::attach(|py| {
+            let error = DBOSWorkflowIDInUseError::new_err(message);
+            let value = error.value(py);
+            let _ = value.setattr("workflow_id", workflow_id);
+            let _ = value.setattr("workflow_status", status);
+            let _ = value.setattr("workflow_name", name);
+            error
+        }),
         Error::UnexpectedStep { .. } | Error::StepKindMismatch { .. } => {
             DBOSUnexpectedStepError::new_err(message)
         }
@@ -416,7 +429,7 @@ impl PyEngine {
         self.0.close();
     }
 
-    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, *, blocking=false))]
+    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn begin<'py>(
         &self,
@@ -429,6 +442,7 @@ impl PyEngine {
         in_step: bool,
         timeout_ms: Option<i64>,
         ignore_propagated_deadline: bool,
+        reuse_policy: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
@@ -437,21 +451,25 @@ impl PyEngine {
         let parent_step_id = parent
             .as_ref()
             .and_then(|run| run.step_id_unless_in_step(in_step));
+        let options = start_options(reuse_policy.as_deref())?;
         dispatch(py, blocking, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
                 _ => None,
             };
             let begun = engine
-                .begin(Begin {
-                    name: &name,
-                    input: &input,
-                    max_recovery_attempts: recovery_limit(max_recovery_attempts),
-                    workflow_id: workflow_id.as_deref(),
-                    parent: parent_step,
-                    timeout_ms,
-                    ignore_propagated_deadline,
-                })
+                .begin_with(
+                    Begin {
+                        name: &name,
+                        input: &input,
+                        max_recovery_attempts: recovery_limit(max_recovery_attempts),
+                        workflow_id: workflow_id.as_deref(),
+                        parent: parent_step,
+                        timeout_ms,
+                        ignore_propagated_deadline,
+                    },
+                    &options,
+                )
                 .await
                 .map_err(to_py)?;
             Python::attach(|py| {
@@ -580,14 +598,20 @@ impl PyEngine {
         PyActiveRun(Arc::new(self.0.keep_lease(&run.0)))
     }
 
+    #[pyo3(signature = (workflow_id, polling_interval_sec=None))]
     fn await_result<'py>(
         &self,
         py: Python<'py>,
         workflow_id: String,
+        polling_interval_sec: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();
+        let interval = poll_interval(polling_interval_sec)?;
         future_into_py(py, async move {
-            let result = engine.await_result(&workflow_id).await.map_err(to_py)?;
+            let result = engine
+                .await_result_within(&workflow_id, interval)
+                .await
+                .map_err(to_py)?;
             Ok(PyResult_::from(result))
         })
     }
@@ -701,5 +725,31 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "DBOSWorkflowCancelledError",
         py.get_type::<DBOSWorkflowCancelledError>(),
     )?;
+    m.add(
+        "DBOSWorkflowIDInUseError",
+        py.get_type::<DBOSWorkflowIDInUseError>(),
+    )?;
     Ok(())
+}
+
+fn poll_interval(seconds: Option<f64>) -> PyResult<Option<Duration>> {
+    let Some(seconds) = seconds else {
+        return Ok(None);
+    };
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(to_py(Error::InvalidConfig(
+            "polling_interval_sec must be positive".to_owned(),
+        )));
+    }
+    Ok(Some(
+        Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX),
+    ))
+}
+
+fn start_options(reuse_policy: Option<&str>) -> PyResult<WorkflowOptions> {
+    let mut options = WorkflowOptions::default();
+    if let Some(policy) = reuse_policy {
+        options.reuse = ReusePolicy::parse(policy).map_err(to_py)?;
+    }
+    Ok(options)
 }

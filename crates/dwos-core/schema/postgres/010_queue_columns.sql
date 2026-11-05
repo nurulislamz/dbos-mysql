@@ -1,0 +1,10 @@
+ALTER TABLE workflow_queues ADD COLUMN worker_concurrency BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN rate_limit BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN rate_period_ms BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN partition_concurrency BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN partition_worker_concurrency BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN partition_rate_limit BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN partition_rate_period_ms BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN polling_interval_ms BIGINT;
+ALTER TABLE workflow_queues ADD COLUMN application_name TEXT;
+ALTER TABLE workflow_queues ADD COLUMN deleted BIGINT NOT NULL DEFAULT 0;
