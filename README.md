@@ -66,7 +66,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Child workflows | ✅ | ✅ |
 | `start_workflow`, `retrieve_workflow`, handles | ✅ | ✅ `get_result(polling_interval_sec=)` sets the longest wait between polls. Omitting it keeps the 250 ms cap |
 | `list_workflows`, `list_workflow_steps` | ✅ | ✅ Queue, version, fork and user filters; step output and pagination options. No `shard_key` |
-| Workflow attributes | ✅ | 🚧 Direct starts, status reads and updates work; queued starts do not yet save initial attributes |
+| Workflow attributes | ✅ | ✅ `SetWorkflowAttributes` and `update_workflow_attributes` work for direct and queued starts, status reads, and replacing, clearing and merging. Children do not inherit initial attributes |
 | Crash recovery | ✅ | ✅ Crash tests pass on all 3 on the newest code |
 | Recovery attempt limit | ✅ | ✅ |
 
@@ -78,8 +78,8 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | `send`, `recv`, `send_bulk` | ✅ | ✅ Bulk sends are atomic; sending to forks is not supported |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
-| Queues | ✅ | ✅ FIFO, with one global concurrency limit. The latest registration with a limit sets it, and registering with none keeps the stored limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
-| Queue rate limits, priorities, partitions | ✅ | 📅 Deferred |
+| Queues | ✅ | ✅ FIFO with deduplication, priority, delayed start, a global and per-worker concurrency limit, rate limits and partitions. `list_queues`, `delete_queue`, `register_queue(on_conflict=)`, `SetEnqueueOptions`, `enqueue_workflow_with_options`, `DBOS.listen_queues` and the runtime setters all work. The latest registration with a limit sets it, and registering with none keeps the stored limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
+| Queue rate limits, priorities, partitions | ✅ | ✅ Rate limits per queue and per partition, priorities, and `queue_partition_key` |
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |
 | Deleting old workflows | ✅ | ✅ `delete_workflow`, `delete_workflows` and `delete_finished_workflows`. Pending workflows and children of pending workflows stay. A deleted ID can run again |
