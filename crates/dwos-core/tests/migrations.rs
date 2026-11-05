@@ -71,7 +71,7 @@ fn shape(backend: Backend, commit: &str) -> &'static str {
         .1
 }
 
-/// The newest shape with old tables, or the oldest shape with the new ones.
+/// The oldest shape with the current table names: the old CHECK and, on MySQL, unsigned counters.
 fn oldest_current_named(backend: Backend) -> &'static str {
     shape(
         backend,

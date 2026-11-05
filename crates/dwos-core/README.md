@@ -36,7 +36,7 @@ Connections apply bounded lock waits and strict settings. `EngineConfig::read_on
 | Postgres | Replaces the status CHECK | Blocks reads and writes on `workflow_status` during a scan of the table, with no rewrite. If it waits 10 seconds for the lock, the start fails and the next start retries |
 | SQLite | Rebuilds `workflow_status` in one transaction, with foreign keys off so that children survive | Blocks writers for the rebuild. Readers continue in WAL mode |
 
-Other starters wait for up to one hour for their turn. Upgrading a large MySQL database in a maintenance window is the safe choice.
+Other starters wait for up to one hour for their turn. Upgrade a large MySQL database in a maintenance window: on MySQL 8.4.11 with other load running, one rebuild of an 824 MB, 400,000-row table took 59 seconds. A write made during it waited 57 seconds, and a read did not wait.
 
 Postgres and SQLite run each migration in one transaction, so a failure leaves that migration undone. MySQL DDL commits on its own, so a crash can stop between steps; the next start checks each step by its effect and carries on. A failed upgrade returns its error, keeps the rows, and is retried by the next start.
 
