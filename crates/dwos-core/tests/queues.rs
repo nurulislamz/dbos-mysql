@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use dwos_core::{
-    Begin, Begun, Claimed, Engine, EngineConfig, Error, Outcome, ParentStep, ReusePolicy, Run,
-    Status, StepDecision, WorkflowOptions,
+    Begin, Begun, Claimed, Engine, EngineConfig, Error, Identity, Outcome, ParentStep, ReusePolicy,
+    Run, Status, StepDecision, Store, WorkflowOptions,
 };
 use sqlx::Connection;
 
@@ -42,6 +42,36 @@ fn run(claimed: Claimed) -> Run {
         claimed.deadline_epoch_ms,
     )
 }
+
+all_dbs!(queue_claim_filters_application_identity, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 3).await;
+    for id in ["wrong-version", "wrong-app", "matching"] {
+        engine.enqueue("q", begin(id)).await.unwrap();
+    }
+    let mut connection = sqlx::AnyConnection::connect(&db.url).await.unwrap();
+    for (id, version, app) in [
+        ("wrong-version", "v2", "app"),
+        ("wrong-app", "v1", "other"),
+        ("matching", "v1", "app"),
+    ] {
+        sqlx::query("UPDATE workflow_status SET application_version = ?, application_name = ? WHERE workflow_uuid = ?")
+            .bind(version).bind(app).bind(id).execute(&mut connection).await.unwrap();
+    }
+    connection.close().await.unwrap();
+    let store = Store::connect(&db.url)
+        .await
+        .unwrap()
+        .with_identity(Identity {
+            application_version: Some("v1".into()),
+            application_name: Some("app".into()),
+            ..Identity::default()
+        });
+    let claims = store.claim_queue("q", &names(), 3, LONG).await.unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].lease.workflow_id, "matching");
+});
 
 async fn queue(engine: &Engine, concurrency: u32) {
     engine

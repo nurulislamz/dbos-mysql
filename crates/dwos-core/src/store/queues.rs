@@ -382,6 +382,7 @@ impl Store {
         })?;
         let slots = concurrency.saturating_sub(occupied).min(limit);
         let mut claimed = Vec::new();
+        let (compatible, binds) = self.compatible_clause();
         while claimed.len() < slots as usize {
             // The queue row lock already serializes claimers, so this read takes no row locks:
             // MySQL's ordered locking scan can keep unrelated live owners locked until commit.
@@ -390,7 +391,7 @@ impl Store {
                      JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid \
                      WHERE workflow_queue_entries.queue_name = ? AND workflow_status.status = 'PENDING' \
                      AND workflow_status.lease_token IS NULL AND workflow_status.claim_after <= ? \
-                     AND workflow_status.serialization IN ({}) AND workflow_status.name IN ({}) \
+                     AND workflow_status.serialization IN ({}) AND workflow_status.name IN ({}){compatible} \
                      ORDER BY workflow_queue_entries.sequence LIMIT ?",
                     self.readable_formats(),
                     vec!["?"; names.len()].join(", "),
@@ -398,6 +399,9 @@ impl Store {
             let mut read = sqlx::query_scalar(read_sql).bind(queue).bind(cutoff);
             for name in names {
                 read = read.bind(name.as_str());
+            }
+            for bind in &binds {
+                read = read.bind(*bind);
             }
             let wanted = slots as usize - claimed.len();
             let found: Vec<String> = read.bind(wanted as i64).fetch_all(&mut *tx).await?;
