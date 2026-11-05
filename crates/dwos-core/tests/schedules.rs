@@ -213,3 +213,37 @@ all_dbs!(an_invalid_cron_is_rejected_before_it_is_stored, backend, {
         .unwrap();
     assert_eq!(count, 0);
 });
+
+all_dbs!(
+    a_deleted_schedule_stops_firing_and_keeps_its_runs,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = Engine::connect(&db.url, config()).await.unwrap();
+        engine
+            .ensure_queue("system-ops", NonZeroU32::new(2).unwrap())
+            .await
+            .unwrap();
+        engine
+            .ensure_schedule(schedule(
+                "career-discovery-1",
+                "DiscoveryRunWorkflow",
+                "* * * * *",
+                "system-ops",
+                "{}",
+                100,
+            ))
+            .await
+            .unwrap();
+        assert!(engine.fire_schedules().await.unwrap().is_empty());
+        rewind(&engine, "career-discovery-1").await;
+        assert_eq!(engine.fire_schedules().await.unwrap().len(), 1);
+
+        engine.delete_schedule("career-discovery-1").await.unwrap();
+        assert!(engine.fire_schedules().await.unwrap().is_empty());
+        assert_eq!(scheduled_rows(&engine).await, 1);
+
+        // Jobby deletes without checking first, so a repeat must succeed.
+        engine.delete_schedule("career-discovery-1").await.unwrap();
+    }
+);

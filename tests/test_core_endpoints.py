@@ -227,6 +227,7 @@ async def test_schedule_arms_without_firing(engine: _native.Engine) -> None:
         None,
     )
     assert await engine.fire_schedules() == []
+    await engine.delete_schedule("daily-job-digest")
 
 
 def test_step_policy() -> None:

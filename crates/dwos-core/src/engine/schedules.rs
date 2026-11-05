@@ -7,6 +7,10 @@ impl Engine {
         self.store.ensure_schedule(schedule).await
     }
 
+    pub async fn delete_schedule(&self, name: &str) -> Result<(), Error> {
+        self.store.delete_schedule(name).await
+    }
+
     /// Fires every schedule once. A new schedule is armed at the database clock and does not
     /// run a tick that has already passed. After that, only the latest due tick is enqueued,
     /// and it is skipped while an earlier run of that schedule is still pending.

@@ -46,6 +46,19 @@ impl PyEngine {
         })
     }
 
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn delete_schedule<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine.delete_schedule(&name).await.map_err(to_py)
+        })
+    }
+
     #[pyo3(signature = (*, blocking=false))]
     fn fire_schedules<'py>(&self, py: Python<'py>, blocking: bool) -> PyResult<Bound<'py, PyAny>> {
         let engine = self.0.clone();

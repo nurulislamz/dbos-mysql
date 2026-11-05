@@ -78,6 +78,19 @@ impl Store {
         Ok(())
     }
 
+    /// Removes a schedule. A missing name is not an error, and runs already started keep going.
+    pub async fn delete_schedule(&self, name: &str) -> Result<(), Error> {
+        self.attempt(|| async {
+            sqlx::query(self.sql("DELETE FROM workflow_schedules WHERE schedule_name = ?"))
+                .bind(name)
+                .execute(&self.pool)
+                .await
+                .map_err(Error::from)
+        })
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn list_schedule_names(&self) -> Result<Vec<String>, Error> {
         self.attempt(|| async {
             sqlx::query_scalar(

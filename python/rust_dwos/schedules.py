@@ -5,7 +5,7 @@ from typing import Any
 
 from rust_dwos.errors import DBOSException
 
-_PENDING: list[tuple[str, Any, str, str]] = []
+_PENDING: list[tuple[str, Any, str, str, tuple[Any, ...], dict[str, Any]]] = []
 
 
 def _dbos() -> Any:
@@ -17,19 +17,19 @@ def _dbos() -> Any:
 def flush(instance: Any) -> None:
     pending = list(_PENDING)
     _PENDING.clear()
-    for name, info, cron, queue in pending:
-        install(instance, name, info, cron, queue)
+    for name, info, cron, queue, args, kwargs in pending:
+        install(instance, name, info, cron, queue, args, kwargs)
 
 
 def clear() -> None:
     _PENDING.clear()
 
 
-def install(instance: Any, name: str, info: Any, cron: str, queue: str) -> None:
+def install(instance: Any, name: str, info: Any, cron: str, queue: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
     try:
-        encoded = info.codec.encode_input((), {}, instance._engine.serialization)
+        encoded = info.codec.encode_input(args, kwargs, instance._engine.serialization)
     except TypeError as error:
-        raise DBOSException(f"Scheduled workflow {info.name} must take no arguments") from error
+        raise DBOSException(f"Schedule arguments do not fit workflow {info.name}: {error}") from error
     instance._blocking(
         instance._engine.ensure_schedule,
         name,
@@ -42,25 +42,41 @@ def install(instance: Any, name: str, info: Any, cron: str, queue: str) -> None:
     )
 
 
-def remember(name: str, info: Any, cron: str, queue: str) -> None:
+def remember(name: str, info: Any, cron: str, queue: str, args: tuple[Any, ...] = (), kwargs: dict[str, Any] | None = None) -> None:
+    kwargs = kwargs or {}
     module = _dbos()
     instance = module._instance
     if instance is not None and instance._engine is not None:
-        install(instance, name, info, cron, queue)
+        install(instance, name, info, cron, queue, args, kwargs)
         return
-    _PENDING.append((name, info, cron, queue))
+    _PENDING.append((name, info, cron, queue, args, kwargs))
 
 
 class Schedules:
     @classmethod
-    def register_schedule(cls, name: str, workflow: Callable[..., Any], cron: str, *, queue: str) -> None:
+    def register_schedule(
+        cls,
+        name: str,
+        workflow: Callable[..., Any],
+        cron: str,
+        *,
+        queue: str,
+        args: tuple[Any, ...] = (),
+        kwargs: dict[str, Any] | None = None,
+    ) -> None:
         """Register a UTC cron that enqueues `workflow` on `queue`.
 
-        The workflow takes no arguments. A new schedule does not run a tick that has already
+        Every run gets the same `args` and `kwargs`. A new schedule does not run a tick that has already
         passed. Later, only the latest missed tick is enqueued, and that tick is skipped while
         a previous run of this schedule is still pending. The same definition replaces the old one.
         """
-        remember(name, _dbos()._info_of(workflow), cron, queue)
+        remember(name, _dbos()._info_of(workflow), cron, queue, args, kwargs)
+
+    @classmethod
+    def delete_schedule(cls, name: str) -> None:
+        """Stop a schedule. A missing name is not an error, and runs already started keep going."""
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.delete_schedule, name)
 
     @classmethod
     def scheduled(cls, cron: str, *, queue: str, name: str | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
