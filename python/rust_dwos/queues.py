@@ -287,6 +287,17 @@ def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], k
 
 class Queues:
     @classmethod
+    def listen_queues(cls, queues: list[str]) -> None:
+        instance = _dbos()._instance
+        if instance is None:
+            raise DBOSException("DBOS is not configured")
+        if instance._engine is not None:
+            raise DBOSException("listen_queues called after DBOS is launched")
+        if instance._listening_queues is not None:
+            raise DBOSException("listen_queues called more than once")
+        instance._listening_queues = set(queues)
+
+    @classmethod
     def delete_queue(cls, name: str) -> None:
         instance = _dbos()._running()
         instance._blocking(instance._engine.delete_queue, name)

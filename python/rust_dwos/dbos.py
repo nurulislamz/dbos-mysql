@@ -361,6 +361,7 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
         self._app_loop: asyncio.AbstractEventLoop | None = None
         self._app_loop_watch: asyncio.Task[Any] | None = None
         self._queues: dict[str, Queue] = {}
+        self._listening_queues: set[str] | None = None
         self._queue_loops: list[concurrent.futures.Future[Any]] = []
 
     @classmethod
@@ -859,7 +860,7 @@ class DBOS(Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedu
     def _add_queue(self, queue: Queue) -> Queue:
         with self._active_lock:
             known = self._queues.setdefault(queue.name, queue)
-            if known is queue:
+            if known is queue and (self._listening_queues is None or queue.name in self._listening_queues):
                 self._queue_loops.append(self._workflows.submit(self._queue_loop(queue)))
         return known
 

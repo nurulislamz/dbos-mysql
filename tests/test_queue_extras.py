@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSQueueDeduplicatedError, SetEnqueueOptions, SetWorkflowAttributes, StoreError
+from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSQueueDeduplicatedError, SetEnqueueOptions, SetWorkflowAttributes, StoreError
 
 
 def test_deduplication_connects_to_queue(dbos: DBOS) -> None:
@@ -108,3 +108,27 @@ def test_queued_initial_attributes(dbos: DBOS) -> None:
     assert handle.get_status().attributes == {"team": "queues"}
     DBOS.set_workflow_delay(handle.get_workflow_id(), delay_seconds=0)
     assert handle.get_result() == "done"
+
+
+def test_listen_queues(config: DBOSConfig) -> None:
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)
+    try:
+        DBOS.listen_queues(["included"])
+        with pytest.raises(DBOSException, match="more than once"):
+            DBOS.listen_queues(["other"])
+        DBOS.launch()
+        with pytest.raises(DBOSException, match="after DBOS is launched"):
+            DBOS.listen_queues([])
+
+        @DBOS.workflow()
+        def workflow() -> str:
+            return "done"
+
+        included = DBOS.register_queue("included")
+        excluded = DBOS.register_queue("excluded")
+        waiting = excluded.enqueue(workflow)
+        assert included.enqueue(workflow).get_result() == "done"
+        assert waiting.get_status().status == "ENQUEUED"
+    finally:
+        DBOS.destroy(destroy_registry=True)
