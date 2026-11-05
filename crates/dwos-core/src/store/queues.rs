@@ -90,7 +90,8 @@ impl Store {
     }
 
     /// Puts each resumable workflow on `queue` and clears its deadline, so admission, not the old
-    /// timeout, decides when it runs. SUCCESS and ERROR are left alone. One missing id rolls back.
+    /// timeout, decides when it runs. SUCCESS, ERROR and a PENDING row whose lease has not expired
+    /// are left alone, so a live owner keeps running and counting. One missing id rolls back.
     pub async fn place_on_queue(&self, workflow_ids: &[String], queue: &str) -> Result<(), Error> {
         check_queue_name(queue)?;
         if workflow_ids.is_empty() {
@@ -108,7 +109,8 @@ impl Store {
         self.lock_queue(&mut tx, queue).await?;
         for id in workflow_ids {
             let row = sqlx::query(self.sql(&format!(
-                "SELECT status FROM workflow_status WHERE workflow_uuid = ? {}",
+                "SELECT status, lease_token, claim_after, {{NOW}} AS now_ms FROM workflow_status \
+                 WHERE workflow_uuid = ? {}",
                 self.dialect.lock_row(),
             )))
             .bind(id.as_str())
@@ -116,7 +118,13 @@ impl Store {
             .await?
             .ok_or_else(|| Error::WorkflowNotFound(id.clone()))?;
             let status: String = row.try_get("status")?;
-            if status == "SUCCESS" || status == "ERROR" {
+            let lease_token: Option<String> = row.try_get("lease_token")?;
+            let claim_after: Option<i64> = row.try_get("claim_after")?;
+            let now_ms: i64 = row.try_get("now_ms")?;
+            let live_owner = status == "PENDING"
+                && lease_token.is_some()
+                && claim_after.is_some_and(|claim_after| claim_after > now_ms);
+            if status == "SUCCESS" || status == "ERROR" || live_owner {
                 continue;
             }
             sqlx::query(self.sql(
