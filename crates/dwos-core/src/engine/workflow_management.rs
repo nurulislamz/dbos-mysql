@@ -31,7 +31,8 @@ impl Engine {
     }
 
     /// Makes cancelled or dead-lettered workflows claimable again. SUCCESS and ERROR are left alone.
-    /// `queue` parks every resumable row on that queue instead of claiming it here.
+    /// `queue` parks every resumable row on that queue instead of claiming it here. A live PENDING
+    /// owner is not resumable: it keeps its lease and its queue.
     pub async fn resume_workflow(
         &self,
         workflow_id: &str,
@@ -54,6 +55,7 @@ impl Engine {
             return Ok(Vec::new());
         }
         if let Some(queue) = queue {
+            // A renewal before the placement keeps a local owner. One after it reports the loss.
             for id in workflow_ids {
                 self.local_runs.poke(id);
             }

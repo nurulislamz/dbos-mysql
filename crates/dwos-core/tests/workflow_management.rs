@@ -686,6 +686,113 @@ all_dbs!(resume_onto_a_queue_waits_for_admission, backend, {
     );
 });
 
+all_dbs!(
+    resume_onto_a_queue_keeps_a_live_owner_and_moves_an_expired_one,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db, config()).await;
+        for queue in ["q", "other"] {
+            engine
+                .ensure_queue(queue, std::num::NonZeroU32::new(1).unwrap())
+                .await
+                .unwrap();
+        }
+        let mut timed = begin(Some("live"));
+        timed.timeout_ms = Some(600_000);
+        engine.enqueue("q", timed).await.unwrap();
+        engine.enqueue("q", begin(Some("expired"))).await.unwrap();
+        let claimed = engine
+            .claim_queue("q", &names())
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(claimed.lease.workflow_id, "live");
+        let run = Run::new(
+            claimed.lease,
+            claimed.serialization,
+            claimed.deadline_epoch_ms,
+        );
+        let keeper = engine.keep_lease(&run);
+        let before = engine.get_status("live").await.unwrap();
+        assert!(before.deadline_epoch_ms.is_some());
+
+        assert!(
+            engine
+                .resume_workflows(&["live".to_owned()], &names(), Some("other"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let after = engine.get_status("live").await.unwrap();
+        assert_eq!(after.status, Status::Pending);
+        assert_eq!(after.queue_name.as_deref(), Some("q"));
+        assert_eq!(after.recovery_attempts, before.recovery_attempts);
+        assert_eq!(after.deadline_epoch_ms, before.deadline_epoch_ms);
+        // The owner still fills "q", and no second copy starts on either queue.
+        assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+        assert!(
+            engine
+                .claim_queue("other", &names())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // The poke made the keeper renew. It must not report a loss.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), keeper.lost())
+                .await
+                .is_err()
+        );
+        keeper.stop();
+        engine
+            .save_step_output(&run, 1, "one", "1".to_owned())
+            .await
+            .unwrap();
+        assert!(matches!(
+            engine
+                .finish(&run, Outcome::Success("1".to_owned()))
+                .await
+                .unwrap(),
+            dwos_core::Finished::Accepted
+        ));
+
+        let short = super::engine(
+            &db,
+            EngineConfig {
+                lease: EXPIRED,
+                ..config()
+            },
+        )
+        .await;
+        let claimed = short
+            .claim_queue("q", &names())
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(claimed.lease.workflow_id, "expired");
+        let stale = Run::new(
+            claimed.lease,
+            claimed.serialization,
+            claimed.deadline_epoch_ms,
+        );
+        short
+            .resume_workflows(&["expired".to_owned()], &names(), Some("other"))
+            .await
+            .unwrap();
+        let moved = short.get_status("expired").await.unwrap();
+        assert_eq!(moved.status, Status::Enqueued);
+        assert_eq!(moved.queue_name.as_deref(), Some("other"));
+        assert!(matches!(
+            short.check_step(&stale, 1, "step").await,
+            Err(Error::LeaseLost(_))
+        ));
+        assert_eq!(short.claim_queue("other", &names()).await.unwrap().len(), 1);
+    }
+);
+
 all_dbs!(bulk_resume_claims_each_row_or_none, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, config()).await;
