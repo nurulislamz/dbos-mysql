@@ -11,6 +11,7 @@ const MAX_CONTENTION_RETRIES: u32 = 5;
 const CONNECTION_RETRY_WINDOW: Duration = Duration::from_secs(30);
 
 const ER_LOCK_WAIT_TIMEOUT: u16 = 1205;
+const ER_LOCK_NOWAIT: u16 = 3572;
 const ER_LOCK_DEADLOCK: u16 = 1213;
 // Postgres: serialization failure, deadlock, lock timeout.
 const PG_CONTENTION: [&str; 3] = ["40001", "40P01", "55P03"];
@@ -53,6 +54,16 @@ fn classify(error: &Error) -> Kind {
         | sqlx::Error::PoolTimedOut => Kind::Connection,
         _ => Kind::Permanent,
     }
+}
+
+/// MySQL 1205 (lock wait timeout) and 3572 (a NOWAIT lock was busy). A deadlock (1213) is still retried by `with_retry`.
+pub(crate) fn is_lock_busy(error: &Error) -> bool {
+    let Error::Database(sqlx::Error::Database(database)) = error else {
+        return false;
+    };
+    database
+        .try_downcast_ref::<MySqlDatabaseError>()
+        .is_some_and(|mysql| matches!(mysql.number(), ER_LOCK_WAIT_TIMEOUT | ER_LOCK_NOWAIT))
 }
 
 fn backoff(attempt: u32) -> Duration {

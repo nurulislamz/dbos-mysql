@@ -104,6 +104,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/sqlite/014_workflow_completed_at.sql"),
             include_str!("../schema/sqlite/015_workflow_lease_token.sql"),
             include_str!("../schema/sqlite/025_workflow_attributes_json.sql"),
+            include_str!("../schema/sqlite/027_operation_output_child_index.sql"),
         ],
         Backend::MySql => [
             include_str!("../schema/mysql/007_workflow_columns.sql"),
@@ -116,6 +117,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/mysql/014_workflow_completed_at.sql"),
             include_str!("../schema/mysql/015_workflow_lease_token.sql"),
             include_str!("../schema/mysql/025_workflow_attributes_json.sql"),
+            include_str!("../schema/mysql/027_operation_output_child_index.sql"),
         ],
         Backend::Postgres => [
             include_str!("../schema/postgres/007_workflow_columns.sql"),
@@ -128,15 +130,16 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/postgres/014_workflow_completed_at.sql"),
             include_str!("../schema/postgres/015_workflow_lease_token.sql"),
             include_str!("../schema/postgres/025_workflow_attributes_json.sql"),
+            include_str!("../schema/postgres/027_operation_output_child_index.sql"),
         ],
     }
 }
 
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25],
-        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25],
-        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25],
+        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
+        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
+        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
     }
 }
 

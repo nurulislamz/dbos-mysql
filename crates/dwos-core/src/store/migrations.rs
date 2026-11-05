@@ -113,6 +113,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/025_workflow_attributes_json.sql"),
         "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_status' AND column_name = 'attributes') = 0 THEN 1 ELSE 0 END",
     ),
+    plain(
+        27,
+        include_str!("../../schema/postgres/027_operation_output_child_index.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_operation_outputs_child_workflow')",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -212,6 +217,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/025_workflow_attributes_json.sql"),
         "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_status' AND column_name = 'attributes') = 0 THEN 1 ELSE 0 END",
     ),
+    plain(
+        27,
+        include_str!("../../schema/mysql/027_operation_output_child_index.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_outputs' AND INDEX_NAME = 'ix_operation_outputs_child_workflow')",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -298,6 +308,11 @@ const SQLITE: &[Migration] = &[
         25,
         include_str!("../../schema/sqlite/025_workflow_attributes_json.sql"),
         "SELECT CASE WHEN (SELECT COUNT(*) FROM pragma_table_info('workflow_status') WHERE name = 'attributes') = 0 THEN 1 ELSE 0 END",
+    ),
+    plain(
+        27,
+        include_str!("../../schema/sqlite/027_operation_output_child_index.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_operation_outputs_child_workflow')",
     ),
 ];
 

@@ -684,3 +684,89 @@ all_dbs!(deleting_does_not_wait_for_a_live_row, backend, {
     assert!(exists(&store, "live").await);
     assert!(exists(&store, "of-live").await);
 });
+
+all_dbs!(a_child_named_by_a_pending_parents_step_is_kept, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    // Runs as a root first, so its parent_workflow_id is not the parent below.
+    let Begun::Run(shared) = engine.begin(begin("shared")).await.unwrap() else {
+        panic!("expected to run");
+    };
+    engine
+        .finish(&shared, Outcome::Success("\"shared\"".to_owned()))
+        .await
+        .unwrap();
+    let Begun::Run(parent) = engine.begin(begin("parent")).await.unwrap() else {
+        panic!("expected to run");
+    };
+    // The parent's step names the finished child by its ID, and gets the stored result.
+    let mut named = begin("");
+    named.workflow_id = Some("shared");
+    named.parent = Some(ParentStep {
+        run: &parent,
+        step_id: 1,
+    });
+    assert!(matches!(
+        engine.begin(named).await.unwrap(),
+        Begun::Stored(_)
+    ));
+    execute(
+        &store,
+        "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid = 'shared'".to_owned(),
+    )
+    .await;
+
+    assert!(
+        engine
+            .delete_workflows(&ids(&["shared"]), false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 0);
+    assert!(exists(&store, "shared").await);
+
+    // Once the parent is done, nothing can replay that step, so the child can go.
+    engine
+        .finish(&parent, Outcome::Success("\"parent\"".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(
+        engine
+            .delete_workflows(&ids(&["shared"]), false)
+            .await
+            .unwrap(),
+        ids(&["shared"])
+    );
+});
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mysql_age_delete_leaves_a_batch_behind_a_locked_parent() {
+    let db = TestDb::migrated(Backend::MySql).await;
+    let engine = engine(&db).await;
+    let store = engine.store().clone();
+    start_finished(&store, "parent", None).await;
+    start_finished(&store, "child", Some("parent")).await;
+    execute(
+        &store,
+        "UPDATE workflow_status SET completed_at = 100 WHERE workflow_uuid = 'child'".to_owned(),
+    )
+    .await;
+    let mut holder = store.pool().begin().await.unwrap();
+    sqlx::query(
+        "SELECT workflow_uuid FROM workflow_status WHERE workflow_uuid = 'parent' FOR UPDATE",
+    )
+    .fetch_one(&mut *holder)
+    .await
+    .unwrap();
+    // The lock wait is short, so the call returns well before the 10s default.
+    let started = std::time::Instant::now();
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 0);
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert!(exists(&store, "child").await);
+
+    holder.rollback().await.unwrap();
+    assert_eq!(engine.delete_finished_before(200, 10).await.unwrap(), 1);
+    assert!(!exists(&store, "child").await);
+}
