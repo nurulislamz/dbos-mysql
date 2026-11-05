@@ -119,9 +119,9 @@ No benchmark exists in this repository, and nothing has been measured side by si
 |---|---|---|
 | Authentication and roles | ✅ | ❌ |
 | Safe stored format | ❓ | 🚧 Pickle by default, so database write access can run code. JSON is an option |
-| Encrypted database connections | ❓ | 🚧 TLS is compiled in. Not tested |
+| Encrypted database connections | ❓ | 🚧 Tested on MySQL and Postgres when the URL requires TLS. Without that, a connection can use plain text |
 | Memory safety | ❓ | ✅ `dwos-core` forbids `unsafe` code |
-| Dependency audit | ❓ | 📅 Not run |
+| Dependency audit | ❓ | 🚧 `cargo audit` 2026-11-05: one advisory, `rsa`, whose affected code is not reached. Python dependencies have no lock file and were not audited |
 | Independent security review | ❓ | 📅 Not done |
 | Viewer access | ❓ | 🚧 Local only, with a host check and a content security policy. It has no login |
 
