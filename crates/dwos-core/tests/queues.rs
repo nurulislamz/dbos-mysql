@@ -55,12 +55,6 @@ all_dbs!(fifo_and_identity_survive_duplicate_enqueue, backend, {
     let engine = engine(&db, config()).await;
     queue(&engine, 3).await;
     queue(&engine, 3).await;
-    assert!(
-        engine
-            .ensure_queue("q", NonZeroU32::new(4).unwrap())
-            .await
-            .is_err()
-    );
     assert!(engine.enqueue("missing", begin("missing")).await.is_err());
     for id in ["z-first", "a-second", "m-third"] {
         assert_eq!(engine.enqueue("q", begin(id)).await.unwrap(), id);
@@ -104,6 +98,90 @@ all_dbs!(fifo_and_identity_survive_duplicate_enqueue, backend, {
         ["z-first", "a-second", "m-third"]
     );
     assert!(claimed.iter().all(|row| row.recovery_attempts == 1));
+});
+
+fn claimed_ids(claimed: &[Claimed]) -> Vec<&str> {
+    claimed
+        .iter()
+        .map(|row| row.lease.workflow_id.as_str())
+        .collect()
+}
+
+all_dbs!(raising_the_limit_admits_more_on_the_next_claim, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    for id in ["a", "b", "c", "d"] {
+        engine.enqueue("q", begin(id)).await.unwrap();
+    }
+    let claimed = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(claimed_ids(&claimed), ["a"]);
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    queue(&engine, 3).await;
+    assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 3);
+    let claimed = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(claimed_ids(&claimed), ["b", "c"]);
+});
+
+all_dbs!(lowering_the_limit_waits_for_running_owners, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 3).await;
+    for id in ["a", "b", "c", "d"] {
+        engine.enqueue("q", begin(id)).await.unwrap();
+    }
+    let owners: Vec<Run> = engine
+        .claim_queue("q", &names())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(run)
+        .collect();
+    assert_eq!(owners.len(), 3);
+    queue(&engine, 1).await;
+    assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 1);
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    for owner in &owners {
+        assert_eq!(
+            engine.check_step(owner, 1, "step").await.unwrap(),
+            StepDecision::Run
+        );
+    }
+    // Two finishes leave one owner, which is still at the limit of one.
+    for owner in &owners[..2] {
+        engine
+            .finish(owner, Outcome::Success("null".to_owned()))
+            .await
+            .unwrap();
+        assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    }
+    engine
+        .finish(&owners[2], Outcome::Success("null".to_owned()))
+        .await
+        .unwrap();
+    let claimed = engine.claim_queue("q", &names()).await.unwrap();
+    assert_eq!(claimed_ids(&claimed), ["d"]);
+});
+
+all_dbs!(registering_the_same_limit_changes_nothing, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 1).await;
+    engine.enqueue("q", begin("a")).await.unwrap();
+    engine.enqueue("q", begin("b")).await.unwrap();
+    let owner = run(engine
+        .claim_queue("q", &names())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap());
+    queue(&engine, 1).await;
+    assert_eq!(engine.get_queue("q").await.unwrap().unwrap().get(), 1);
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    assert_eq!(
+        engine.check_step(&owner, 1, "step").await.unwrap(),
+        StepDecision::Run
+    );
 });
 
 all_dbs!(reject_reuse_policy_refuses_a_queued_id, backend, {
