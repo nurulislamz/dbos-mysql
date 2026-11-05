@@ -167,6 +167,8 @@ pub struct StepRecord {
 pub struct RecordedStep {
     pub step_id: u32,
     pub step_name: String,
+    pub started_at_epoch_ms: Option<i64>,
+    pub completed_at_epoch_ms: i64,
     pub record: StepRecord,
     pub serialization: String,
 }
@@ -177,10 +179,15 @@ pub enum Outcome {
     Error(String),
 }
 
-/// Filters for `list_workflows`. Queue, fork, auth and app-version fields are stored but not filterable yet.
+/// Filters for `list_workflows`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkflowFilter {
     pub workflow_ids: Option<Vec<String>>,
+    pub queue_names: Option<Vec<String>>,
+    pub app_versions: Option<Vec<String>>,
+    pub forked_from: Option<Vec<String>>,
+    pub users: Option<Vec<String>>,
+    pub queues_only: bool,
     pub statuses: Option<Vec<Status>>,
     pub names: Option<Vec<String>>,
     pub parent_workflow_ids: Option<Vec<String>>,

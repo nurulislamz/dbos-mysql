@@ -184,7 +184,7 @@ impl Store {
     pub async fn list_steps(&self, workflow_id: &str) -> Result<Vec<RecordedStep>, Error> {
         self.attempt(|| async {
             let rows = sqlx::query(self.sql(
-                "SELECT function_id, function_name, output, error, child_workflow_id, serialization FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
+                "SELECT function_id, function_name, output, error, child_workflow_id, serialization, started_at_epoch_ms, completed_at_epoch_ms FROM operation_outputs WHERE workflow_uuid = ? ORDER BY function_id",
             ))
             .bind(workflow_id)
             .fetch_all(&self.pool)
@@ -194,6 +194,8 @@ impl Store {
                     Ok(RecordedStep {
                         step_id: get_u32(row, "function_id")?,
                         step_name: row.try_get("function_name")?,
+                        started_at_epoch_ms: row.try_get("started_at_epoch_ms")?,
+                        completed_at_epoch_ms: row.try_get("completed_at_epoch_ms")?,
                         record: record_from_row(row)?,
                         serialization: row.try_get("serialization")?,
                     })

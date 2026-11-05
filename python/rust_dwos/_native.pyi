@@ -42,8 +42,19 @@ class WorkflowRow:
     serialization: str
     workflow_timeout_ms: int | None
     workflow_deadline_epoch_ms: int | None
+    application_version: str | None
+    application_name: str | None
+    executor_id: str | None
+    forked_from: str | None
+    schedule_name: str | None
+    authenticated_user: str | None
+    assumed_role: str | None
+    authenticated_roles: str | None
+    queue_name: str | None
 
 class StepRow:
+    started_at_epoch_ms: int | None
+    completed_at_epoch_ms: int
     step_id: int
     step_name: str
     output: str | None
@@ -181,6 +192,11 @@ class Engine:
         self,
         *,
         workflow_ids: list[str] | None = None,
+        queue_name: list[str] | None = None,
+        app_version: list[str] | None = None,
+        forked_from: list[str] | None = None,
+        user: list[str] | None = None,
+        queues_only: bool = False,
         status: list[str] | None = None,
         name: list[str] | None = None,
         parent_workflow_id: list[str] | None = None,

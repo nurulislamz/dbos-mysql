@@ -127,6 +127,15 @@ pub(crate) struct PyWorkflow {
     serialization: String,
     workflow_timeout_ms: Option<i64>,
     workflow_deadline_epoch_ms: Option<i64>,
+    application_version: Option<String>,
+    application_name: Option<String>,
+    executor_id: Option<String>,
+    forked_from: Option<String>,
+    schedule_name: Option<String>,
+    authenticated_user: Option<String>,
+    assumed_role: Option<String>,
+    authenticated_roles: Option<String>,
+    queue_name: Option<String>,
 }
 
 impl From<Workflow> for PyWorkflow {
@@ -147,12 +156,23 @@ impl From<Workflow> for PyWorkflow {
             serialization: row.serialization,
             workflow_timeout_ms: row.timeout_ms,
             workflow_deadline_epoch_ms: row.deadline_epoch_ms,
+            application_version: row.application_version,
+            application_name: row.application_name,
+            executor_id: row.executor_id,
+            forked_from: row.forked_from,
+            schedule_name: row.schedule_name,
+            authenticated_user: row.authenticated_user,
+            assumed_role: row.assumed_role,
+            authenticated_roles: row.authenticated_roles,
+            queue_name: row.queue_name,
         }
     }
 }
 
 #[pyclass(name = "StepRow", frozen, get_all)]
 struct PyStep {
+    started_at_epoch_ms: Option<i64>,
+    completed_at_epoch_ms: i64,
     step_id: u32,
     step_name: String,
     output: Option<String>,
@@ -164,6 +184,8 @@ struct PyStep {
 impl From<RecordedStep> for PyStep {
     fn from(step: RecordedStep) -> Self {
         Self {
+            started_at_epoch_ms: step.started_at_epoch_ms,
+            completed_at_epoch_ms: step.completed_at_epoch_ms,
             step_id: step.step_id,
             step_name: step.step_name,
             output: step.record.output,

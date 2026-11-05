@@ -87,6 +87,15 @@ class WorkflowStatus:
     completed_at: int | None
     workflow_timeout_ms: int | None = None
     workflow_deadline_epoch_ms: int | None = None
+    application_version: str | None = None
+    application_name: str | None = None
+    executor_id: str | None = None
+    forked_from: str | None = None
+    schedule_name: str | None = None
+    authenticated_user: str | None = None
+    assumed_role: str | None = None
+    authenticated_roles: str | None = None
+    queue_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -957,11 +966,22 @@ def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output
         completed_at=row.completed_at_ms,
         workflow_timeout_ms=row.workflow_timeout_ms,
         workflow_deadline_epoch_ms=row.workflow_deadline_epoch_ms,
+        application_version=row.application_version,
+        application_name=row.application_name,
+        executor_id=row.executor_id,
+        forked_from=row.forked_from,
+        schedule_name=row.schedule_name,
+        authenticated_user=row.authenticated_user,
+        assumed_role=row.assumed_role,
+        authenticated_roles=row.authenticated_roles,
+        queue_name=row.queue_name,
     )
 
 
 def _step_of(step: _native.StepRow) -> dict[str, Any]:
     return {
+        "started_at_epoch_ms": step.started_at_epoch_ms,
+        "completed_at_epoch_ms": step.completed_at_epoch_ms,
         "function_id": step.step_id,
         "function_name": step.step_name,
         "output": _codec_for(step.step_name).decode_output(step.output, step.serialization) if step.output is not None else None,

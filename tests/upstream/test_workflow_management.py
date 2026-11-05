@@ -417,3 +417,15 @@ def test_list_workflow_completed_at(dbos: DBOS) -> None:
 
     release.set()
     resumed_handle.get_result()
+
+
+def test_list_metadata_filters(dbos: DBOS) -> None:
+    @DBOS.workflow()
+    def metadata_workflow() -> None:
+        pass
+
+    metadata_workflow()
+    assert DBOS.list_workflows(app_version="missing") == []
+    assert DBOS.list_workflows(user="missing") == []
+    assert DBOS.list_workflows(forked_from="missing") == []
+    assert DBOS.list_queued_workflows() == []

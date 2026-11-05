@@ -224,6 +224,19 @@ impl Store {
         if let Some(ids) = &filter.workflow_ids {
             sql.push_str(&in_clause("workflow_status.workflow_uuid", ids.len()));
         }
+        for (column, values) in [
+            ("workflow_queue_entries.queue_name", &filter.queue_names),
+            ("application_version", &filter.app_versions),
+            ("forked_from", &filter.forked_from),
+            ("authenticated_user", &filter.users),
+        ] {
+            if let Some(values) = values {
+                sql.push_str(&in_clause(column, values.len()));
+            }
+        }
+        if filter.queues_only {
+            sql.push_str(" AND workflow_queue_entries.queue_name IS NOT NULL");
+        }
         if let Some(statuses) = &filter.statuses {
             sql.push_str(&in_clause(&format!("({STATUS_EXPR})"), statuses.len()));
         }
@@ -273,6 +286,19 @@ impl Store {
         if let Some(ids) = &filter.workflow_ids {
             for id in ids {
                 query = query.bind(id.as_str());
+            }
+        }
+        for values in [
+            &filter.queue_names,
+            &filter.app_versions,
+            &filter.forked_from,
+            &filter.users,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for value in values {
+                query = query.bind(value.as_str());
             }
         }
         if let Some(statuses) = &filter.statuses {

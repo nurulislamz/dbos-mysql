@@ -856,3 +856,46 @@ all_dbs!(
         ));
     }
 );
+
+all_dbs!(list_filters_stored_metadata, backend, {
+    let db = TestDb::migrated(backend).await;
+    let store = db.open().await;
+    let new = dwos_core::NewWorkflow {
+        workflow_id: "metadata",
+        name: "wf",
+        input: "{}",
+        max_recovery_attempts: 100,
+        lease: LONG,
+        parent_workflow_id: None,
+        serialization: dwos_core::PORTABLE_JSON,
+        timeout_ms: None,
+        deadline_epoch_ms: None,
+    };
+    store
+        .start_workflow_with(
+            &new,
+            &dwos_core::WorkflowOptions {
+                application_version: Some("v1".into()),
+                authenticated_user: Some("alice".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let filter = WorkflowFilter {
+        app_versions: Some(vec!["v1".into()]),
+        users: Some(vec!["alice".into()]),
+        ..Default::default()
+    };
+    assert_eq!(store.list_workflows(&filter).await.unwrap().len(), 1);
+    assert!(
+        store
+            .list_workflows(&WorkflowFilter {
+                queue_names: Some(vec!["missing".into()]),
+                ..filter
+            })
+            .await
+            .unwrap()
+            .is_empty()
+    );
+});
