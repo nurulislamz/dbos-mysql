@@ -16,7 +16,9 @@ pub use engine::{
 };
 pub use error::Error;
 pub use lease::{LeaseKeeper, LeaseLoss, StepExpiry, StepWatch};
-pub use store::{Identity, NewSchedule, PartitionLimits, ScheduleFire, SendFrom, Store};
+pub use store::{
+    Identity, NewSchedule, PartitionLimits, PartitionUpdate, ScheduleFire, SendFrom, Store,
+};
 pub use workflow::{
     Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE,
     RecordedStep, ReusePolicy, Started, Status, StepRecord, Workflow, WorkflowFilter,

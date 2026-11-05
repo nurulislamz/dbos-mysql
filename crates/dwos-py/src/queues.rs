@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use dwos_core::{Begin, Error, ParentStep, PartitionLimits, recovery_limit};
+use dwos_core::{Begin, Error, ParentStep, PartitionLimits, PartitionUpdate, recovery_limit};
 
 use super::start_options;
 use pyo3::prelude::*;
@@ -42,6 +42,65 @@ fn parse_limiter(limit: Option<u32>, period: Option<f64>) -> PyResult<Option<(No
 
 #[pymethods]
 impl PyEngine {
+    #[pyo3(signature = (name, *, blocking=false))]
+    fn get_partition_limits<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            let limits = engine.get_partition_limits(&name).await.map_err(to_py)?;
+            Ok((
+                limits.concurrency.map(NonZeroU32::get),
+                limits.worker_concurrency.map(NonZeroU32::get),
+                limits.limiter.map(|(n, ms)| (n.get(), ms)),
+            ))
+        })
+    }
+
+    #[pyo3(signature = (name, field, value=None, period=None, *, blocking=false))]
+    fn update_partition_limits<'py>(
+        &self,
+        py: Python<'py>,
+        name: String,
+        field: String,
+        value: Option<u32>,
+        period: Option<f64>,
+        blocking: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let parse = || {
+            value
+                .map(|n| {
+                    NonZeroU32::new(n).ok_or_else(|| {
+                        to_py(Error::InvalidConfig(
+                            "partition limit must be positive".to_owned(),
+                        ))
+                    })
+                })
+                .transpose()
+        };
+        let update = match field.as_str() {
+            "concurrency" if period.is_none() => PartitionUpdate::Concurrency(parse()?),
+            "worker_concurrency" if period.is_none() => {
+                PartitionUpdate::WorkerConcurrency(parse()?)
+            }
+            "limiter" => PartitionUpdate::Limiter(parse_limiter(value, period)?),
+            _ => {
+                return Err(to_py(Error::InvalidConfig(
+                    "unknown partition limit".to_owned(),
+                )));
+            }
+        };
+        let engine = self.0.clone();
+        dispatch(py, blocking, async move {
+            engine
+                .update_partition_limits(&name, update)
+                .await
+                .map_err(to_py)
+        })
+    }
     #[pyo3(signature = (name, limit=None, period=None, *, blocking=false))]
     fn set_limiter<'py>(
         &self,

@@ -27,7 +27,80 @@ pub struct PartitionLimits {
     pub limiter: Option<(NonZeroU32, i64)>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum PartitionUpdate {
+    Concurrency(Option<NonZeroU32>),
+    WorkerConcurrency(Option<NonZeroU32>),
+    Limiter(Option<(NonZeroU32, i64)>),
+}
+
+fn partition_limits(row: &sqlx::any::AnyRow) -> Result<PartitionLimits, Error> {
+    let number = |name| -> Result<Option<NonZeroU32>, Error> {
+        let value: Option<i64> = row.try_get(name)?;
+        value
+            .map(|value| {
+                u32::try_from(value)
+                    .ok()
+                    .and_then(NonZeroU32::new)
+                    .ok_or_else(|| Error::Corrupt(format!("invalid {name}")))
+            })
+            .transpose()
+    };
+    let rate = number("partition_rate_limit")?;
+    let period: Option<i64> = row.try_get("partition_rate_period_ms")?;
+    let limiter = match (rate, period) {
+        (None, None) => None,
+        (Some(rate), Some(period)) if period > 0 => Some((rate, period)),
+        _ => return Err(Error::Corrupt("invalid partition limiter".to_owned())),
+    };
+    Ok(PartitionLimits {
+        concurrency: number("partition_concurrency")?,
+        worker_concurrency: number("partition_worker_concurrency")?,
+        limiter,
+    })
+}
+
 impl Store {
+    pub async fn get_partition_limits(&self, name: &str) -> Result<PartitionLimits, Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let row = sqlx::query(self.sql("SELECT partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms FROM workflow_queues WHERE name = ? AND deleted = 0"))
+                .bind(name).fetch_optional(&self.pool).await?.ok_or_else(|| Error::QueueNotFound(name.to_owned()))?;
+            partition_limits(&row)
+        }).await
+    }
+
+    pub async fn update_partition_limits(
+        &self,
+        name: &str,
+        change: PartitionUpdate,
+    ) -> Result<(), Error> {
+        check_queue_name(name)?;
+        self.attempt(|| async {
+            let mut tx = self.begin().await?;
+            let global = self.lock_queue(&mut tx, name).await?;
+            let row = sqlx::query(self.sql("SELECT worker_concurrency, partition_concurrency, partition_worker_concurrency, partition_rate_limit, partition_rate_period_ms FROM workflow_queues WHERE name = ?"))
+                .bind(name).fetch_one(&mut *tx).await?;
+            let worker: Option<i64> = row.try_get("worker_concurrency")?;
+            let mut limits = partition_limits(&row)?;
+            match change {
+                PartitionUpdate::Concurrency(value) => limits.concurrency = value,
+                PartitionUpdate::WorkerConcurrency(value) => limits.worker_concurrency = value,
+                PartitionUpdate::Limiter(value) => limits.limiter = value,
+            }
+            if limits.concurrency.is_some_and(|n| n.get() > global)
+                || limits.worker_concurrency.is_some_and(|n| n.get() > global || worker.is_some_and(|w| i64::from(n.get()) > w) || limits.concurrency.is_some_and(|p| n > p))
+                || limits.limiter.is_some_and(|(_, period)| period <= 0) {
+                return Err(Error::InvalidConfig("invalid partition limits".to_owned()));
+            }
+            sqlx::query(self.sql("UPDATE workflow_queues SET partition_concurrency = ?, partition_worker_concurrency = ?, partition_rate_limit = ?, partition_rate_period_ms = ? WHERE name = ?"))
+                .bind(limits.concurrency.map(|n| i64::from(n.get()))).bind(limits.worker_concurrency.map(|n| i64::from(n.get())))
+                .bind(limits.limiter.map(|(n, _)| i64::from(n.get()))).bind(limits.limiter.map(|(_, period)| period)).bind(name)
+                .execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok(())
+        }).await
+    }
     pub async fn set_limiter(
         &self,
         name: &str,

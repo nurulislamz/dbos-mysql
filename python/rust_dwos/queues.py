@@ -156,6 +156,60 @@ class Queue:
         instance._wake_queue(self.name)
 
     @property
+    def partition_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_partition_limits, self.name)[0]
+
+    @property
+    def partition_worker_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_partition_limits, self.name)[1]
+
+    @property
+    def partition_limiter(self) -> dict[str, Any] | None:
+        instance = _dbos()._running()
+        value = instance._blocking(instance._engine.get_partition_limits, self.name)[2]
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    def _set_partition(self, field: str, value: int | None, period: float | None = None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.update_partition_limits, self.name, field, value, period)
+        instance._wake_queue(self.name)
+
+    async def _set_partition_async(self, field: str, value: int | None, period: float | None = None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.update_partition_limits(self.name, field, value, period)
+        instance._wake_queue(self.name)
+
+    def set_partition_concurrency(self, value: int | None) -> None:
+        self._set_partition("concurrency", value)
+
+    def set_partition_worker_concurrency(self, value: int | None) -> None:
+        self._set_partition("worker_concurrency", value)
+
+    def set_partition_limiter(self, value: dict[str, Any] | None) -> None:
+        self._set_partition("limiter", value["limit"] if value else None, value["period"] if value else None)
+
+    async def set_partition_concurrency_async(self, value: int | None) -> None:
+        await self._set_partition_async("concurrency", value)
+
+    async def set_partition_worker_concurrency_async(self, value: int | None) -> None:
+        await self._set_partition_async("worker_concurrency", value)
+
+    async def set_partition_limiter_async(self, value: dict[str, Any] | None) -> None:
+        await self._set_partition_async("limiter", value["limit"] if value else None, value["period"] if value else None)
+
+    async def get_partition_concurrency_async(self) -> int | None:
+        return (await _dbos()._running()._engine.get_partition_limits(self.name))[0]
+
+    async def get_partition_worker_concurrency_async(self) -> int | None:
+        return (await _dbos()._running()._engine.get_partition_limits(self.name))[1]
+
+    async def get_partition_limiter_async(self) -> dict[str, Any] | None:
+        value = (await _dbos()._running()._engine.get_partition_limits(self.name))[2]
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    @property
     def polling_interval_sec(self) -> float:
         return self._polling_interval_sec
 

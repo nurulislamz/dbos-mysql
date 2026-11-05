@@ -3,9 +3,20 @@ use std::time::Duration;
 
 use super::wakeup::WakeKey;
 use super::{Begin, Engine};
-use crate::{Claimed, Error, NewWorkflow, PartitionLimits, WorkflowOptions};
+use crate::{Claimed, Error, NewWorkflow, PartitionLimits, PartitionUpdate, WorkflowOptions};
 
 impl Engine {
+    pub async fn get_partition_limits(&self, name: &str) -> Result<PartitionLimits, Error> {
+        self.store.get_partition_limits(name).await
+    }
+
+    pub async fn update_partition_limits(
+        &self,
+        name: &str,
+        change: PartitionUpdate,
+    ) -> Result<(), Error> {
+        self.store.update_partition_limits(name, change).await
+    }
     pub async fn set_limiter(
         &self,
         name: &str,

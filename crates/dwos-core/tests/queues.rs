@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use dwos_core::{
     Begin, Begun, Claimed, Engine, EngineConfig, Error, Identity, Outcome, ParentStep,
-    PartitionLimits, ReusePolicy, Run, Status, StepDecision, Store, WorkflowOptions,
+    PartitionLimits, PartitionUpdate, ReusePolicy, Run, Status, StepDecision, Store,
+    WorkflowOptions,
 };
 use sqlx::Connection;
 
@@ -415,6 +416,57 @@ all_dbs!(queue_partitions_admit_other_keys, backend, {
             .lease
             .workflow_id,
         "a2"
+    );
+});
+
+all_dbs!(partition_runtime_limits_apply, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    queue(&engine, 4).await;
+    engine
+        .update_partition_limits("q", PartitionUpdate::Concurrency(NonZeroU32::new(1)))
+        .await
+        .unwrap();
+    engine
+        .update_partition_limits(
+            "q",
+            PartitionUpdate::Limiter(Some((NonZeroU32::new(1).unwrap(), 60_000))),
+        )
+        .await
+        .unwrap();
+    let options = WorkflowOptions {
+        queue_partition_key: Some("a".into()),
+        ..Default::default()
+    };
+    engine
+        .enqueue_with("q", begin("a1"), &options)
+        .await
+        .unwrap();
+    engine
+        .enqueue_with("q", begin("a2"), &options)
+        .await
+        .unwrap();
+    let claim = engine
+        .claim_queue("q", &names())
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    engine
+        .finish(&run(claim), Outcome::Success("null".into()))
+        .await
+        .unwrap();
+    assert!(engine.claim_queue("q", &names()).await.unwrap().is_empty());
+    engine
+        .update_partition_limits("q", PartitionUpdate::Limiter(None))
+        .await
+        .unwrap();
+    assert_eq!(engine.claim_queue("q", &names()).await.unwrap().len(), 1);
+    assert!(
+        engine
+            .update_partition_limits("q", PartitionUpdate::WorkerConcurrency(NonZeroU32::new(2)))
+            .await
+            .is_err()
     );
 });
 

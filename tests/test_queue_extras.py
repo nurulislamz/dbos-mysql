@@ -89,6 +89,10 @@ def test_enqueue_partition(dbos: DBOS) -> None:
     with SetEnqueueOptions(queue_partition_key="customer"):
         handle = queue.enqueue(workflow)
     assert handle.get_result() == "done"
+    queue.set_partition_limiter({"limit": 2, "period": 10})
+    assert queue.partition_limiter == {"limit": 2, "period": 10}
+    queue.set_partition_worker_concurrency(1)
+    assert queue.partition_worker_concurrency == 1
 
 
 def test_queued_initial_attributes(dbos: DBOS) -> None:

@@ -24,7 +24,7 @@ mod workflow_management;
 mod workflows;
 
 pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
-pub use queues::PartitionLimits;
+pub use queues::{PartitionLimits, PartitionUpdate};
 pub use schedules::{NewSchedule, ScheduleFire};
 
 const MAX_NAME_CHARS: usize = 255;
