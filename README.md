@@ -59,8 +59,8 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 | Feature | DBOS | yado |
 |---|---|---|
-| Workflow and step state storage | ✅ | ✅ Rust store |
-| Stale owners blocked from saving results | ✅ | ✅ Rust store |
+| Workflow and step state storage | ✅ | ✅ |
+| Stale owners blocked from saving results | ✅ | ✅ |
 | `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
 | `validate_args`, `pydantic_args_validator` | ✅ | 🚧 Implemented; workflow execution not verified |
 | `DBOSContextEnsure` | ✅ | ✅ One instance cannot be entered twice |
