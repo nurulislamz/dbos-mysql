@@ -5,6 +5,9 @@ __pycache__
 *.sqlite*
 dist
 /site
+website/node_modules
+website/build
+website/.docusaurus
 .pytest_cache
 .worktrees
 .workmux

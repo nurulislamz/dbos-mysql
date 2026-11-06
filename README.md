@@ -24,7 +24,7 @@ Crash detection uses leases that expire. A dead process loses the workflow, and 
 - A shutdown is not stored as a final error.
 - Python contains no step, result, or lease decisions.
 
-To learn and use it, read the [docs](docs/index.md). To browse them as a site, run `uvx --from mkdocs-material mkdocs serve`. The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
+To learn and use it, read the [docs](docs/index.md). To browse them as a site, run `npm start` in [`website/`](website/). The plan is [`docs/PLAN.md`](docs/PLAN.md). Status is in [`PROGRESS.md`](PROGRESS.md), including which databases work so far.
 
 ## Feature checklist
 
