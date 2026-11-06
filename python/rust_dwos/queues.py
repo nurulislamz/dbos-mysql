@@ -267,19 +267,23 @@ def _stored_limit(concurrency: int) -> int | None:
 
 
 def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], str, dict[str, Any]]:
+    dbos = _dbos()
+    return _options_args(options, args, kwargs, dbos._running()._engine.serialization, dbos._current_run.get(), dbos._current_step.get() is not None, dbos._next_workflow_id.get(), dbos._next_reuse_policy.get())
+
+
+def _options_args(options: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any], serialization: str, run: Any, in_step: bool, workflow_id: str | None, reuse_policy: str | None) -> tuple[tuple[Any, ...], str, dict[str, Any]]:
     from rust_dwos.serialization import Codec
 
-    dbos = _dbos()
     allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key", "attributes"}
     unknown = options.keys() - allowed
     if unknown:
         raise DBOSException(f"Unsupported enqueue options: {', '.join(sorted(unknown))}")
     name = options["workflow_name"]
     queue = options["queue_name"]
-    text = Codec(lambda *args, **kwargs: None).encode_input(args, kwargs, dbos._running()._engine.serialization)
+    text = Codec(lambda *args, **kwargs: None).encode_input(args, kwargs, serialization)
     timeout = options.get("workflow_timeout")
     timeout_ms = int(timeout * 1000) if timeout is not None else None
-    begin = (name, text, None, options.get("workflow_id", dbos._next_workflow_id.get()), dbos._current_run.get(), dbos._current_step.get() is not None, timeout_ms, False, options.get("workflow_id_reuse_policy", dbos._next_reuse_policy.get()))
+    begin = (name, text, None, options.get("workflow_id", workflow_id), run, in_step, timeout_ms, False, options.get("workflow_id_reuse_policy", reuse_policy))
     enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key")}
     enqueue.update({"attributes": _encode(options["attributes"])} if "attributes" in options else start_attributes())
     return begin, queue, enqueue

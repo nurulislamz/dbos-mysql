@@ -12,6 +12,7 @@ from rust_dwos.dbos import (
     WorkflowStatusString,
 )
 from rust_dwos.attributes import SetWorkflowAttributes
+from rust_dwos.client import DBOSClient
 from rust_dwos.events import SendMessage, WorkflowSerializationFormat
 from rust_dwos.tracing import PropagateOtelContext
 from rust_dwos.serialization import Serializer
@@ -40,6 +41,7 @@ __all__ = [
     "DBOS",
     "DBOSAwaitedWorkflowCancelledError",
     "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",
+    "DBOSClient",
     "DBOSConfig",
     "DBOSContextEnsure",
     "DBOSConflictingWorkflowError",

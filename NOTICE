@@ -11,3 +11,6 @@ at commit 236142b, Copyright (c) DBOS, Inc., used under the MIT License. See tes
 
 python/rust_dwos/validation.py, sdk_calls.py, step_reservation.py, wait_first.py and context.py adapt behavior from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
+
+python/rust_dwos/client.py copies the DBOSClient API shape from dbos-transact-py
+at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
