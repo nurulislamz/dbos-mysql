@@ -32,7 +32,7 @@ These are in DBOS but not here yet. Using one today either fails with a clear er
 |---|---|
 | `DBOSClient` | Enqueue and manage workflows from a program that is not running DBOS |
 | Datasources | Commit a step's app database writes together with its result |
-| AI frameworks | Pydantic AI, OpenAI Agents, Google ADK and LlamaIndex |
+| AI frameworks | OpenAI Agents, Google ADK and LlamaIndex. Pydantic AI is done, see [Pydantic AI](guide/pydantic-ai.md) |
 | Custom `Serializer` | Your own stored format. Only pickle and JSON are accepted now |
 | TypeScript SDK | The core is built so that this can be added, but it is not part of this version |
 

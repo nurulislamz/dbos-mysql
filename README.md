@@ -90,7 +90,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | External client (`DBOSClient`) | ✅ | ✅ Enqueue, send, events, results and status, list, cancel, resume, delete, attributes and queue management from outside a DBOS process. No fork, streams, schedules, versions, `*_in_transaction` or `shard_key` |
 | App database transactions (datasources) | ✅ | ✅ `SQLAlchemyDatasource`, `AsyncSQLAlchemyDatasource` and `run_tx_step`. SQLAlchemy is optional. The app-database role grants are untested on Postgres |
 | Patching and app versions | ✅ | 📅 |
-| Pydantic AI integration | ✅ | 📅 |
+| Pydantic AI integration | ✅ | ✅ `rust_dwos.pydantic_ai.DwosDurability`. Each model request, tool call and event-handler call is a step; parallel tool calls reserve their steps in call order. MCP and dynamic toolsets are not tested |
 | Kafka | ✅ | ❌ |
 | Class-based workflows | ✅ | ❌ |
 | External object storage | ✅ | ❌ |

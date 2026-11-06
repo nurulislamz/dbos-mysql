@@ -68,7 +68,7 @@ These come later, and none of them block the minimum.
 - **App version checks:** queue claims skip the check and enqueue does not save the version, but Python does not set a version today.
 - **More list filters:** queue, version, fork and auth.
 - **Moving the last decisions from `dbos.py` into Rust:** they work today, but `docs/PLAN.md` does not count as done until this is finished. See Known problems.
-- **Python extras:** OpenTelemetry, custom `Serializer` and the AI framework integrations. Also verifying `validate_args` and `log_level`.
+- **Python extras:** OpenTelemetry, custom `Serializer` and the AI framework integrations other than Pydantic AI. Also verifying `validate_args` and `log_level`.
 - **Full benchmark:** workflows per second, time per step, memory and connections.
 - **Moving Jobby:** this starts once the minimum is done.
 - **Coordinator, much later:** one copy, or later an optional service, does the scanning and wake-ups for the others. Only if the benchmark shows a need. It is only a shortcut: leases still protect every write, and copies fall back to polling if it dies.

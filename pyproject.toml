@@ -14,6 +14,7 @@ dependencies = ["pydantic>=2.9,<3"]
 [project.optional-dependencies]
 sqlalchemy = ["sqlalchemy>=2.1"]
 otel = ["opentelemetry-api>=1.30", "opentelemetry-sdk>=1.30", "opentelemetry-exporter-otlp-proto-http>=1.30"]
+pydantic-ai = ["pydantic-ai-slim>=2.66,<3"]
 
 [project.scripts]
 dwos = "rust_dwos.cli:main"
