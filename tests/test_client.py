@@ -73,6 +73,22 @@ def test_client_does_not_migrate(database: Database) -> None:
         client.destroy()
 
 
+def test_client_works_without_a_dbos_process(config: dict, database: Database) -> None:
+    DBOS.destroy(destroy_registry=True)
+    DBOS(config=config)  # type: ignore[arg-type]
+    DBOS.launch()  # Only to migrate the schema.
+    DBOS.destroy(destroy_registry=True)
+    client = DBOSClient(system_database_url=database.url)
+    try:
+        client.register_queue("alone")
+        handle = client.enqueue({"queue_name": "alone", "workflow_name": "nobody_runs_this", "workflow_id": "alone-wf"}, {"a": 1})
+        assert handle.get_status().status == "ENQUEUED"
+        assert client.list_queued_workflows()[0].workflow_id == "alone-wf"
+        assert client.get_event("alone-wf", "never", timeout_seconds=0) is None
+    finally:
+        client.destroy()
+
+
 def test_client_refuses_options_dbos_rejects(client: DBOSClient) -> None:
     with pytest.raises(DBOSException):
         client.register_queue("q", on_conflict="update_if_latest_version")
