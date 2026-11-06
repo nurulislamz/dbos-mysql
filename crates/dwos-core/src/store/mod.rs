@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod attributes;
 mod datasources;
+mod debounce;
 mod events;
 mod forks;
 mod leases;
@@ -26,6 +27,7 @@ mod timeouts;
 mod workflow_management;
 mod workflows;
 
+pub use debounce::{DEBOUNCE_STEP, Debounce};
 pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
 pub use forks::ForkOptions;
 pub use queues::{PartitionLimits, PartitionUpdate};

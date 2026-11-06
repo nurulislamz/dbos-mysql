@@ -123,6 +123,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/029_workflow_streams.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_streams')",
     ),
+    plain(
+        30,
+        include_str!("../../schema/postgres/030_queue_entry_debounce.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_queue_entries' AND column_name = 'debounced') = 0 THEN 1 ELSE 0 END",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -232,6 +237,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/029_workflow_streams.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_streams')",
     ),
+    plain(
+        30,
+        include_str!("../../schema/mysql/030_queue_entry_debounce.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_queue_entries' AND column_name = 'debounced') = 0 THEN 1 ELSE 0 END",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -328,6 +338,11 @@ const SQLITE: &[Migration] = &[
         29,
         include_str!("../../schema/sqlite/029_workflow_streams.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_streams')",
+    ),
+    plain(
+        30,
+        include_str!("../../schema/sqlite/030_queue_entry_debounce.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM pragma_table_info('workflow_queue_entries') WHERE name = 'debounced') = 0 THEN 1 ELSE 0 END",
     ),
 ];
 

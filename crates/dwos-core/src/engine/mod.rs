@@ -14,6 +14,7 @@ use crate::{Error, Identity, Store};
 
 mod attributes;
 mod datasources;
+mod debounce;
 mod events;
 mod forks;
 mod queues;
