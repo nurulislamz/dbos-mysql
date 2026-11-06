@@ -86,7 +86,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | `run_step`, `wait_first` | ✅ | ✅ `preemptible` is accepted on async `run_step` only; a sync step with `preemptible=True` is refused like DBOS |
 | Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed, and changing the cron counts as a new schedule. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
 | Streams | ✅ | ✅ `write_stream`, `read_stream`, `read_stream_offset` and `close_stream`, woken by the same hub as `recv`. No `shard_key` |
-| Debouncer | ✅ | 📅 |
+| Debouncer | ✅ | ✅ `Debouncer` and `DebouncerClient`. The latest inputs win, and a timeout caps the wait. A released key is cleared on the next debounce, not by a sweep |
 | External client (`DBOSClient`) | ✅ | ✅ Enqueue, send, events, results and status, list, cancel, resume, delete, attributes and queue management from outside a DBOS process. No fork, streams, schedules, versions, `*_in_transaction` or `shard_key` |
 | App database transactions (datasources) | ✅ | ✅ `SQLAlchemyDatasource`, `AsyncSQLAlchemyDatasource` and `run_tx_step`. SQLAlchemy is optional. The app-database role grants are untested on Postgres |
 | Patching and app versions | ✅ | 📅 |
