@@ -40,6 +40,7 @@ impl PyEngine {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (id, value, serialization, run=None, step_id=None, *, blocking=false))]
     fn complete_awakeable<'py>(
         &self,
