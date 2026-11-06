@@ -1,0 +1,14 @@
+# Shared build settings for every worktree in this repository.
+#
+# Several agents work in parallel worktrees, one per feature. Before this file
+# each of them compiled with the default of one job per core (16 here), so five
+# agents meant up to 80 rustc processes at once. That is what pushed the machine
+# into swap: rustc peaks around 2 GB per job on this crate, `target/` had grown
+# to 17 GB in the main checkout plus another 25 GB across the worktrees, and the
+# box was running 11 GB of 15 GB with swap completely full.
+#
+# Two jobs per checkout keeps the machine responsive. Raise it for a solo
+# full-suite run with CARGO_BUILD_JOBS=8.
+
+[build]
+jobs = 2
