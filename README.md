@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/static/img/logo-dark.svg">
+    <img src="website/static/img/logo.svg" width="120" alt="yado logo: a noren curtain with 宿 (yado), Japanese for inn">
+  </picture>
+</p>
+
 # yado
 
 Yet another durable orchestrator.
