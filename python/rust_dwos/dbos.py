@@ -35,6 +35,7 @@ from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from rust_dwos.serialization import Codec, Serializer, allow_pickle, decode_exception, encode_exception, set_custom_serializer
 from rust_dwos.sleep import Sleep
+from rust_dwos.streams import Streams
 from rust_dwos.sdk_calls import SDKCalls
 from rust_dwos.step_reservation import _reserved_step
 from rust_dwos.timeouts import _timeout_override, timeout_start_args
@@ -362,7 +363,7 @@ class _DBOSMeta(type):
         return tracing.current_span()
 
 
-class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:

@@ -21,6 +21,7 @@ mod queues;
 mod retention;
 mod schedules;
 mod sleep;
+mod streams;
 mod wait_first;
 mod workflow_management;
 
@@ -768,6 +769,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<events::PyPoll>()?;
     m.add_class::<events::PySendResult>()?;
     m.add_class::<events::PyEventRow>()?;
+    m.add_class::<streams::PyStreamItem>()?;
     m.add(
         "DEFAULT_MAX_RECOVERY_ATTEMPTS",
         DEFAULT_MAX_RECOVERY_ATTEMPTS,

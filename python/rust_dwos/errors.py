@@ -79,6 +79,19 @@ class DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded(DBOSException):
         return (self.__class__, (self.workflow_id,))
 
 
+class DBOSStreamTimeoutError(DBOSException):
+    """No value came at a stream offset within the timeout, or the stream ended before it."""
+
+    def __init__(self, workflow_id: str, key: str, offset: int) -> None:
+        self.workflow_id = workflow_id
+        self.key = key
+        self.offset = offset
+        super().__init__(f"No value at offset {offset} of stream {key} of workflow {workflow_id}")
+
+    def __reduce__(self) -> tuple[type[DBOSStreamTimeoutError], tuple[str, str, int]]:
+        return (self.__class__, (self.workflow_id, self.key, self.offset))
+
+
 # These classes live in the native module, which pickle cannot import.
 _MESSAGE_EXCEPTIONS = (
     DBOSConflictingWorkflowError,
@@ -120,6 +133,7 @@ __all__ = [
     "DBOSRecordedError",
     "DBOSStepNondeterminismError",
     "DBOSStepTimeoutError",
+    "DBOSStreamTimeoutError",
     "DBOSUnexpectedStepError",
     "DBOSWorkflowCancelledError",
     "DBOSWorkflowIDInUseError",
