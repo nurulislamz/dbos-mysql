@@ -91,7 +91,7 @@ fn current_init(backend: Backend) -> &'static str {
 }
 
 /// What 001 no longer holds, because a shipped file is never edited.
-fn files_after_init(backend: Backend) -> [&'static str; 10] {
+fn files_after_init(backend: Backend) -> [&'static str; 12] {
     match backend {
         Backend::Sqlite => [
             include_str!("../schema/sqlite/007_workflow_columns.sql"),
@@ -103,6 +103,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/sqlite/013_workflow_schedules.sql"),
             include_str!("../schema/sqlite/014_workflow_completed_at.sql"),
             include_str!("../schema/sqlite/015_workflow_lease_token.sql"),
+            include_str!("../schema/sqlite/020_queue_admissions.sql"),
             include_str!("../schema/sqlite/025_workflow_attributes_json.sql"),
             include_str!("../schema/sqlite/027_operation_output_child_index.sql"),
         ],
@@ -116,6 +117,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/mysql/013_workflow_schedules.sql"),
             include_str!("../schema/mysql/014_workflow_completed_at.sql"),
             include_str!("../schema/mysql/015_workflow_lease_token.sql"),
+            include_str!("../schema/mysql/020_queue_admissions.sql"),
             include_str!("../schema/mysql/025_workflow_attributes_json.sql"),
             include_str!("../schema/mysql/027_operation_output_child_index.sql"),
         ],
@@ -129,6 +131,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
             include_str!("../schema/postgres/013_workflow_schedules.sql"),
             include_str!("../schema/postgres/014_workflow_completed_at.sql"),
             include_str!("../schema/postgres/015_workflow_lease_token.sql"),
+            include_str!("../schema/postgres/020_queue_admissions.sql"),
             include_str!("../schema/postgres/025_workflow_attributes_json.sql"),
             include_str!("../schema/postgres/027_operation_output_child_index.sql"),
         ],
@@ -137,9 +140,9 @@ fn files_after_init(backend: Backend) -> [&'static str; 10] {
 
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
-        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
-        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 25, 27],
+        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27],
+        Backend::MySql => vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27],
+        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27],
     }
 }
 
