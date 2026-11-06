@@ -78,8 +78,6 @@ def _bulk_args(messages: list[SendMessage], serialization: str) -> list[tuple[st
 class Events:
     @classmethod
     def send_bulk(cls, messages: list[SendMessage], *, serialization_type: WorkflowSerializationFormat | None = WorkflowSerializationFormat.DEFAULT, send_to_forks: bool = False) -> None:
-        if send_to_forks:
-            raise DBOSException("send_to_forks is not supported")
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
@@ -87,7 +85,8 @@ class Events:
         step_id = run.step_id_unless_in_step(dbos._current_step.get() is not None) if run is not None else None
         encoded = _bulk_args(messages, serialization)
         try:
-            result = instance._blocking(instance._engine.send_bulk, encoded, serialization, run, step_id)
+            send = instance._engine.send_bulk_to_forks if send_to_forks else instance._engine.send_bulk
+            result = instance._blocking(send, encoded, serialization, run, step_id)
         except DBOSNonExistentWorkflowError as error:
             if step_id is not None:
                 instance._save_failure_sync(run, step_id, "DBOS.send_bulk", error)
@@ -96,8 +95,6 @@ class Events:
 
     @classmethod
     async def send_bulk_async(cls, messages: list[SendMessage], *, serialization_type: WorkflowSerializationFormat | None = WorkflowSerializationFormat.DEFAULT, send_to_forks: bool = False) -> None:
-        if send_to_forks:
-            raise DBOSException("send_to_forks is not supported")
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
@@ -105,7 +102,8 @@ class Events:
         step_id = run.step_id_unless_in_step(dbos._current_step.get() is not None) if run is not None else None
         encoded = _bulk_args(messages, serialization)
         try:
-            result = await instance._engine.send_bulk(encoded, serialization, run, step_id)
+            send = instance._engine.send_bulk_to_forks if send_to_forks else instance._engine.send_bulk
+            result = await send(encoded, serialization, run, step_id)
         except DBOSNonExistentWorkflowError as error:
             if step_id is not None:
                 await instance._save_failure(run, step_id, "DBOS.send_bulk", error)
@@ -114,11 +112,13 @@ class Events:
 
     @classmethod
     def send(cls, destination_id: str, message: Any, topic: str | None = None, *, idempotency_key: str | None = None, serialization_type: WorkflowSerializationFormat | None = WorkflowSerializationFormat.DEFAULT, send_to_forks: bool = False, shard_key: str | None = None) -> None:
+        if send_to_forks:
+            return cls.send_bulk([SendMessage(destination_id, message, topic, idempotency_key, shard_key)], serialization_type=serialization_type, send_to_forks=True)
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
-        if send_to_forks or shard_key is not None:
-            raise DBOSException("send_to_forks and shard_key are not supported")
+        if shard_key is not None:
+            raise DBOSException("shard_key is not supported")
         serialization = _serialization(instance, run, serialization_type)
         step_id = run.step_id_unless_in_step(dbos._current_step.get() is not None) if run is not None else None
         text = _PLAIN.encode_output(message, serialization)
@@ -132,11 +132,13 @@ class Events:
 
     @classmethod
     async def send_async(cls, destination_id: str, message: Any, topic: str | None = None, *, idempotency_key: str | None = None, serialization_type: WorkflowSerializationFormat | None = WorkflowSerializationFormat.DEFAULT, send_to_forks: bool = False, shard_key: str | None = None) -> None:
+        if send_to_forks:
+            return await cls.send_bulk_async([SendMessage(destination_id, message, topic, idempotency_key, shard_key)], serialization_type=serialization_type, send_to_forks=True)
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
-        if send_to_forks or shard_key is not None:
-            raise DBOSException("send_to_forks and shard_key are not supported")
+        if shard_key is not None:
+            raise DBOSException("shard_key is not supported")
         serialization = _serialization(instance, run, serialization_type)
         step_id = run.step_id_unless_in_step(dbos._current_step.get() is not None) if run is not None else None
         text = _PLAIN.encode_output(message, serialization)

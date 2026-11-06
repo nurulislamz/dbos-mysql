@@ -30,6 +30,7 @@ from rust_dwos.errors import (
 )
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events, WorkflowSerializationFormat
+from rust_dwos.forks import Forks
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
@@ -106,6 +107,7 @@ class WorkflowStatus:
     application_name: str | None = None
     executor_id: str | None = None
     forked_from: str | None = None
+    was_forked_from: bool = False
     schedule_name: str | None = None
     authenticated_user: str | None = None
     assumed_role: str | None = None
@@ -363,7 +365,7 @@ class _DBOSMeta(type):
         return tracing.current_span()
 
 
-class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
@@ -1073,6 +1075,7 @@ def _status_of(row: _native.WorkflowRow, *, load_input: bool = True, load_output
         application_name=row.application_name,
         executor_id=row.executor_id,
         forked_from=row.forked_from,
+        was_forked_from=row.was_forked_from,
         schedule_name=row.schedule_name,
         authenticated_user=row.authenticated_user,
         assumed_role=row.assumed_role,

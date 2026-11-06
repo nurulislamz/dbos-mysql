@@ -17,6 +17,7 @@ use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
 
 mod attributes;
 mod events;
+mod forks;
 mod queues;
 mod retention;
 mod schedules;
@@ -146,6 +147,7 @@ pub(crate) struct PyWorkflow {
     application_name: Option<String>,
     executor_id: Option<String>,
     forked_from: Option<String>,
+    was_forked_from: bool,
     schedule_name: Option<String>,
     authenticated_user: Option<String>,
     assumed_role: Option<String>,
@@ -181,6 +183,7 @@ impl From<Workflow> for PyWorkflow {
             application_name: row.application_name,
             executor_id: row.executor_id,
             forked_from: row.forked_from,
+            was_forked_from: row.was_forked_from,
             schedule_name: row.schedule_name,
             authenticated_user: row.authenticated_user,
             assumed_role: row.assumed_role,
