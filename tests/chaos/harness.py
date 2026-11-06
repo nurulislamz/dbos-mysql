@@ -45,6 +45,7 @@ class ChaosResult:
     backend: str
     faults_fired: dict[str, int] = field(default_factory=dict)
     seconds: float = 0.0
+    ledger_retries: int = 0
     repeated_steps: int = 0
     recovered_workflows: int = 0
     violations: list[str] = field(default_factory=list)
@@ -60,7 +61,7 @@ class _Target:
             self.ledger = str(directory / "ledger.sqlite")
             with sqlite3.connect(self.ledger) as connection:
                 connection.execute("PRAGMA journal_mode=WAL")
-                connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INTEGER, pid INTEGER, started_at_ms INTEGER)")
+                connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INTEGER, pid INTEGER, started_at_ms INTEGER, first_attempt_at_ms INTEGER, retries INTEGER)")
                 connection.execute("CREATE TABLE answers (workflow_id TEXT, answer TEXT)")
             return
         if self.backend == "postgres":
@@ -69,7 +70,7 @@ class _Target:
             with self._postgres() as connection:
                 connection.execute(f"CREATE DATABASE {self._name}")
             with self._postgres(self._name) as connection:
-                connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INT, pid INT, started_at_ms BIGINT)")
+                connection.execute("CREATE TABLE ledger (workflow_id TEXT, step_id INT, pid INT, started_at_ms BIGINT, first_attempt_at_ms BIGINT, retries INT)")
                 connection.execute("CREATE INDEX ON ledger (workflow_id, step_id)")
                 connection.execute("CREATE TABLE answers (workflow_id TEXT, answer TEXT)")
             return
@@ -78,7 +79,7 @@ class _Target:
         with self._admin() as connection, connection.cursor() as cursor:
             cursor.execute(f"CREATE DATABASE {self._name}")
             cursor.execute(f"USE {self._name}")
-            cursor.execute("CREATE TABLE ledger (workflow_id VARCHAR(255), step_id INT, pid INT, started_at_ms BIGINT, KEY (workflow_id, step_id))")
+            cursor.execute("CREATE TABLE ledger (workflow_id VARCHAR(255), step_id INT, pid INT, started_at_ms BIGINT, first_attempt_at_ms BIGINT, retries INT, KEY (workflow_id, step_id))")
             cursor.execute("CREATE TABLE answers (workflow_id VARCHAR(255), answer LONGTEXT)")
 
     def _postgres(self, database: str = "postgres") -> psycopg.Connection:
@@ -197,7 +198,7 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
     read = json.loads if config.serializer == "json" else lambda text: pickle.loads(base64.b64decode(text))  # noqa: S301
     rows = target.query("SELECT workflow_uuid, status, output, recovery_attempts, max_recovery_attempts, error FROM workflow_status")
     steps = target.query("SELECT workflow_uuid, function_id, output, completed_at_epoch_ms FROM operation_outputs")
-    ledger = target.query("SELECT workflow_id, step_id, pid, started_at_ms FROM ledger")
+    ledger = target.query("SELECT workflow_id, step_id, pid, started_at_ms, first_attempt_at_ms, retries FROM ledger")
     answers: dict[str, list[str]] = {}
     for workflow_id, answer in target.query("SELECT workflow_id, answer FROM answers"):
         answers.setdefault(workflow_id, []).append(answer)
@@ -206,9 +207,10 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
     if len(rows) != config.workflows:
         violations.append(f"expected {config.workflows} workflows, found {len(rows)}")
     saved: dict[tuple[str, int], tuple[str, int]] = {(row[0], row[1]): (row[2], row[3]) for row in steps}
-    executions: dict[tuple[str, int], list[tuple[int, int]]] = {}
-    for workflow_id, step_id, pid, started in ledger:
-        executions.setdefault((workflow_id, step_id), []).append((pid, started))
+    executions: dict[tuple[str, int], list[tuple[int, int, int, int]]] = {}
+    for workflow_id, step_id, pid, started, first_attempt, retries in ledger:
+        result.ledger_retries += retries
+        executions.setdefault((workflow_id, step_id), []).append((pid, started, first_attempt, retries))
 
     fault_free = not any(result.faults_fired.values()) and "crash_window" not in config.faults
     for workflow_id, status, output, attempts, max_attempts, error in rows:
@@ -245,9 +247,9 @@ def _check(target: _Target, config: ChaosConfig, workers: _Workers, result: Chao
                 if fault_free:
                     violations.append(f"{workflow_id} step {step_id} ran {len(runs)} times with no fault")
             # A paused process may wake holding a step it had already decided to run; that is the documented overlap.
-            late = [pid for pid, started in runs if started > row[1] + 50 and pid not in workers.ever_paused]
+            late = [(pid, started, first_attempt, retries) for pid, started, first_attempt, retries in runs if started > row[1] + 50 and pid not in workers.ever_paused]
             if late:
-                violations.append(f"{workflow_id} step {step_id} started after its save, by {late}")
+                violations.append(f"{workflow_id} step {step_id} started after its save at {row[1]}; (pid, ledger time, first attempt time, retries): {late}")
 
     open_transactions = target.open_transactions()
     if open_transactions:

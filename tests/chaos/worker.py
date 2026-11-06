@@ -47,20 +47,23 @@ def _write_answer(workflow_id: str, answer: dict[str, Any]) -> None:
 
 def _write_ledger(workflow_id: str, step_id: int) -> None:
     pid = os.getpid()
+    first_attempt_at_ms = int(time.time() * 1000)
+    retries = 0
     while True:
         try:
             if not URL.startswith("sqlite"):
                 now = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT" if URL.startswith("postgres") else "CAST(UNIX_TIMESTAMP(UTC_TIMESTAMP(6)) * 1000 AS SIGNED)"
                 with _ledger() as connection, connection.cursor() as cursor:
-                    cursor.execute(f"INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms) VALUES (%s, %s, %s, {now})", (workflow_id, step_id, pid))  # noqa: S608
+                    cursor.execute(f"INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms, first_attempt_at_ms, retries) VALUES (%s, %s, %s, {now}, %s, %s)", (workflow_id, step_id, pid, first_attempt_at_ms, retries))  # noqa: S608
             else:
                 with sqlite3.connect(LEDGER, timeout=30) as connection:
                     connection.execute(
-                        "INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms) VALUES (?, ?, ?, ?)",
-                        (workflow_id, step_id, pid, int(time.time() * 1000)),
+                        "INSERT INTO ledger (workflow_id, step_id, pid, started_at_ms, first_attempt_at_ms, retries) VALUES (?, ?, ?, ?, ?, ?)",
+                        (workflow_id, step_id, pid, int(time.time() * 1000), first_attempt_at_ms, retries),
                     )
             return
         except (pymysql.Error, psycopg.Error, sqlite3.Error):
+            retries += 1
             time.sleep(0.2)
 
 
