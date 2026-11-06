@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID, Serializer, WorkflowSerializationFormat
+from rust_dwos import DBOS, DBOSConfig, SetWorkflowID, Serializer, StoreError, WorkflowSerializationFormat
 from tests.conftest import Database
 
 
@@ -73,7 +73,7 @@ def test_a_serializer_name_must_be_safe_and_fit_the_column(config: DBOSConfig) -
     DBOS.destroy(destroy_registry=True)
     DBOS(config={**config, "serializer": LongName()})
     try:
-        with pytest.raises(Exception, match="must be 1 to 33"):
+        with pytest.raises(StoreError, match="must be 1 to 33"):
             DBOS.launch()
     finally:
         DBOS.destroy(destroy_registry=True)

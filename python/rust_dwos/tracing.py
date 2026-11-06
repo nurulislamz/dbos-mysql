@@ -68,8 +68,9 @@ def current_span() -> Any:
 
 def wants_parent() -> bool:
     # Only a run with no span of its own needs the trace context stored with its row.
-    trace = _api()
-    return _tracer is not None and trace is not None and not trace.get_current_span().get_span_context().is_valid
+    if _tracer is None:
+        return False
+    return not _api().get_current_span().get_span_context().is_valid
 
 
 def parent_from(attributes: str | None) -> Any:
