@@ -103,7 +103,7 @@ pub(super) fn recorded_send(
     Ok(SendOutcome::Replayed)
 }
 
-fn recorded_value(
+pub(super) fn recorded_value(
     workflow_id: &str,
     step_id: u32,
     step_name: &str,
@@ -133,7 +133,7 @@ fn recorded_value(
     })
 }
 
-fn check_wait_steps(step_id: u32, timeout_step_id: u32) -> Result<(), Error> {
+pub(super) fn check_wait_steps(step_id: u32, timeout_step_id: u32) -> Result<(), Error> {
     if step_id == timeout_step_id {
         return Err(Error::InvalidConfig(
             "a wait and its timeout require different step IDs".to_owned(),
@@ -683,7 +683,7 @@ impl Store {
         Ok((tx, None))
     }
 
-    async fn ensure_deadline(
+    pub(super) async fn ensure_deadline(
         &self,
         tx: &mut Transaction<'static, Any>,
         lease: &Lease,

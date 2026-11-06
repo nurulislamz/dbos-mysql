@@ -14,6 +14,7 @@ use crate::workflow::{
 use crate::{Error, Identity, Store};
 
 mod attributes;
+mod awakeables;
 mod datasources;
 mod debounce;
 mod events;

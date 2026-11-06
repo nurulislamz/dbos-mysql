@@ -30,6 +30,7 @@ from rust_dwos.errors import (
 )
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events, WorkflowSerializationFormat
+from rust_dwos.awakeables import Awakeables
 from rust_dwos.forks import Forks
 from rust_dwos.patching import Patching
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
@@ -372,7 +373,7 @@ class _DBOSMeta(type):
         return tracing.current_span()
 
 
-class DBOS(WaitFirst, SDKCalls, Sleep, Patching, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
