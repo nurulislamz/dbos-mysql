@@ -126,6 +126,31 @@ all_dbs!(fork_replays_steps_before_the_start_step, backend, {
         .unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].workflow_id, "f");
+
+    for (is_fork, was_forked_from, expected) in [
+        (None, None, vec!["a", "f"]),
+        (Some(true), None, vec!["f"]),
+        (Some(false), None, vec!["a"]),
+        (None, Some(true), vec!["a"]),
+        (None, Some(false), vec!["f"]),
+        (Some(true), Some(true), vec![]),
+        (Some(true), Some(false), vec!["f"]),
+    ] {
+        let mut ids: Vec<_> = engine
+            .list_workflows(&WorkflowFilter {
+                is_fork,
+                was_forked_from,
+                workflow_ids: Some(vec!["a".into(), "f".into()]),
+                ..WorkflowFilter::default()
+            })
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.workflow_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, expected);
+    }
 });
 
 all_dbs!(fork_ids_options_and_errors, backend, {

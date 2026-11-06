@@ -222,6 +222,8 @@ class Engine:
         queue_name: list[str] | None = None,
         app_version: list[str] | None = None,
         forked_from: list[str] | None = None,
+        is_fork: bool | None = None,
+        was_forked_from: bool | None = None,
         user: list[str] | None = None,
         queues_only: bool = False,
         status: list[str] | None = None,
