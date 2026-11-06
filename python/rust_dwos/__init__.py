@@ -13,6 +13,7 @@ from rust_dwos.dbos import (
 )
 from rust_dwos.attributes import SetWorkflowAttributes
 from rust_dwos.events import SendMessage, WorkflowSerializationFormat
+from rust_dwos.tracing import PropagateOtelContext
 from rust_dwos.serialization import Serializer
 from rust_dwos.queues import EnqueueOptions, Queue, QueueRateLimit, SetEnqueueOptions
 from rust_dwos.step_reservation import StepReservation
@@ -57,6 +58,7 @@ __all__ = [
     "Queue",
     "QueueRateLimit",
     "EnqueueOptions",
+    "PropagateOtelContext",
     "SendMessage",
     "Serializer",
     "WorkflowSerializationFormat",

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, NotRequired, TypedDict
 
-from rust_dwos import _native
+from rust_dwos import _native, tracing
 from rust_dwos.errors import (
     DBOSAwaitedWorkflowCancelledError,
     DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded,
@@ -69,6 +69,10 @@ class DBOSConfig(TypedDict):
     retention_rows: NotRequired[int]
     retention_interval_seconds: NotRequired[float]
     executor_id: NotRequired[str | None]
+    # OpenTelemetry spans for workflows and steps. Needs rust-dwos[otel]. Other otlp_* keys are not supported yet.
+    enable_otlp: NotRequired[bool]
+    otlp_traces_endpoints: NotRequired[list[str]]
+    otlp_attributes: NotRequired[dict[str, str]]
 
 
 class WorkflowStatusString(Enum):
@@ -352,6 +356,11 @@ class _DBOSMeta(type):
     def step_status(cls) -> StepStatus | None:
         return _current_step.get()
 
+    @property
+    def span(cls) -> Any:
+        """The OpenTelemetry span of the current workflow or step, or None."""
+        return tracing.current_span()
+
 
 class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, Events, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
@@ -378,6 +387,7 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
                 handler.name = "__dbos_console_log_handler__"
                 logger.addHandler(handler)
             handler.setLevel(config.get("console_log_level", config.get("log_level", "INFO")))
+        tracing.setup(bool(config.get("enable_otlp")), config.get("otlp_traces_endpoints") or [], config.get("otlp_attributes") or {})
         self._shutdown_timeout = float(config.get("shutdown_timeout_seconds", 5.0))
         self._engine: Any = None
         self._pid = os.getpid()
@@ -553,7 +563,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
                     watch = policy.watch()
                     reset = _current_step.set(StepStatus(step_id, *attempts.status(), step_name, watch))
                     try:
-                        value = function(*args, **kwargs) if watch is None else _call_watched(instance, watch, step_name, function, args, kwargs)
+                        with tracing.span(step_name, _step_attributes(run, step_id)):
+                            value = function(*args, **kwargs) if watch is None else _call_watched(instance, watch, step_name, function, args, kwargs)
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
                         retryable = should_retry(error) if should_retry is not None and policy.wraps_failures else True
@@ -588,7 +599,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
                     watch = policy.watch()
                     reset = _current_step.set(StepStatus(step_id, *attempts.status(), step_name, watch))
                     try:
-                        value = await function(*args, **kwargs) if watch is None else await _await_watched(watch, step_name, function(*args, **kwargs))
+                        with tracing.span(step_name, _step_attributes(run, step_id)):
+                            value = await function(*args, **kwargs) if watch is None else await _await_watched(watch, step_name, function(*args, **kwargs))
                     except Exception as error:  # noqa: BLE001
                         errors.append(error)
                         retryable = should_retry(error) if should_retry is not None and policy.wraps_failures else True
@@ -757,7 +769,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
         async def guarded() -> Any:
             try:
                 validated_args, validated_kwargs = info.validate_args(args, kwargs) if info.validate_args else (args, kwargs)
-                return await info.function(*validated_args, **validated_kwargs)
+                with tracing.span(info.name, _workflow_attributes(run), await self._parent_async(run)):
+                    return await info.function(*validated_args, **validated_kwargs)
             except SystemExit:
                 return _SYSTEM_EXIT
 
@@ -806,7 +819,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
         context.run(_bind_run, run, active)
         try:
             validated_args, validated_kwargs = info.validate_args(args, kwargs) if info.validate_args else (args, kwargs)
-            value = context.run(info.function, *validated_args, **validated_kwargs)
+            parent = self._parent_sync(run)
+            value = context.run(_spanned, info.name, _workflow_attributes(run), parent, info.function, *validated_args, **validated_kwargs)
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
         except (DBOSWorkflowCancelledError, DBOSLeaseLostError):
             self._stop_keeper(active)
@@ -821,6 +835,23 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
             raise
         self._stop_keeper(active)
         return self._finish_success_sync(info, run, value)
+
+    def _parent_sync(self, run: _native.Run) -> Any:
+        # A workflow started elsewhere, or recovered, has no active span. Its stored carrier gives the parent.
+        if not tracing.wants_parent():
+            return None
+        try:
+            return tracing.parent_from(self._blocking(self._engine.get_status, run.workflow_id).attributes)
+        except Exception:  # noqa: BLE001  # a trace lookup must never fail the workflow
+            return None
+
+    async def _parent_async(self, run: _native.Run) -> Any:
+        if not tracing.wants_parent():
+            return None
+        try:
+            return tracing.parent_from((await self._engine.get_status(run.workflow_id)).attributes)
+        except Exception:  # noqa: BLE001  # a trace lookup must never fail the workflow
+            return None
 
     def _finish_success_sync(self, info: _Workflow, run: _native.Run, value: Any) -> Any:
         try:
@@ -952,6 +983,19 @@ def _at_exit() -> None:
 
 
 atexit.register(_at_exit)
+
+
+def _workflow_attributes(run: _native.Run) -> dict[str, Any]:
+    return {"dbos.operation.workflow_id": run.workflow_id}
+
+
+def _step_attributes(run: _native.Run, step_id: int) -> dict[str, Any]:
+    return {"dbos.operation.workflow_id": run.workflow_id, "dbos.operation.step_id": step_id}
+
+
+def _spanned(name: str, attributes: dict[str, Any], parent: Any, function: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    with tracing.span(name, attributes, parent):
+        return function(*args, **kwargs)
 
 
 def _check_poll(polling_interval_sec: float | None) -> None:
