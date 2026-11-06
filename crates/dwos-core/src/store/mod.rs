@@ -11,6 +11,7 @@ use crate::retry::with_retry;
 use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workflow};
 
 mod attributes;
+mod datasources;
 mod events;
 mod forks;
 mod leases;

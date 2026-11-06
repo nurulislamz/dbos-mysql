@@ -13,6 +13,7 @@ use crate::workflow::{
 use crate::{Error, Identity, Store};
 
 mod attributes;
+mod datasources;
 mod events;
 mod forks;
 mod queues;
