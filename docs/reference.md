@@ -68,7 +68,7 @@ Handles (`WorkflowHandle`, `WorkflowHandleAsync`) have `workflow_id`, `get_workf
 | Call | Does |
 |---|---|
 | `DBOS.wait_first(handles, polling_interval_sec=1.0)` | Returns the first handle that finishes. Sync only: it refuses a running event loop, so use `wait_first_async` there |
-| `DBOS.run_step(opts, fn, *args, **kwargs)` | Runs `fn` as a step without a decorator. `opts` is a dict such as `{"name": ...}`, or `None`. Sync only, like `wait_first`; use `run_step_async` in async code |
+| `DBOS.run_step(opts, fn, *args, **kwargs)` | Runs `fn` as a step without a decorator. `opts` is a dict such as `{"name": ...}`, or `None`. Sync only, like `wait_first`; use `run_step_async` in async code. `preemptible=True` is for async steps only. Async steps are cancelled with their workflow even when it is `False`, while DBOS would let them finish |
 | `DBOS.reserve_step()` | Draws the next step ID now. `reservation.run(opts, fn, ...)` or `run_async` runs it once, later, in the same workflow run. A reservation that never runs leaves a gap in the step IDs |
 | `DBOS.asyncio_wait(fs, timeout=None, return_when=ALL_COMPLETED)` | A durable `asyncio.wait`: which tasks finished is saved, so replay agrees. Outside a workflow it is plain `asyncio.wait` |
 | `with DBOSContextEnsure() as ctx` | Uses the current DBOS context, or makes one for the block and clears it on exit. One instance cannot be entered twice |

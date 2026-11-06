@@ -14,6 +14,16 @@ def _no_running_loop(fn: str) -> None:
     raise RuntimeError(f"{fn}() was called while an event loop is running. Use await {fn}_async(...) instead.")
 
 
+def _step_options(dbos_step_options: dict[str, Any] | None, func: Callable[..., Any]) -> dict[str, Any]:
+    options = {"name": func.__qualname__, **(dbos_step_options or {})}
+    if options.pop("preemptible", False) and not inspect.iscoroutinefunction(func):
+        from rust_dwos.errors import DBOSException
+
+        raise DBOSException(f"Step {options['name']} is sync but preemptible=True. Preemption is only supported for async steps.")
+    # shortcut: every async step is cancelled with its workflow, as preemptible=True asks; DBOS defaults to False, so shield steps that pass False to upgrade.
+    return options
+
+
 def _internal_step(options: dict[str, Any], function: Callable[..., Any]) -> Callable[..., Any]:
     # Built per call and never started as a workflow, so it stays out of DBOS's registry.
     from rust_dwos.dbos import DBOS, _unregistered_step
@@ -55,7 +65,7 @@ class SDKCalls:
     @classmethod
     def run_step(cls, dbos_step_options: dict[str, Any] | None, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         _no_running_loop("run_step")
-        options = {"name": func.__qualname__, **(dbos_step_options or {})}
+        options = _step_options(dbos_step_options, func)
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)  # keeps func's annotations, which the step codec reads
             async def invoke(*call_args: Any, **call_kwargs: Any) -> Any:
@@ -66,7 +76,7 @@ class SDKCalls:
 
     @classmethod
     async def run_step_async(cls, dbos_step_options: dict[str, Any] | None, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        options = {"name": func.__qualname__, **(dbos_step_options or {})}
+        options = _step_options(dbos_step_options, func)
         if inspect.iscoroutinefunction(func):
             return await _internal_step(options, func)(*args, **kwargs)
 

@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from rust_dwos import DBOS
+from rust_dwos import DBOS, DBOSException
 
 
 def test_run_step(dbos: DBOS) -> None:
@@ -57,3 +57,26 @@ async def test_sync_calls_refuse_a_running_loop(dbos: DBOS) -> None:
         DBOS.run_step(None, lambda: 1)
     with pytest.raises(RuntimeError, match="wait_first_async"):
         DBOS.wait_first([])
+
+
+async def test_run_step_async_accepts_preemptible(dbos: DBOS) -> None:
+    async def add(value: int) -> int:
+        return value + 1
+
+    @DBOS.workflow()
+    async def workflow() -> int:
+        return await DBOS.run_step_async({"name": "add_preemptible", "preemptible": True}, add, 2)
+
+    assert await workflow() == 3
+
+
+def test_run_step_refuses_preemptible_on_sync_steps(dbos: DBOS) -> None:
+    def add(value: int) -> int:
+        return value + 1
+
+    @DBOS.workflow()
+    def workflow() -> int:
+        return DBOS.run_step({"preemptible": True}, add, 2)
+
+    with pytest.raises(DBOSException, match="only supported for async"):
+        workflow()
