@@ -226,17 +226,17 @@ impl Run {
 
     /// The step ID for a call, or `None` inside a step. A reserved ID is claimed here, so it runs once.
     pub fn step_id_for_call(
-        &self,
+        run: Option<&Self>,
         in_step: bool,
         reserved: Option<u32>,
     ) -> Result<Option<u32>, Error> {
-        if in_step {
+        let Some(run) = run.filter(|_| !in_step) else {
             return Ok(None);
-        }
-        let Some(id) = reserved else {
-            return Ok(Some(self.next_step_id()));
         };
-        let claimed = self
+        let Some(id) = reserved else {
+            return Ok(Some(run.next_step_id()));
+        };
+        let claimed = run
             .reserved_step_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

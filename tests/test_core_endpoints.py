@@ -23,6 +23,10 @@ async def _run(engine: _native.Engine, workflow_id: str) -> _native.Run:
     return begun.run
 
 
+def test_step_outside_workflow_has_no_id() -> None:
+    assert _native.step_id_for_call(None, False) is None
+
+
 async def test_connect_and_close(database) -> None:
     connected = await _native.Engine.connect(database.url)
     assert isinstance(connected.serialization, str)
@@ -39,20 +43,23 @@ async def test_begin(engine: _native.Engine) -> None:
 
 async def test_begin_step(engine: _native.Engine) -> None:
     run = await _run(engine, "step")
-    step_id, replay = await engine.begin_step(run, "s", False)
+    step_id = _native.step_id_for_call(run, False)
+    replay = await engine.begin_step(run, "s", step_id)
     assert step_id == 1
     assert replay is None
 
 
 async def test_save_step_output(engine: _native.Engine) -> None:
     run = await _run(engine, "output")
-    step_id, _replay = await engine.begin_step(run, "s", False)
+    step_id = _native.step_id_for_call(run, False)
+    await engine.begin_step(run, "s", step_id)
     await engine.save_step_output(run, step_id, "s", "1")
 
 
 async def test_save_step_error(engine: _native.Engine) -> None:
     run = await _run(engine, "error")
-    step_id, _replay = await engine.begin_step(run, "s", False)
+    step_id = _native.step_id_for_call(run, False)
+    await engine.begin_step(run, "s", step_id)
     await engine.save_step_error(run, step_id, "s", "boom")
 
 
@@ -102,7 +109,8 @@ async def test_list_workflows(engine: _native.Engine) -> None:
 
 async def test_list_steps(engine: _native.Engine) -> None:
     run = await _run(engine, "steps")
-    step_id, _replay = await engine.begin_step(run, "s", False)
+    step_id = _native.step_id_for_call(run, False)
+    await engine.begin_step(run, "s", step_id)
     await engine.save_step_output(run, step_id, "s", "1")
     steps = await engine.list_steps("steps")
     assert len(steps) == 1

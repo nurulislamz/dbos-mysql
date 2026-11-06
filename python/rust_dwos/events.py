@@ -207,9 +207,8 @@ class Events:
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
-        step_id, replay = (None, None)
-        if run is not None:
-            step_id, replay = instance._blocking(instance._engine.begin_step, run, _GET_EVENTS_STEP, dbos._current_step.get() is not None)
+        step_id = _native.step_id_for_call(run, dbos._current_step.get() is not None)
+        replay = instance._blocking(instance._engine.begin_step, run, _GET_EVENTS_STEP, step_id) if step_id is not None else None
         if replay is not None:
             return dbos._replay_step(replay, _PLAIN, run.serialization)
         events = _events_of(instance._blocking(instance._engine.list_events, workflow_id))
@@ -220,9 +219,8 @@ class Events:
         dbos = _dbos()
         instance = dbos._running()
         run = dbos._current_run.get()
-        step_id, replay = (None, None)
-        if run is not None:
-            step_id, replay = await instance._engine.begin_step(run, _GET_EVENTS_STEP, dbos._current_step.get() is not None)
+        step_id = _native.step_id_for_call(run, dbos._current_step.get() is not None)
+        replay = await instance._engine.begin_step(run, _GET_EVENTS_STEP, step_id) if step_id is not None else None
         if replay is not None:
             return dbos._replay_step(replay, _PLAIN, run.serialization)
         events = _events_of(await instance._engine.list_events(workflow_id))

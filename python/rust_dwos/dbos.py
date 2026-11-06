@@ -457,9 +457,9 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             raise DBOSException("DBOS was destroyed while this work was running")
         return method(*args, blocking=True, **kwargs)
 
-    def _waiting(self, method: Callable[..., Any], *args: Any) -> Any:
+    def _waiting(self, method: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         # For a wait with no end of its own. Destroy cancels what runs on this loop, which wakes the caller.
-        return self._state.run(_call(method, *args))
+        return self._state.run(_call(method, *args, **kwargs))
 
     @classmethod
     def destroy(cls, *, destroy_registry: bool = False) -> None:
@@ -556,14 +556,13 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             @functools.wraps(function)
             def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run = _current_run.get()
-                if run is None:
-                    return function(*args, **kwargs)
-                if should_retry is not None and inspect.iscoroutinefunction(should_retry):
+                if run is not None and should_retry is not None and inspect.iscoroutinefunction(should_retry):
                     raise DBOSException(f"Step {step_name} is sync but should_retry is async. Use an async step to pair with an async validator.")
-                instance = _running()
-                step_id, replay = instance._blocking(instance._engine.begin_step, run, step_name, _current_step.get() is not None, reserved_step_id=_reserved_step.get())
+                step_id = _native.step_id_for_call(run, _current_step.get() is not None, _reserved_step.get())
                 if step_id is None:
                     return function(*args, **kwargs)
+                instance = _running()
+                replay = instance._blocking(instance._engine.begin_step, run, step_name, step_id)
                 if replay is not None:
                     return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
@@ -594,12 +593,11 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             @functools.wraps(function)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 run = _current_run.get()
-                if run is None:
-                    return await function(*args, **kwargs)
-                instance = _running()
-                step_id, replay = await instance._engine.begin_step(run, step_name, _current_step.get() is not None, reserved_step_id=_reserved_step.get())
+                step_id = _native.step_id_for_call(run, _current_step.get() is not None, _reserved_step.get())
                 if step_id is None:
                     return await function(*args, **kwargs)
+                instance = _running()
+                replay = await instance._engine.begin_step(run, step_name, step_id)
                 if replay is not None:
                     return _replay_step(replay, codec, run.serialization)
                 errors: list[Exception] = []
@@ -801,7 +799,7 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             logger.warning(f"Workflow {run.workflow_id} lost its lease")
             body.cancel()
             await asyncio.gather(body, return_exceptions=True)
-            return _decode_result(await self._engine.await_result(run.workflow_id), info)
+            return _decode_result(await self._engine.conclude(run, lease_lost=True), info)
         if body.cancelled():
             await self._engine.conclude(run)
             raise asyncio.CancelledError
@@ -819,8 +817,7 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             return await self._finish_success(info, run, value)
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
         if isinstance(error, DBOSWorkflowCancelledError | DBOSLeaseLostError):
-            await self._engine.conclude(run)
-            return _decode_result(await self._engine.await_result(run.workflow_id), info)
+            return _decode_result(await self._engine.conclude(run, lease_lost=True), info)
         if isinstance(error, Exception):
             return await self._finish_error(info, run, error)
         await self._engine.conclude(run)
@@ -837,8 +834,7 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
         except (DBOSWorkflowCancelledError, DBOSLeaseLostError):
             self._stop_keeper(active)
-            self._blocking(self._engine.conclude, run)
-            return _decode_result(self._waiting(self._engine.await_result, run.workflow_id), info)
+            return _decode_result(self._waiting(self._engine.conclude, run, lease_lost=True), info)
         except Exception as error:  # noqa: BLE001
             _drop_datasource_checkpoints(run, context)
             self._stop_keeper(active)

@@ -97,6 +97,21 @@ pub(crate) fn seconds(value: f64) -> PyResult<Duration> {
 #[pyclass(name = "Run", frozen)]
 pub(crate) struct PyRun(pub(crate) Arc<Run>);
 
+#[pyfunction]
+#[pyo3(signature = (run, in_step, reserved_step_id=None))]
+fn step_id_for_call(
+    run: Option<PyRef<'_, PyRun>>,
+    in_step: bool,
+    reserved_step_id: Option<u32>,
+) -> PyResult<Option<u32>> {
+    Run::step_id_for_call(
+        run.as_ref().map(|run| run.0.as_ref()),
+        in_step,
+        reserved_step_id,
+    )
+    .map_err(to_py)
+}
+
 #[pymethods]
 impl PyRun {
     #[getter]
@@ -560,25 +575,17 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (run, name, in_step, *, reserved_step_id=None, blocking=false))]
+    #[pyo3(signature = (run, name, step_id, *, blocking=false))]
     fn begin_step<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         name: String,
-        in_step: bool,
-        reserved_step_id: Option<u32>,
+        step_id: u32,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
-        // Taken at the call, not in the future, so concurrent calls keep their call order.
-        let step_id = run
-            .step_id_for_call(in_step, reserved_step_id)
-            .map_err(to_py)?;
         dispatch(py, blocking, async move {
-            let Some(step_id) = step_id else {
-                return Ok((None, None));
-            };
             let decision = engine
                 .check_step(&run, step_id, &name)
                 .await
@@ -594,7 +601,7 @@ impl PyEngine {
                     error: Some(error),
                 }),
             };
-            Ok((Some(step_id), replay))
+            Ok(replay)
         })
     }
 
@@ -636,23 +643,25 @@ impl PyEngine {
         })
     }
 
-    #[pyo3(signature = (run, *, output=None, error=None, blocking=false))]
+    #[pyo3(signature = (run, *, output=None, error=None, lease_lost=false, blocking=false))]
     fn conclude<'py>(
         &self,
         py: Python<'py>,
         run: PyRef<'py, PyRun>,
         output: Option<String>,
         error: Option<String>,
+        lease_lost: bool,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (engine, run) = (self.0.clone(), run.0.clone());
-        let ended = match (output, error) {
-            (Some(output), None) => Ended::Success(output),
-            (None, Some(error)) => Ended::Error(error),
-            (None, None) => Ended::Interrupted,
-            (Some(_), Some(_)) => {
+        let ended = match (output, error, lease_lost) {
+            (Some(output), None, false) => Ended::Success(output),
+            (None, Some(error), false) => Ended::Error(error),
+            (None, None, false) => Ended::Interrupted,
+            (None, None, true) => Ended::LeaseLost,
+            _ => {
                 return Err(to_py(Error::InvalidConfig(
-                    "a workflow cannot end with both an output and an error".to_owned(),
+                    "a workflow must have only one ending".to_owned(),
                 )));
             }
         };
@@ -758,6 +767,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .install()
         .ok();
     m.add_function(wrap_pyfunction!(silence_logs, m)?)?;
+    m.add_function(wrap_pyfunction!(step_id_for_call, m)?)?;
     m.add_class::<PyEngine>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorkflow>()?;

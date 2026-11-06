@@ -392,6 +392,26 @@ all_dbs!(release_ignores_a_lost_lease, backend, {
     assert_eq!(claim.recovery_attempts, 2);
 });
 
+all_dbs!(lost_run_waits_for_the_new_owner, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, expired()).await;
+    let stale = begin_run(&engine, "a").await;
+    let claim = engine.recover_now(&names()).await.unwrap().remove(0);
+    let owner = Run::new(claim.lease, claim.serialization, claim.deadline_epoch_ms);
+    let waiter = engine.clone();
+    let waiting = tokio::spawn(async move { waiter.conclude(&stale, Ended::LeaseLost).await });
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(!waiting.is_finished());
+    engine
+        .finish(&owner, Outcome::Success("owner".to_owned()))
+        .await
+        .unwrap();
+    let Finished::Superseded(result) = waiting.await.unwrap().unwrap() else {
+        panic!("the lost run should return the new owner's result");
+    };
+    assert_eq!(result.outcome, FinalOutcome::Success("owner".to_owned()));
+});
+
 all_dbs!(recovery_tick_returns_crashed_work, backend, {
     let db = TestDb::migrated(backend).await;
     let engine = engine(&db, expired()).await;

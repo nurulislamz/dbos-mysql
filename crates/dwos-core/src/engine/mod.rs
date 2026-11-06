@@ -164,6 +164,7 @@ pub enum Ended {
     Success(String),
     Error(String),
     Interrupted,
+    LeaseLost,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,6 +441,12 @@ impl Engine {
                 self.release(run).await?;
                 Ok(Finished::Accepted)
             }
+            Ended::LeaseLost => {
+                self.release(run).await?;
+                Ok(Finished::Superseded(
+                    self.await_result(run.workflow_id()).await?,
+                ))
+            }
         }
     }
 
@@ -658,16 +665,23 @@ mod tests {
             None,
         );
         let reserved = run.reserve_step_id();
-        assert_eq!(run.step_id_for_call(true, Some(reserved)).unwrap(), None);
+        assert_eq!(Run::step_id_for_call(None, false, None).unwrap(), None);
         assert_eq!(
-            run.step_id_for_call(false, Some(reserved)).unwrap(),
+            Run::step_id_for_call(Some(&run), true, Some(reserved)).unwrap(),
+            None
+        );
+        assert_eq!(
+            Run::step_id_for_call(Some(&run), false, Some(reserved)).unwrap(),
             Some(1)
         );
         assert!(matches!(
-            run.step_id_for_call(false, Some(reserved)),
+            Run::step_id_for_call(Some(&run), false, Some(reserved)),
             Err(Error::StepReservationUsed(1))
         ));
-        assert_eq!(run.step_id_for_call(false, None).unwrap(), Some(2));
+        assert_eq!(
+            Run::step_id_for_call(Some(&run), false, None).unwrap(),
+            Some(2)
+        );
     }
 
     #[test]
