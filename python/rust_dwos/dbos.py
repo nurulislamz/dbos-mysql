@@ -29,11 +29,11 @@ from rust_dwos.errors import (
     DBOSWorkflowCancelledError,
 )
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
-from rust_dwos.events import Events
+from rust_dwos.events import Events, WorkflowSerializationFormat
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
-from rust_dwos.serialization import Codec, allow_pickle, decode_exception, encode_exception
+from rust_dwos.serialization import Codec, Serializer, allow_pickle, decode_exception, encode_exception, set_custom_serializer
 from rust_dwos.sleep import Sleep
 from rust_dwos.sdk_calls import SDKCalls
 from rust_dwos.step_reservation import _reserved_step
@@ -61,7 +61,7 @@ class DBOSConfig(TypedDict):
     recovery_interval_seconds: NotRequired[float]
     max_concurrent_recoveries: NotRequired[int]
     shutdown_timeout_seconds: NotRequired[float]
-    serializer: NotRequired[Literal["json", "pickle"]]
+    serializer: NotRequired[Literal["json", "pickle"] | Serializer]
     log_level: NotRequired[str]
     console_log_level: NotRequired[str]
     # Finished workflows older than retention_hours, or beyond the newest retention_rows, are deleted every interval.
@@ -131,6 +131,7 @@ class _Workflow:
     is_async: bool
     max_recovery_attempts: int | None
     validate_args: ValidateArgsCallable | None = None
+    serialization_type: WorkflowSerializationFormat | None = None
 
 
 _current_run: contextvars.ContextVar[_native.Run | None] = contextvars.ContextVar("dbos_run", default=None)
@@ -409,10 +410,16 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
         except RuntimeError:
             self._app_loop = None
         options = {name: self._config[name] for name in _ENGINE_OPTIONS if name in self._config}
+        custom = self._config.get("serializer")
+        if isinstance(custom, Serializer):
+            options.pop("serializer")
+            options["custom_serializer"] = custom.name()
         options["executor_id"] = self._executor_id
         try:
             self._engine = self._state.run(_call(_native.Engine.connect, self._config["system_database_url"], **options))
             allow_pickle(self._engine.serialization == _native.PY_PICKLE)
+            custom_serializer = custom if isinstance(custom, Serializer) else None
+            set_custom_serializer(custom_serializer, self._engine.serialization if custom_serializer is not None else None)
             flush_schedules(self)
         except BaseException:
             if self._engine is not None:
@@ -472,11 +479,11 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
             keeper.stop()
 
     @classmethod
-    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS, validate_args: ValidateArgsCallable | None = None) -> Callable[..., Any]:
+    def workflow(cls, *, name: str | None = None, max_recovery_attempts: int | None = _native.DEFAULT_MAX_RECOVERY_ATTEMPTS, validate_args: ValidateArgsCallable | None = None, serialization_type: WorkflowSerializationFormat | None = None) -> Callable[..., Any]:
         def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
             is_async = inspect.iscoroutinefunction(function)
             validator = make_pydantic_args_validator(function) if validate_args is pydantic_args_validator else validate_args
-            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts, validator)
+            info = _Workflow(name or function.__qualname__, function, Codec(function), is_async, max_recovery_attempts, validator, serialization_type)
             _register(info)
 
             @functools.wraps(function)
@@ -960,8 +967,10 @@ def _result_args(workflow_id: str, polling_interval_sec: float | None) -> tuple[
 
 
 def _begin_args(info: _Workflow, args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[Any, ...]:
-    text = info.codec.encode_input(args, kwargs, _running()._engine.serialization)
-    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None, *timeout_start_args(), _next_reuse_policy.get())
+    # PORTABLE is the workflow's own choice. DEFAULT and NATIVE use the engine's format.
+    serialization = _native.PORTABLE_JSON if info.serialization_type == WorkflowSerializationFormat.PORTABLE else _running()._engine.serialization
+    text = info.codec.encode_input(args, kwargs, serialization)
+    return (info.name, text, info.max_recovery_attempts, _next_workflow_id.get(), _current_run.get(), _current_step.get() is not None, *timeout_start_args(), _next_reuse_policy.get(), serialization)
 
 
 def _check_config_keys(config: DBOSConfig) -> None:

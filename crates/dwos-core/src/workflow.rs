@@ -6,6 +6,10 @@ pub const DEFAULT_MAX_RECOVERY_ATTEMPTS: u32 = 100;
 const UNLIMITED_RECOVERY_ATTEMPTS: u32 = u32::MAX;
 pub const PORTABLE_JSON: &str = "portable_json";
 pub const PY_PICKLE: &str = "py_pickle";
+/// A user Serializer stores as `custom:<name>`, so a row names the serializer that wrote it.
+pub const CUSTOM_PREFIX: &str = "custom:";
+// The serialization column is VARCHAR(40) on MySQL.
+const CUSTOM_NAME_MAX: usize = 40 - CUSTOM_PREFIX.len();
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Status {
@@ -121,6 +125,8 @@ pub struct WorkflowOptions {
     pub assumed_role: Option<String>,
     pub authenticated_roles: Option<String>,
     pub attributes: Option<String>,
+    /// Format for this workflow's rows. `None` uses the engine's.
+    pub serialization: Option<String>,
     /// What to do when the workflow id already has a row.
     pub reuse: ReusePolicy,
 }
@@ -216,6 +222,28 @@ pub fn recovery_limit(limit: Option<u32>) -> u32 {
 
 pub fn recovery_limit_of(stored: u32) -> Option<u32> {
     (stored != UNLIMITED_RECOVERY_ATTEMPTS).then_some(stored)
+}
+
+/// The format tag for a user Serializer. The name goes into SQL text, so it is limited to safe characters.
+pub fn custom_format(name: &str) -> Result<String, Error> {
+    let safe = name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if name.is_empty() || name.len() > CUSTOM_NAME_MAX || !safe {
+        return Err(Error::InvalidConfig(format!(
+            "serializer name {name:?} must be 1 to {CUSTOM_NAME_MAX} letters, digits, '_', '-' or '.'"
+        )));
+    }
+    Ok(format!("{CUSTOM_PREFIX}{name}"))
+}
+
+/// Whether a stored tag names a format this core can write or read.
+pub fn is_known_format(tag: &str) -> bool {
+    tag == PORTABLE_JSON
+        || tag == PY_PICKLE
+        || tag
+            .strip_prefix(CUSTOM_PREFIX)
+            .is_some_and(|name| custom_format(name).is_ok())
 }
 
 pub fn pickle_from_serializer(name: &str) -> Result<bool, Error> {

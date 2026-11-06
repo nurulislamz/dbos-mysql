@@ -3,6 +3,7 @@ import asyncio
 DEFAULT_MAX_RECOVERY_ATTEMPTS: int
 PORTABLE_JSON: str
 PY_PICKLE: str
+CUSTOM_PREFIX: str
 
 class DBOSException(Exception): ...
 class StoreError(DBOSException): ...
@@ -166,6 +167,7 @@ class Engine:
         max_concurrent_recoveries: int | None = None,
         run_migrations: bool | None = None,
         serializer: str | None = None,
+        custom_serializer: str | None = None,
         read_only: bool | None = None,
         executor_id: str | None = None,
     ) -> asyncio.Future[Engine]: ...
@@ -183,6 +185,7 @@ class Engine:
         timeout_ms: int | None = None,
         ignore_propagated_deadline: bool = False,
         reuse_policy: str | None = None,
+        serialization: str | None = None,
         *,
         attributes: str | None = None,
         blocking: bool = False,
@@ -320,6 +323,7 @@ class Engine:
         timeout_ms: int | None = None,
         ignore_propagated_deadline: bool = False,
         reuse_policy: str | None = None,
+        serialization: str | None = None,
         *,
         deduplication_id: str | None = None,
         duplication_policy: str | None = None,

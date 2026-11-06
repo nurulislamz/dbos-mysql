@@ -317,6 +317,8 @@ pub struct Store {
     max_packet: Option<u64>,
     retries: Arc<AtomicU64>,
     pickle: bool,
+    /// The custom format tag this store can read as well, if any.
+    custom: Option<String>,
     read_only: bool,
     identity: Arc<Identity>,
 }
@@ -359,6 +361,7 @@ impl Store {
                 max_packet: None,
                 retries: Arc::new(AtomicU64::new(0)),
                 pickle: false,
+                custom: None,
                 read_only,
                 identity: Arc::default(),
             });
@@ -381,6 +384,7 @@ impl Store {
             max_packet,
             retries: Arc::new(AtomicU64::new(0)),
             pickle: false,
+            custom: None,
             read_only,
             identity: Arc::default(),
         })
@@ -389,6 +393,12 @@ impl Store {
     /// Lets this store claim pickled workflows. Without it they wait for a process that can read them.
     pub fn with_pickle(mut self) -> Self {
         self.pickle = true;
+        self
+    }
+
+    /// Lets this store claim rows written by the custom serializer `tag`, a tag from `custom_format`.
+    pub fn with_custom(mut self, tag: &str) -> Self {
+        self.custom = Some(tag.to_owned());
         self
     }
 
@@ -413,11 +423,17 @@ impl Store {
     }
 
     fn readable_formats(&self) -> String {
+        // Tags go into SQL text, so they must be the safe strings custom_format accepts.
+        let mut formats = vec![PORTABLE_JSON];
         if self.pickle {
-            format!("'{PORTABLE_JSON}', '{PY_PICKLE}'")
-        } else {
-            format!("'{PORTABLE_JSON}'")
+            formats.push(PY_PICKLE);
         }
+        formats.extend(self.custom.as_deref());
+        formats
+            .iter()
+            .map(|format| format!("'{format}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn backend(&self) -> &'static str {

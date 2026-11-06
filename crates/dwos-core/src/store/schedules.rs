@@ -3,7 +3,7 @@ use sqlx::{Any, Row, Transaction};
 use super::{Store, check_name, get_u32};
 use crate::Error;
 use crate::cron::Cron;
-use crate::workflow::{PORTABLE_JSON, PY_PICKLE, new_token};
+use crate::workflow::{is_known_format, new_token};
 
 /// What `ensure_schedule` stores. An existing name is updated and keeps its last fire time,
 /// unless the cron text changed: then it is armed again like a new schedule.
@@ -35,7 +35,7 @@ impl Store {
         required_name("workflow name", schedule.workflow_name)?;
         required_name("queue name", schedule.queue)?;
         check_name("cron", schedule.cron)?;
-        if schedule.serialization != PORTABLE_JSON && schedule.serialization != PY_PICKLE {
+        if !is_known_format(schedule.serialization) {
             return Err(Error::InvalidConfig(format!(
                 "schedule serialization {:?} is unknown",
                 schedule.serialization

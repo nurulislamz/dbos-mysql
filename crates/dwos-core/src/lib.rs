@@ -20,7 +20,7 @@ pub use store::{
     Identity, NewSchedule, PartitionLimits, PartitionUpdate, ScheduleFire, SendFrom, Store,
 };
 pub use workflow::{
-    Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE,
-    RecordedStep, ReusePolicy, Started, Status, StepRecord, Workflow, WorkflowFilter,
-    WorkflowOptions, pickle_from_serializer, recovery_limit, recovery_limit_of,
+    CUSTOM_PREFIX, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome,
+    PORTABLE_JSON, PY_PICKLE, RecordedStep, ReusePolicy, Started, Status, StepRecord, Workflow,
+    WorkflowFilter, WorkflowOptions, pickle_from_serializer, recovery_limit, recovery_limit_of,
 };

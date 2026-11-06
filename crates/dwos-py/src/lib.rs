@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dwos_core::{
-    ActiveRun, Begin, Begun, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Ended, Engine, EngineConfig,
-    Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep, RecordedStep, ReusePolicy,
-    Run, StepAttempts, StepDecision, StepExpiry, StepPolicy, StepWatch, Workflow, WorkflowOptions,
-    WorkflowResult, pickle_from_serializer, recovery_limit, recovery_limit_of,
+    ActiveRun, Begin, Begun, CUSTOM_PREFIX, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Ended, Engine,
+    EngineConfig, Error, FinalOutcome, Finished, PORTABLE_JSON, PY_PICKLE, ParentStep,
+    RecordedStep, ReusePolicy, Run, StepAttempts, StepDecision, StepExpiry, StepPolicy, StepWatch,
+    Workflow, WorkflowOptions, WorkflowResult, pickle_from_serializer, recovery_limit,
+    recovery_limit_of,
 };
 use pyo3::IntoPyObjectExt;
 use pyo3::create_exception;
@@ -429,7 +430,7 @@ pub(crate) struct PyEngine(pub(crate) Engine);
 impl PyEngine {
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, read_only=None, executor_id=None))]
+    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, custom_serializer=None, read_only=None, executor_id=None))]
     fn connect(
         py: Python<'_>,
         url: String,
@@ -439,6 +440,7 @@ impl PyEngine {
         max_concurrent_recoveries: Option<u32>,
         run_migrations: Option<bool>,
         serializer: Option<String>,
+        custom_serializer: Option<String>,
         read_only: Option<bool>,
         executor_id: Option<String>,
     ) -> PyResult<Bound<'_, PyAny>> {
@@ -464,6 +466,7 @@ impl PyEngine {
         if let Some(value) = serializer {
             config.pickle = pickle_from_serializer(&value).map_err(to_py)?;
         }
+        config.custom = custom_serializer;
         if let Some(value) = read_only {
             config.read_only = value;
         }
@@ -474,15 +477,15 @@ impl PyEngine {
     }
 
     #[getter]
-    fn serialization(&self) -> &'static str {
-        self.0.serialization()
+    fn serialization(&self) -> String {
+        self.0.serialization().to_owned()
     }
 
     fn close(&self) {
         self.0.close();
     }
 
-    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, *, attributes=None, blocking=false))]
+    #[pyo3(signature = (name, input, max_recovery_attempts, workflow_id=None, parent=None, in_step=false, timeout_ms=None, ignore_propagated_deadline=false, reuse_policy=None, serialization=None, *, attributes=None, blocking=false))]
     #[allow(clippy::too_many_arguments)]
     fn begin<'py>(
         &self,
@@ -496,6 +499,7 @@ impl PyEngine {
         timeout_ms: Option<i64>,
         ignore_propagated_deadline: bool,
         reuse_policy: Option<String>,
+        serialization: Option<String>,
         attributes: Option<String>,
         blocking: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -507,6 +511,7 @@ impl PyEngine {
             .and_then(|run| run.step_id_unless_in_step(in_step));
         let mut options = start_options(reuse_policy.as_deref())?;
         options.attributes = attributes;
+        options.serialization = serialization;
         dispatch(py, blocking, async move {
             let parent_step = match (&parent, parent_step_id) {
                 (Some(run), Some(step_id)) => Some(ParentStep { run, step_id }),
@@ -742,6 +747,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add("PORTABLE_JSON", PORTABLE_JSON)?;
     m.add("PY_PICKLE", PY_PICKLE)?;
+    m.add("CUSTOM_PREFIX", CUSTOM_PREFIX)?;
     pyo3_log::Logger::new(py, pyo3_log::Caching::Loggers)?
         .install()
         .ok();

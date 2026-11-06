@@ -115,6 +115,7 @@ impl Engine {
     ) -> Result<String, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
         let workflow_id = self.workflow_id_for_begin(&begin).await?;
+        let format = self.format_for(options)?;
         let enqueued = self
             .store
             .enqueue_workflow_with(
@@ -126,7 +127,7 @@ impl Engine {
                     max_recovery_attempts: begin.max_recovery_attempts,
                     lease: self.config.lease,
                     parent_workflow_id: begin.parent.map(|parent| parent.run.workflow_id()),
-                    serialization: self.serialization(),
+                    serialization: &format,
                     timeout_ms,
                     deadline_epoch_ms,
                 },

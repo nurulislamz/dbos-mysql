@@ -6,6 +6,7 @@ import json
 import pickle
 import sys
 import typing
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection
 from typing import Any
 
@@ -14,17 +15,46 @@ from pydantic.errors import PydanticUserError
 from pydantic_core import PydanticSerializationError, ValidationError
 
 from rust_dwos import errors
-from rust_dwos._native import PORTABLE_JSON, PY_PICKLE
+from rust_dwos._native import CUSTOM_PREFIX, PORTABLE_JSON, PY_PICKLE
 from rust_dwos.errors import DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
 
 _ANY: TypeAdapter[Any] = TypeAdapter(Any)
 _MISSING = object()
 _pickle_allowed = False
+_custom_format: str | None = None
+_custom_serializer: Serializer | None = None
+
+
+class Serializer(ABC):
+    """Encodes stored values when set as DBOSConfig["serializer"]. name() is stored with each value."""
+
+    @abstractmethod
+    def serialize(self, data: Any) -> str: ...
+
+    @abstractmethod
+    def deserialize(self, serialized_data: str) -> Any: ...
+
+    def name(self) -> str:
+        return "custom_serializer"
 
 
 def allow_pickle(allowed: bool) -> None:
     global _pickle_allowed
     _pickle_allowed = allowed
+
+
+def set_custom_serializer(serializer: Serializer | None, format: str | None) -> None:
+    global _custom_serializer, _custom_format
+    _custom_serializer, _custom_format = serializer, format
+
+
+def _custom_for(serialization: str) -> Serializer | None:
+    # Only the serializer that wrote a row can read it. Another name is never guessed at.
+    if not serialization.startswith(CUSTOM_PREFIX):
+        return None
+    if _custom_serializer is None or serialization != _custom_format:
+        raise DBOSException(f"A stored value uses the serializer {serialization!r}, which this process does not have, so it was not loaded")
+    return _custom_serializer
 
 
 def _uses_pickle(serialization: str) -> bool:
@@ -130,12 +160,17 @@ class Codec:
 
     def encode_input(self, args: tuple[Any, ...], kwargs: dict[str, Any], serialization: str = PORTABLE_JSON) -> str:
         bound = self._signature.bind(*args, **kwargs)
+        if (custom := _custom_for(serialization)) is not None:
+            return custom.serialize((bound.args, bound.kwargs))
         if _uses_pickle(serialization):
             return _pickle_dumps((bound.args, bound.kwargs))
         self._convert(bound, lambda adapter, value: json.loads(_dumps(adapter, value)))
         return json.dumps({"positionalArgs": list(bound.args), "namedArgs": bound.kwargs})
 
     def decode_input(self, text: str, serialization: str = PORTABLE_JSON) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        if (custom := _custom_for(serialization)) is not None:
+            args, kwargs = custom.deserialize(text)
+            return tuple(args), dict(kwargs)
         if _uses_pickle(serialization):
             args, kwargs = _pickle_loads(text)
             return tuple(args), dict(kwargs)
@@ -147,11 +182,15 @@ class Codec:
         return bound.args, bound.kwargs
 
     def encode_output(self, value: Any, serialization: str = PORTABLE_JSON) -> str:
+        if (custom := _custom_for(serialization)) is not None:
+            return custom.serialize(value)
         if _uses_pickle(serialization):
             return _pickle_dumps(value)
         return _dumps(self._resolved()["return"], value)
 
     def decode_output(self, text: str, serialization: str = PORTABLE_JSON) -> Any:
+        if (custom := _custom_for(serialization)) is not None:
+            return custom.deserialize(text)
         if _uses_pickle(serialization):
             return _pickle_loads(text)
         return _loads(self._resolved()["return"], text)
@@ -190,6 +229,8 @@ def _reloads(error: BaseException) -> bool:
 
 
 def encode_exception(error: BaseException, serialization: str = PORTABLE_JSON) -> str:
+    if (custom := _custom_for(serialization)) is not None:
+        return custom.serialize(_exception_payload(error))
     if _uses_pickle(serialization):
         return _pickle_dumps(error if _reloads(error) else DBOSRecordedError(type(error).__qualname__, str(error)))
     return json.dumps(_exception_payload(error))
@@ -228,6 +269,11 @@ def _exception_from(payload: dict[str, Any]) -> Exception:
 
 
 def decode_exception(text: str, serialization: str = PORTABLE_JSON) -> Exception:
+    if (custom := _custom_for(serialization)) is not None:
+        try:
+            return _exception_from(custom.deserialize(text))
+        except Exception:  # noqa: BLE001
+            return DBOSRecordedError("Exception", "stored error could not be loaded")
     if _uses_pickle(serialization):
         try:
             value = _pickle_loads(text)

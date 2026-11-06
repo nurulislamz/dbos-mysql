@@ -8,7 +8,7 @@ use tokio::sync::Notify;
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
     Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
-    StepRecord, Workflow, WorkflowFilter, WorkflowOptions, new_token,
+    StepRecord, Workflow, WorkflowFilter, WorkflowOptions, custom_format, new_token,
 };
 use crate::{Error, Identity, Store};
 
@@ -18,6 +18,7 @@ mod queues;
 mod recovery;
 mod retention;
 mod schedules;
+mod serialization;
 mod sleep;
 mod steps;
 mod timeouts;
@@ -41,6 +42,8 @@ pub struct EngineConfig {
     pub max_concurrent_recoveries: u32,
     pub run_migrations: bool,
     pub pickle: bool,
+    /// Name of a user Serializer. It takes the place of `pickle`.
+    pub custom: Option<String>,
     pub read_only: bool,
     /// Stamped on the rows this process starts or claims. Ownership still comes from the lease.
     pub executor_id: Option<String>,
@@ -55,6 +58,7 @@ impl Default for EngineConfig {
             max_concurrent_recoveries: 50,
             run_migrations: true,
             pickle: true,
+            custom: None,
             read_only: false,
             executor_id: None,
         }
@@ -251,6 +255,8 @@ fn final_result(workflow: &Workflow) -> Result<Option<WorkflowResult>, Error> {
 pub struct Engine {
     store: Store,
     config: EngineConfig,
+    /// The format tag new rows get, unless a workflow chooses its own.
+    format: String,
     active: Arc<AtomicUsize>,
     closing: Arc<AtomicBool>,
     last_unreadable_warn_ms: Arc<AtomicU64>,
@@ -265,8 +271,18 @@ impl Engine {
         } else {
             Store::connect(url).await?
         };
-        let store = if config.pickle {
+        let format = match &config.custom {
+            Some(name) => custom_format(name)?,
+            None if config.pickle => PY_PICKLE.to_owned(),
+            None => PORTABLE_JSON.to_owned(),
+        };
+        let store = if format == PY_PICKLE {
             store.with_pickle()
+        } else {
+            store
+        };
+        let store = if config.custom.is_some() {
+            store.with_custom(&format)
         } else {
             store
         };
@@ -285,6 +301,7 @@ impl Engine {
         Ok(Self {
             store,
             config,
+            format,
             active: Arc::new(AtomicUsize::new(0)),
             closing: Arc::new(AtomicBool::new(false)),
             last_unreadable_warn_ms: Arc::new(AtomicU64::new(0)),
@@ -301,14 +318,6 @@ impl Engine {
 
     fn is_closing(&self) -> bool {
         self.closing.load(Ordering::SeqCst)
-    }
-
-    pub fn serialization(&self) -> &'static str {
-        if self.config.pickle {
-            PY_PICKLE
-        } else {
-            PORTABLE_JSON
-        }
     }
 
     pub fn store(&self) -> &Store {
@@ -330,6 +339,7 @@ impl Engine {
     ) -> Result<Begun, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
         let workflow_id = self.workflow_id_for_begin(&begin).await?;
+        let format = self.format_for(options)?;
         let new = NewWorkflow {
             workflow_id: &workflow_id,
             name: begin.name,
@@ -337,16 +347,14 @@ impl Engine {
             max_recovery_attempts: begin.max_recovery_attempts,
             lease: self.config.lease,
             parent_workflow_id: begin.parent.map(|parent| parent.run.workflow_id()),
-            serialization: self.serialization(),
+            serialization: &format,
             timeout_ms,
             deadline_epoch_ms,
         };
         match self.store.start_workflow_with(&new, options).await? {
-            Started::Owned(lease, deadline_epoch_ms) => Ok(Begun::Run(Run::new(
-                lease,
-                self.serialization().to_owned(),
-                deadline_epoch_ms,
-            ))),
+            Started::Owned(lease, deadline_epoch_ms) => {
+                Ok(Begun::Run(Run::new(lease, format, deadline_epoch_ms)))
+            }
             Started::Existing(existing) => Ok(match final_result(&existing)? {
                 Some(result) => Begun::Stored(result),
                 None => Begun::Attach(workflow_id),
