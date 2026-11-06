@@ -317,7 +317,7 @@ all_dbs!(
 
 all_dbs!(workflow_error_is_stored_and_not_recovered, backend, {
     let (_db, store) = setup(backend).await;
-    let lease = start(&store, &workflow("a", EXPIRED)).await;
+    let lease = start(&store, &workflow("a", LONG)).await;
     store
         .finish_workflow(&lease, &Outcome::Error("boom".to_owned()))
         .await

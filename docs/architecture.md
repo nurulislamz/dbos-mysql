@@ -95,7 +95,7 @@ Crash detection uses leases. Each running workflow row has two columns for this:
 
 **Finding dead owners.** Every copy runs a recovery loop, about once a second with random jitter. It claims `PENDING` rows whose `claim_after` has passed, whose function name this process has registered, and whose stored format it can read. A claim writes a new `lease_token` and adds one to `recovery_attempts`.
 
-**Fencing old owners.** Every write checks the `lease_token`. A paused process that wakes up after losing its row cannot save a step or a result. Its write fails, and Python stops the body.
+**Fencing old owners.** Every write checks the `lease_token`. A paused process that wakes up after losing its row cannot save a step or a result. Its write fails, and Python stops the body. An owner whose lease lapsed, even if nobody took the row yet, cannot store an error as the final result: that error may come from the outage or pause itself. The workflow runs again by recovery instead.
 
 ```mermaid
 sequenceDiagram

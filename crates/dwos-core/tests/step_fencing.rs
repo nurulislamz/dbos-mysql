@@ -586,6 +586,45 @@ all_dbs!(
     }
 );
 
+// A save is not an execution decision, so it does not revoke an expired lease. When the database
+// was out of reach long enough for the lease to lapse, the body's error can be that outage.
+all_dbs!(
+    q2_an_expired_owner_cannot_store_an_error_as_final,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db).await;
+        let old = Arc::new(begin_run(&engine, "a").await);
+        expire(engine.store(), "a").await;
+
+        let (stale, stale_run) = (engine.clone(), old.clone());
+        let concluding = tokio::spawn(async move {
+            stale
+                .conclude(&stale_run, Ended::Error("database error".to_owned()))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(
+            engine.get_status("a").await.unwrap().status,
+            Status::Pending
+        );
+
+        let claimed = engine.recover_now(&names()).await.unwrap();
+        let current = run_of(claimed.into_iter().next().unwrap());
+        assert_eq!(
+            engine
+                .conclude(&current, Ended::Success("done".to_owned()))
+                .await
+                .unwrap(),
+            Finished::Accepted
+        );
+        let Finished::Superseded(result) = concluding.await.unwrap().unwrap() else {
+            panic!("the expired owner's error must not be accepted");
+        };
+        assert_eq!(result.outcome, FinalOutcome::Success("done".to_owned()));
+    }
+);
+
 // renew_lease is not refused on expiry. Renewal and reclaim serialize on the row, and the token
 // fences them, so a renewal that lands first restores real ownership. Refusing it would only cost
 // work when a claim sat unstarted for most of a lease.

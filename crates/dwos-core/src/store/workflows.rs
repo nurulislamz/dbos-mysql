@@ -172,12 +172,17 @@ impl Store {
         if self.cancel_if_expired(&lease.workflow_id).await? {
             return Err(Error::WorkflowCancelled(lease.workflow_id.clone()));
         }
+        // An owner whose lease lapsed was out of touch with the database, and its error may be just that.
+        let live = match status {
+            Status::Error => " AND claim_after > {NOW}",
+            _ => "",
+        };
         let changed = self
             .attempt(|| async {
-                let result = sqlx::query(self.sql(
-                    "UPDATE workflow_status SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {NOW}, updated_at = {NOW} WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING' AND NOT EXISTS \
-                     (SELECT 1 FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid AND deadline_epoch_ms <= {NOW})",
-                ))
+                let result = sqlx::query(self.sql(&format!(
+                    "UPDATE workflow_status SET status = ?, output = ?, error = ?, lease_token = NULL, claim_after = NULL, completed_at = {{NOW}}, updated_at = {{NOW}} WHERE workflow_uuid = ? AND lease_token = ? AND status = 'PENDING'{live} AND NOT EXISTS \
+                     (SELECT 1 FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid AND deadline_epoch_ms <= {{NOW}})",
+                )))
                 .bind(status.as_str())
                 .bind(output)
                 .bind(error)
