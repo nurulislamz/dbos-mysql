@@ -75,20 +75,20 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Feature | DBOS | rust-dwos |
 |---|---|---|
 | Durable sleep | ✅ | ✅ |
-| `send`, `recv`, `send_bulk` | ✅ | ✅ Bulk sends are atomic; sending to forks is not supported |
+| `send`, `recv`, `send_bulk` | ✅ | ✅ Bulk sends are atomic. `send_to_forks` delivers to forks of the destination |
 | `set_event`, `get_event` | ✅ | ✅ |
 | Workflow timeouts | ✅ | ✅ |
 | Queues | ✅ | ✅ FIFO with deduplication, priority, delayed start, a global and per-worker concurrency limit, rate limits and partitions. `list_queues`, `delete_queue`, `register_queue(on_conflict=)`, `SetEnqueueOptions`, `enqueue_workflow_with_options`, `DBOS.listen_queues` and the runtime setters all work. The latest registration with a limit sets it, and registering with none keeps the stored limit, so during a rolling deploy processes on different code can overwrite each other until the old ones stop. A row still waiting reads as `ENQUEUED` or `DELAYED`; the stored status stays `PENDING` |
 | Queue rate limits, priorities, partitions | ✅ | ✅ Rate limits per queue and per partition, priorities, and `queue_partition_key` |
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
-| Fork and rewind | ✅ | 📅 |
+| Fork and rewind | ✅ | ✅ `fork_workflow`, `rewind_workflow` and `send_to_forks`. A fork does not inherit the original timeout, and events are matched to the kept steps by time. `is_fork` and `was_forked_from` filters are not built |
 | Deleting old workflows | ✅ | ✅ `delete_workflow`, `delete_workflows` and `delete_finished_workflows`. Pending workflows and children of pending workflows stay. A deleted ID can run again |
 | `run_step`, `wait_first` | ✅ | ✅ `preemptible` is accepted on async `run_step` only; a sync step with `preemptible=True` is refused like DBOS |
 | Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed, and changing the cron counts as a new schedule. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
-| Streams | ✅ | 📅 |
+| Streams | ✅ | ✅ `write_stream`, `read_stream`, `read_stream_offset` and `close_stream`, woken by the same hub as `recv`. No `shard_key` |
 | Debouncer | ✅ | 📅 |
 | External client (`DBOSClient`) | ✅ | ✅ Enqueue, send, events, results and status, list, cancel, resume, delete, attributes and queue management from outside a DBOS process. No fork, streams, schedules, versions, `*_in_transaction` or `shard_key` |
-| App database transactions (datasources) | ✅ | 📅 |
+| App database transactions (datasources) | ✅ | ✅ `SQLAlchemyDatasource`, `AsyncSQLAlchemyDatasource` and `run_tx_step`. SQLAlchemy is optional. The app-database role grants are untested on Postgres |
 | Patching and app versions | ✅ | 📅 |
 | Pydantic AI integration | ✅ | 📅 |
 | Kafka | ✅ | ❌ |
