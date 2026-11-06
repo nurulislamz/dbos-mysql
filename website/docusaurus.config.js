@@ -53,7 +53,7 @@ const config = {
         logo: {alt: '宿 (yado), an inn', src: 'img/logo.svg', srcDark: 'img/logo-dark.svg'},
         items: [
           {
-            href: 'https://github.com/nurulislamz/dbos-mysql',
+            href: 'https://github.com/nurulislamz/yado',
             label: 'GitHub',
             position: 'right',
           },
