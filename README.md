@@ -140,9 +140,9 @@ No benchmark exists in this repository, and nothing has been measured side by si
 
 | Check | DBOS | rust-dwos |
 |---|---|---|
-| OpenTelemetry tracing | ✅ | 📅 |
-| `log_level`, `console_log_level` | ✅ | 🚧 Configured; launch test not verified |
-| Custom `Serializer` | ✅ | 📅 Core format tags accept only JSON and pickle |
+| OpenTelemetry tracing | ✅ | ✅ `otlp_*` config, `DBOS.span`, `PropagateOtelContext`, spans for workflows and steps. Optional: a clean no-op when opentelemetry is not installed |
+| `log_level`, `console_log_level` | ✅ | ✅ Applied at launch |
+| Custom `Serializer` | ✅ | ✅ A custom format tag is stored per value. A process without that serializer raises on those rows, as pickle rows already do |
 | OpenAI Agents, Google ADK, LlamaIndex integrations | ✅ | 📅 |
 | Web view of workflows | ✅ Through the DBOS Console | ✅ Read-only, built in |
 | Conductor (DBOS's hosted service) and what depends on it | ✅ | ❌ Not built. It is DBOS's own service: connection, alerting, Prometheus through Conductor, retention, autoscaling, audit logs, RBAC, API keys, `dbosctl`, MCP |
