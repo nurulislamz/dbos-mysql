@@ -421,6 +421,8 @@ impl Store {
         if let Some(version) = &self.identity.application_version {
             clause.push_str(" AND (workflow_status.application_version IS NULL OR workflow_status.application_version = ?)");
             binds.push(version.as_str());
+        } else {
+            clause.push_str(" AND workflow_status.application_version IS NULL");
         }
         if let Some(name) = &self.identity.application_name {
             clause.push_str(" AND (workflow_status.application_name IS NULL OR workflow_status.application_name = ?)");

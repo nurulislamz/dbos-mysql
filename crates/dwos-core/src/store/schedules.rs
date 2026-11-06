@@ -224,8 +224,8 @@ impl Store {
         let token = new_token();
         sqlx::query(self.sql(&format!(
             "INSERT INTO workflow_status \
-             (workflow_uuid, name, status, inputs, claim_after, lease_token, recovery_attempts, max_recovery_attempts, serialization, schedule_name, created_at, updated_at) \
-             VALUES (?, ?, 'PENDING', ?, {{NOW}}, ?, 0, ?, ?, ?, {{NOW}}, {{NOW}}) {}",
+             (workflow_uuid, name, status, inputs, claim_after, lease_token, recovery_attempts, max_recovery_attempts, serialization, schedule_name, application_version, created_at, updated_at) \
+             VALUES (?, ?, 'PENDING', ?, {{NOW}}, ?, 0, ?, ?, ?, ?, {{NOW}}, {{NOW}}) {}",
             self.dialect.insert_if_absent(),
         )))
         .bind(due.workflow_id)
@@ -235,6 +235,7 @@ impl Store {
         .bind(i64::from(due.max_recovery_attempts))
         .bind(due.serialization)
         .bind(due.schedule_name)
+        .bind(self.identity.application_version.as_deref())
         .execute(&mut *tx)
         .await?;
         let owner: Option<String> = sqlx::query_scalar(

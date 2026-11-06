@@ -20,6 +20,7 @@ mod datasources;
 mod debounce;
 mod events;
 mod forks;
+mod patching;
 mod queues;
 mod retention;
 mod schedules;
@@ -65,7 +66,9 @@ pub(crate) fn to_py(error: Error) -> PyErr {
         }
         Error::WorkflowCancelled(_) => DBOSWorkflowCancelledError::new_err(message),
         Error::LeaseLost(_) => DBOSLeaseLostError::new_err(message),
-        Error::ShuttingDown | Error::StepReservationUsed(_) => DBOSException::new_err(message),
+        Error::ShuttingDown | Error::StepReservationUsed(_) | Error::PatchRace(_) => {
+            DBOSException::new_err(message)
+        }
         _ => StoreError::new_err(message),
     }
 }
@@ -451,7 +454,7 @@ pub(crate) struct PyEngine(pub(crate) Engine);
 impl PyEngine {
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, custom_serializer=None, read_only=None, executor_id=None))]
+    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, custom_serializer=None, read_only=None, executor_id=None, application_version=None))]
     fn connect(
         py: Python<'_>,
         url: String,
@@ -464,9 +467,11 @@ impl PyEngine {
         custom_serializer: Option<String>,
         read_only: Option<bool>,
         executor_id: Option<String>,
+        application_version: Option<String>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let mut config = EngineConfig {
             executor_id,
+            application_version,
             ..EngineConfig::default()
         };
         if let Some(value) = lease_seconds {

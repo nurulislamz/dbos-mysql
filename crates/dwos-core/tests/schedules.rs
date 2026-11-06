@@ -90,7 +90,15 @@ all_dbs!(
     backend,
     {
         let db = TestDb::migrated(backend).await;
-        let engine = Engine::connect(&db.url, config()).await.unwrap();
+        let engine = Engine::connect(
+            &db.url,
+            EngineConfig {
+                application_version: Some("v1".into()),
+                ..config()
+            },
+        )
+        .await
+        .unwrap();
         engine
             .ensure_queue("notifications", NonZeroU32::new(2).unwrap())
             .await
@@ -116,6 +124,15 @@ all_dbs!(
         assert_eq!(fired[0].queue_name, "notifications");
         assert_eq!(fired[0].schedule_name, "daily-job-digest");
         assert!(fired[0].workflow_id.starts_with("sched-daily-job-digest-"));
+        assert_eq!(
+            engine
+                .get_status(&fired[0].workflow_id)
+                .await
+                .unwrap()
+                .application_version
+                .as_deref(),
+            Some("v1")
+        );
         assert_eq!(scheduled_rows(&engine).await, 1);
 
         rewind(&engine, "daily-job-digest").await;

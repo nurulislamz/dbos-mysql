@@ -18,6 +18,7 @@ mod datasources;
 mod debounce;
 mod events;
 mod forks;
+mod patching;
 mod queues;
 mod recovery;
 mod retention;
@@ -53,6 +54,9 @@ pub struct EngineConfig {
     /// Stamped on the rows this process starts or claims, and the worker that queue limits count.
     /// `None` gives the engine a random one. Ownership still comes from the lease.
     pub executor_id: Option<String>,
+    /// Stamped on the rows this process starts. Recovery and queues then take only rows with no
+    /// version or this one. `None` stamps nothing and takes only unversioned rows.
+    pub application_version: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -67,6 +71,7 @@ impl Default for EngineConfig {
             custom: None,
             read_only: false,
             executor_id: None,
+            application_version: None,
         }
     }
 }
@@ -296,6 +301,7 @@ impl Engine {
         let store = store.with_identity(Identity {
             // Each engine is a worker, so the per-worker queue limit needs an ID even when none is given.
             executor_id: Some(config.executor_id.clone().unwrap_or_else(new_token)),
+            application_version: config.application_version.clone(),
             ..Identity::default()
         });
         // Store::connect_read_only has already checked the schema.

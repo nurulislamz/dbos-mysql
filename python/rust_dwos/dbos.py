@@ -31,6 +31,7 @@ from rust_dwos.errors import (
 from rust_dwos.attributes import WorkflowAttributes, _attributes, start_attributes
 from rust_dwos.events import Events, WorkflowSerializationFormat
 from rust_dwos.forks import Forks
+from rust_dwos.patching import Patching
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
@@ -47,7 +48,7 @@ from rust_dwos.validation import make_pydantic_args_validator, pydantic_args_val
 
 logger = logging.getLogger("dbos")
 
-_ENGINE_OPTIONS = ("lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
+_ENGINE_OPTIONS = ("application_version", "lease_seconds", "max_run_seconds", "recovery_interval_seconds", "max_concurrent_recoveries", "run_migrations", "serializer")
 _PLAIN_CODEC = Codec(lambda: None)
 _SYSTEM_EXIT = object()
 # This process writes the row just before its body finishes, and a poll can land in between.
@@ -72,6 +73,8 @@ class DBOSConfig(TypedDict):
     retention_rows: NotRequired[int]
     retention_interval_seconds: NotRequired[float]
     executor_id: NotRequired[str | None]
+    # Stamped on new workflows. Recovery and queues take only unversioned rows and this version.
+    application_version: NotRequired[str]
     # OpenTelemetry spans for workflows and steps. Needs rust-dwos[otel]. Other otlp_* keys are not supported yet.
     enable_otlp: NotRequired[bool]
     otlp_traces_endpoints: NotRequired[list[str]]
@@ -369,7 +372,7 @@ class _DBOSMeta(type):
         return tracing.current_span()
 
 
-class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(WaitFirst, SDKCalls, Sleep, Patching, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:
