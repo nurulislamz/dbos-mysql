@@ -38,6 +38,20 @@ from rust_dwos.errors import (
     MaxRecoveryAttemptsExceededError,
 )
 
+_DATASOURCE_NAMES = ("AsyncSQLAlchemyDatasource", "DatasourceOptions", "SQLAlchemyDatasource")
+
+
+def __getattr__(name: str) -> object:
+    # Datasources need SQLAlchemy, an optional dependency, so they load only when asked for, and stay out of __all__.
+    if name in _DATASOURCE_NAMES:
+        try:
+            from rust_dwos import datasources
+        except ModuleNotFoundError as error:
+            raise ImportError(f"{name} needs SQLAlchemy. Install rust-dwos[sqlalchemy]") from error
+        return getattr(datasources, name)
+    raise AttributeError(f"module 'rust_dwos' has no attribute {name!r}")
+
+
 __all__ = [
     "DBOS",
     "DBOSAwaitedWorkflowCancelledError",

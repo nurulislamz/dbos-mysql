@@ -9,6 +9,8 @@ SOURCES = sorted(PACKAGE.glob("*.py"))
 DATABASE_DRIVERS = {"asyncpg", "mysql", "psycopg", "psycopg2", "pymysql", "sqlalchemy", "sqlite3"}
 SQL = re.compile(r"\b(SELECT\b.+\bFROM|INSERT\s+INTO|UPDATE\b.+\bSET|DELETE\s+FROM|CREATE\s+TABLE|DROP\s+TABLE)\b", re.DOTALL)
 STUB = ast.parse((PACKAGE / "_native.pyi").read_text())
+# A datasource runs the user's own transaction on the user's own SQLAlchemy engine, never the system database.
+APP_DATABASE_IMPORTS = {"datasources.py": {"sqlalchemy"}}
 
 
 def _declared(body: list[ast.stmt]) -> set[str]:
@@ -40,7 +42,9 @@ def test_python_does_not_talk_to_a_database(path: Path) -> None:
         else:
             continue
         for module in modules:
-            assert module.split(".")[0] not in DATABASE_DRIVERS, f"{path.name}:{node.lineno} imports {module}"
+            root = module.split(".")[0]
+            allowed = APP_DATABASE_IMPORTS.get(path.name, set())
+            assert root not in DATABASE_DRIVERS - allowed, f"{path.name}:{node.lineno} imports {module}"
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda path: path.name)

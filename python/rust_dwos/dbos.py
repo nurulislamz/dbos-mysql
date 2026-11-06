@@ -148,6 +148,8 @@ _next_reuse_policy: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _current_active: contextvars.ContextVar[_native.ActiveRun | None] = contextvars.ContextVar("dbos_active", default=None)
 # Set while run_step, asyncio_wait or wait_first build their step per call. Those are not user registrations.
 _unregistered_step: contextvars.ContextVar[bool] = contextvars.ContextVar("dbos_unregistered_step", default=False)
+# Datasources this run called. Their checkpoints are dropped once the body ends, because the step rows then cover them.
+_used_datasources: contextvars.ContextVar[list[Any] | None] = contextvars.ContextVar("dbos_used_datasources", default=None)
 
 
 class SetWorkflowID:
@@ -230,6 +232,7 @@ def _bind_run(run: _native.Run, active: _native.ActiveRun) -> None:
     _context.set(DBOSContext())
     _current_active.set(active)
     _current_step.set(None)
+    _used_datasources.set([])
     _next_workflow_id.set(None)
     _next_reuse_policy.set(None)
     _attributes.set(None)
@@ -800,6 +803,10 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             await self._engine.conclude(run)
             raise asyncio.CancelledError
         error = body.exception()
+        if used := context.get(_used_datasources):
+            from rust_dwos.datasources import drop_checkpoints_async
+
+            await drop_checkpoints_async(run, used)
         if error is None:
             value = body.result()
             if value is _SYSTEM_EXIT:
@@ -830,12 +837,14 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             self._blocking(self._engine.conclude, run)
             return _decode_result(self._waiting(self._engine.await_result, run.workflow_id), info)
         except Exception as error:  # noqa: BLE001
+            _drop_datasource_checkpoints(run, context)
             self._stop_keeper(active)
             return self._finish_error_sync(info, run, error)
         except BaseException:
             self._stop_keeper(active)
             self._blocking(self._engine.conclude, run)
             raise
+        _drop_datasource_checkpoints(run, context)
         self._stop_keeper(active)
         return self._finish_success_sync(info, run, value)
 
@@ -986,6 +995,13 @@ def _at_exit() -> None:
 
 
 atexit.register(_at_exit)
+
+
+def _drop_datasource_checkpoints(run: _native.Run, context: contextvars.Context) -> None:
+    if used := context.get(_used_datasources):
+        from rust_dwos.datasources import drop_checkpoints
+
+        drop_checkpoints(run, used)
 
 
 def _workflow_attributes(run: _native.Run) -> dict[str, Any]:

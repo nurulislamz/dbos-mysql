@@ -14,3 +14,5 @@ at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
 
 python/rust_dwos/client.py copies the DBOSClient API shape from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
+python/rust_dwos/datasources.py adapts dbos/_datasource.py, _datasource_sqlite.py, _datasource_postgres.py
+and _datasource_migration.py from dbos-transact-py at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
