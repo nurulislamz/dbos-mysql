@@ -13,6 +13,8 @@ pub(super) enum WakeKey {
     /// A message for this workflow, its end, or its cancel.
     Workflow(String),
     Event(String, String),
+    /// A write or close on this workflow's stream key.
+    Stream(String, String),
     Queue(String),
 }
 

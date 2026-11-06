@@ -19,6 +19,7 @@ mod retention;
 mod schedules;
 mod sleep;
 mod steps;
+mod streams;
 mod timeouts;
 mod workflow_management;
 mod workflows;
@@ -26,6 +27,7 @@ mod workflows;
 pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
 pub use queues::{PartitionLimits, PartitionUpdate};
 pub use schedules::{NewSchedule, ScheduleFire};
+pub use streams::StreamRead;
 
 const MAX_NAME_CHARS: usize = 255;
 const POOL_SIZE: u32 = 10;

@@ -118,6 +118,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/027_operation_output_child_index.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_operation_outputs_child_workflow')",
     ),
+    plain(
+        29,
+        include_str!("../../schema/postgres/029_workflow_streams.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'workflow_streams')",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -222,6 +227,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/027_operation_output_child_index.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'operation_outputs' AND INDEX_NAME = 'ix_operation_outputs_child_workflow')",
     ),
+    plain(
+        29,
+        include_str!("../../schema/mysql/029_workflow_streams.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_streams')",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -313,6 +323,11 @@ const SQLITE: &[Migration] = &[
         27,
         include_str!("../../schema/sqlite/027_operation_output_child_index.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_operation_outputs_child_workflow')",
+    ),
+    plain(
+        29,
+        include_str!("../../schema/sqlite/029_workflow_streams.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_streams')",
     ),
 ];
 

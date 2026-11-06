@@ -21,6 +21,7 @@ mod schedules;
 mod serialization;
 mod sleep;
 mod steps;
+mod streams;
 mod timeouts;
 mod wait_first;
 mod wakeup;

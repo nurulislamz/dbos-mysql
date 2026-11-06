@@ -18,6 +18,7 @@ pub use error::Error;
 pub use lease::{LeaseKeeper, LeaseLoss, StepExpiry, StepWatch};
 pub use store::{
     Identity, NewSchedule, PartitionLimits, PartitionUpdate, ScheduleFire, SendFrom, Store,
+    StreamRead,
 };
 pub use workflow::{
     CUSTOM_PREFIX, Claimed, DEFAULT_MAX_RECOVERY_ATTEMPTS, Lease, NewWorkflow, Outcome,
