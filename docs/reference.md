@@ -48,7 +48,7 @@ Unknown keys raise `DBOSException`.
 | `DBOS.workflow_id` | Current workflow ID, or `None` |
 | `DBOS.step_id` | Current step number, or `None` |
 | `DBOS.step_status` | `StepStatus` with `step_id`, `current_attempt`, `max_attempts` |
-| `DBOS.executor_id` | This process's label: config `executor_id`, else `DBOS__VMID`, else `"local"`. It does not decide ownership: the lease does, so copies with the same label both run workflows and a dead copy's work moves on when its lease runs out. The stored row does not record this label yet, so `WorkflowStatus.executor_id` is `None` |
+| `DBOS.executor_id` | This process's label: config `executor_id`, else `DBOS__VMID`, else `"local"`. Each start and each lease claim writes it onto the workflow row, so `WorkflowStatus.executor_id` names the process that started the workflow or last took it over. It does not decide ownership: the lease does, so copies with the same label both run workflows |
 | `DBOS.logger` | The `dbos` logger |
 | `DBOS.heartbeat()` | Reports progress from inside a step |
 | `with SetWorkflowID(id, workflow_id_reuse_policy=None)` | Sets the ID of the next workflow. The policy is `"reject"` or `"return-existing"` |

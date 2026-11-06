@@ -10,7 +10,7 @@ use crate::workflow::{
     Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
     StepRecord, Workflow, WorkflowFilter, WorkflowOptions, new_token,
 };
-use crate::{Error, Store};
+use crate::{Error, Identity, Store};
 
 mod attributes;
 mod events;
@@ -42,6 +42,8 @@ pub struct EngineConfig {
     pub run_migrations: bool,
     pub pickle: bool,
     pub read_only: bool,
+    /// Stamped on the rows this process starts or claims. Ownership still comes from the lease.
+    pub executor_id: Option<String>,
 }
 
 impl Default for EngineConfig {
@@ -54,6 +56,7 @@ impl Default for EngineConfig {
             run_migrations: true,
             pickle: true,
             read_only: false,
+            executor_id: None,
         }
     }
 }
@@ -267,9 +270,9 @@ impl Engine {
         } else {
             store
         };
-        let store = store.with_identity(crate::Identity {
-            executor_id: Some(new_token()),
-            ..Default::default()
+        let store = store.with_identity(Identity {
+            executor_id: config.executor_id.clone(),
+            ..Identity::default()
         });
         // Store::connect_read_only has already checked the schema.
         if !config.read_only {

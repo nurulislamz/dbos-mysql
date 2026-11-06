@@ -409,6 +409,7 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, WorkflowAttributes, E
         except RuntimeError:
             self._app_loop = None
         options = {name: self._config[name] for name in _ENGINE_OPTIONS if name in self._config}
+        options["executor_id"] = self._executor_id
         try:
             self._engine = self._state.run(_call(_native.Engine.connect, self._config["system_database_url"], **options))
             allow_pickle(self._engine.serialization == _native.PY_PICKLE)

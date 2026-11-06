@@ -167,6 +167,7 @@ class Engine:
         run_migrations: bool | None = None,
         serializer: str | None = None,
         read_only: bool | None = None,
+        executor_id: str | None = None,
     ) -> asyncio.Future[Engine]: ...
     @property
     def serialization(self) -> str: ...

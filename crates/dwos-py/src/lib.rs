@@ -429,7 +429,7 @@ pub(crate) struct PyEngine(pub(crate) Engine);
 impl PyEngine {
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, read_only=None))]
+    #[pyo3(signature = (url, *, lease_seconds=None, max_run_seconds=None, recovery_interval_seconds=None, max_concurrent_recoveries=None, run_migrations=None, serializer=None, read_only=None, executor_id=None))]
     fn connect(
         py: Python<'_>,
         url: String,
@@ -440,8 +440,12 @@ impl PyEngine {
         run_migrations: Option<bool>,
         serializer: Option<String>,
         read_only: Option<bool>,
+        executor_id: Option<String>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let mut config = EngineConfig::default();
+        let mut config = EngineConfig {
+            executor_id,
+            ..EngineConfig::default()
+        };
         if let Some(value) = lease_seconds {
             config.lease = seconds(value)?;
         }
