@@ -42,6 +42,7 @@ nav:
       - Messages and events: guide/communication.md
       - Sleep, timeouts and schedules: guide/time.md
       - Managing workflows: guide/management.md
+      - Pydantic AI: guide/pydantic-ai.md
   - Production: production.md
   - Reference: reference.md
   - Coming soon: coming-soon.md
