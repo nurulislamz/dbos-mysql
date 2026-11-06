@@ -114,8 +114,8 @@ impl Engine {
         options: &WorkflowOptions,
     ) -> Result<String, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
-        let workflow_id = self.workflow_id_for_begin(&begin).await?;
-        let format = self.format_for(options)?;
+        let (workflow_id, options) = self.workflow_id_for_begin(&begin, options).await?;
+        let format = self.format_for(&options)?;
         let enqueued = self
             .store
             .enqueue_workflow_with(
@@ -131,7 +131,7 @@ impl Engine {
                     timeout_ms,
                     deadline_epoch_ms,
                 },
-                options,
+                &options,
             )
             .await?;
         self.wake_queue(queue);

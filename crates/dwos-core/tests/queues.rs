@@ -681,6 +681,37 @@ all_dbs!(reject_reuse_policy_refuses_a_queued_id, backend, {
 });
 
 all_dbs!(
+    a_replayed_child_enqueue_ignores_the_reject_policy,
+    backend,
+    {
+        let db = TestDb::migrated(backend).await;
+        let engine = engine(&db, config()).await;
+        queue(&engine, 3).await;
+        let Begun::Run(parent) = engine.begin(begin("p")).await.unwrap() else {
+            panic!("expected to run the parent");
+        };
+        let reject = WorkflowOptions {
+            reuse: ReusePolicy::Reject,
+            ..WorkflowOptions::default()
+        };
+        let mut child = begin("chosen");
+        child.parent = Some(ParentStep {
+            run: &parent,
+            step_id: 1,
+        });
+        assert_eq!(
+            engine.enqueue_with("q", child, &reject).await.unwrap(),
+            "chosen"
+        );
+        // The parent replays the same call: its saved step already enqueued this child.
+        assert_eq!(
+            engine.enqueue_with("q", child, &reject).await.unwrap(),
+            "chosen"
+        );
+    }
+);
+
+all_dbs!(
     ordinary_recovery_and_resume_cannot_bypass_admission,
     backend,
     {

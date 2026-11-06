@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -7,8 +8,8 @@ use tokio::sync::Notify;
 
 use crate::lease::{LeaseKeeper, LeaseLoss};
 use crate::workflow::{
-    Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, Started, Status,
-    StepRecord, Workflow, WorkflowFilter, WorkflowOptions, custom_format, new_token,
+    Lease, NewWorkflow, Outcome, PORTABLE_JSON, PY_PICKLE, RecordedStep, ReusePolicy, Started,
+    Status, StepRecord, Workflow, WorkflowFilter, WorkflowOptions, custom_format, new_token,
 };
 use crate::{Error, Identity, Store};
 
@@ -342,8 +343,8 @@ impl Engine {
         options: &WorkflowOptions,
     ) -> Result<Begun, Error> {
         let (timeout_ms, deadline_epoch_ms) = self.timeout_deadline(&begin)?;
-        let workflow_id = self.workflow_id_for_begin(&begin).await?;
-        let format = self.format_for(options)?;
+        let (workflow_id, options) = self.workflow_id_for_begin(&begin, options).await?;
+        let format = self.format_for(&options)?;
         let new = NewWorkflow {
             workflow_id: &workflow_id,
             name: begin.name,
@@ -355,7 +356,7 @@ impl Engine {
             timeout_ms,
             deadline_epoch_ms,
         };
-        match self.store.start_workflow_with(&new, options).await? {
+        match self.store.start_workflow_with(&new, &options).await? {
             Started::Owned(lease, deadline_epoch_ms) => {
                 Ok(Begun::Run(Run::new(lease, format, deadline_epoch_ms)))
             }
@@ -366,38 +367,54 @@ impl Engine {
         }
     }
 
-    async fn workflow_id_for_begin(&self, begin: &Begin<'_>) -> Result<String, Error> {
-        match begin.parent {
-            Some(parent) => {
-                self.child_workflow_id(parent, begin.name, begin.workflow_id)
-                    .await
-            }
-            None => Ok(begin
+    /// The ID to start and the options to start it with. A child that its parent's saved step
+    /// already started is a replay, so `Reject` must not refuse the row that first start made.
+    async fn workflow_id_for_begin<'o>(
+        &self,
+        begin: &Begin<'_>,
+        options: &'o WorkflowOptions,
+    ) -> Result<(String, Cow<'o, WorkflowOptions>), Error> {
+        let Some(parent) = begin.parent else {
+            let id = begin
                 .workflow_id
                 .filter(|id| !id.is_empty())
-                .map_or_else(new_token, str::to_owned)),
+                .map_or_else(new_token, str::to_owned);
+            return Ok((id, Cow::Borrowed(options)));
+        };
+        let (id, replayed) = self
+            .child_workflow_id(parent, begin.name, begin.workflow_id)
+            .await?;
+        if !replayed || options.reuse == ReusePolicy::ReturnExisting {
+            return Ok((id, Cow::Borrowed(options)));
         }
+        let replay = WorkflowOptions {
+            reuse: ReusePolicy::ReturnExisting,
+            ..options.clone()
+        };
+        Ok((id, Cow::Owned(replay)))
     }
 
+    /// The child's ID, and whether the parent's saved step already named it.
     async fn child_workflow_id(
         &self,
         parent: ParentStep<'_>,
         name: &str,
         explicit: Option<&str>,
-    ) -> Result<String, Error> {
+    ) -> Result<(String, bool), Error> {
         let parent_id = parent.run.workflow_id();
         if let Some(saved) = self
             .store
             .load_step_owned(&parent.run.lease, parent.step_id, name)
             .await?
         {
-            return saved
+            let child_id = saved
                 .child_workflow_id
                 .ok_or_else(|| Error::StepKindMismatch {
                     workflow_id: parent_id.to_owned(),
                     step_id: parent.step_id,
                     expected: "child workflow",
-                });
+                })?;
+            return Ok((child_id, true));
         }
         let child_id = explicit
             .filter(|id| !id.is_empty())
@@ -409,7 +426,7 @@ impl Engine {
         self.store
             .save_step(&parent.run.lease, parent.step_id, name, &record)
             .await?;
-        Ok(child_id)
+        Ok((child_id, false))
     }
 
     /// What happens when a workflow's function stops, however it stopped.

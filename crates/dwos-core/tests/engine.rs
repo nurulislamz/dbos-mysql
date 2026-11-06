@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use dwos_core::{
     Begin, Begun, Ended, Engine, EngineConfig, Error, FinalOutcome, Finished, Outcome, ParentStep,
-    Run, Status, StepDecision, StepPolicy, StepRecord, recovery_limit, recovery_limit_of,
+    ReusePolicy, Run, Status, StepDecision, StepPolicy, StepRecord, WorkflowOptions,
+    recovery_limit, recovery_limit_of,
 };
 
 #[macro_use]
@@ -163,6 +164,28 @@ all_dbs!(
         assert!(matches!(begun, Begun::Attach(id) if id == "chosen"));
     }
 );
+
+all_dbs!(a_replayed_child_start_ignores_the_reject_policy, backend, {
+    let db = TestDb::migrated(backend).await;
+    let engine = engine(&db, config()).await;
+    let parent = begin_run(&engine, "p").await;
+    let reject = WorkflowOptions {
+        reuse: ReusePolicy::Reject,
+        ..WorkflowOptions::default()
+    };
+    let mut child = begin(Some("chosen"));
+    child.parent = Some(ParentStep {
+        run: &parent,
+        step_id: 1,
+    });
+    assert!(matches!(
+        engine.begin_with(child, &reject).await.unwrap(),
+        Begun::Run(_)
+    ));
+    // The parent replays the same call: its saved step already started this child.
+    let begun = engine.begin_with(child, &reject).await.unwrap();
+    assert!(matches!(begun, Begun::Attach(id) if id == "chosen"));
+});
 
 all_dbs!(stale_parent_cannot_start_a_child, backend, {
     let db = TestDb::migrated(backend).await;
