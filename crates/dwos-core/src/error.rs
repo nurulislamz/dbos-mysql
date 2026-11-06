@@ -19,6 +19,8 @@ pub enum Error {
     },
     #[error("Workflow {0} is cancelled. Aborting function.")]
     WorkflowCancelled(String),
+    #[error("Non-existent awakeable ID: {0}")]
+    AwakeableNotFound(String),
     #[error("Non-existent `send` destination workflow ID: {0}")]
     SendDestinationNotFound(String),
     #[error(

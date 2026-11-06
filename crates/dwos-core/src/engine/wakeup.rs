@@ -15,6 +15,8 @@ pub(super) enum WakeKey {
     Event(String, String),
     /// A write or close on this workflow's stream key.
     Stream(String, String),
+    /// A completion of this awakeable ID.
+    Awakeable(String),
     Queue(String),
 }
 

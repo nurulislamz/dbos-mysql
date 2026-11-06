@@ -91,7 +91,7 @@ fn current_init(backend: Backend) -> &'static str {
 }
 
 /// What 001 no longer holds, because a shipped file is never edited.
-fn files_after_init(backend: Backend) -> [&'static str; 14] {
+fn files_after_init(backend: Backend) -> [&'static str; 15] {
     match backend {
         Backend::Sqlite => [
             include_str!("../schema/sqlite/007_workflow_columns.sql"),
@@ -108,6 +108,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 14] {
             include_str!("../schema/sqlite/027_operation_output_child_index.sql"),
             include_str!("../schema/sqlite/029_workflow_streams.sql"),
             include_str!("../schema/sqlite/030_queue_entry_debounce.sql"),
+            include_str!("../schema/sqlite/032_workflow_awakeables.sql"),
         ],
         Backend::MySql => [
             include_str!("../schema/mysql/007_workflow_columns.sql"),
@@ -124,6 +125,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 14] {
             include_str!("../schema/mysql/027_operation_output_child_index.sql"),
             include_str!("../schema/mysql/029_workflow_streams.sql"),
             include_str!("../schema/mysql/030_queue_entry_debounce.sql"),
+            include_str!("../schema/mysql/032_workflow_awakeables.sql"),
         ],
         Backend::Postgres => [
             include_str!("../schema/postgres/007_workflow_columns.sql"),
@@ -140,6 +142,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 14] {
             include_str!("../schema/postgres/027_operation_output_child_index.sql"),
             include_str!("../schema/postgres/029_workflow_streams.sql"),
             include_str!("../schema/postgres/030_queue_entry_debounce.sql"),
+            include_str!("../schema/postgres/032_workflow_awakeables.sql"),
         ],
     }
 }
@@ -147,12 +150,14 @@ fn files_after_init(backend: Backend) -> [&'static str; 14] {
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
         Backend::Sqlite => vec![
-            1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30,
+            1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32,
         ],
         Backend::MySql => vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32,
         ],
-        Backend::Postgres => vec![1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30],
+        Backend::Postgres => vec![
+            1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32,
+        ],
     }
 }
 

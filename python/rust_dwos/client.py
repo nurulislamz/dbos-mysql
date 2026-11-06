@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rust_dwos.awakeables import ClientAwakeables
+
 from typing import Any, Literal
 
 from rust_dwos import _native
@@ -52,7 +54,7 @@ def _no_shard(shard_key: str | None) -> None:
         raise DBOSException("shard_key is not supported")
 
 
-class DBOSClient:
+class DBOSClient(ClientAwakeables):
     """Talks only to the system database. It never migrates the schema and runs no recovery, queue or schedule loop."""
 
     def __init__(self, *, system_database_url: str | None = None, serializer: Literal["json", "pickle"] | Serializer = "pickle") -> None:

@@ -5,6 +5,21 @@ use super::{Engine, POLL_MAX, POLL_MIN, Run};
 use crate::Error;
 use crate::store::{EventRow, Poll, SendFrom, SendOutcome, StoredValue};
 
+/// A workflow records the write at `step_id`; a step (no step ID) only checks its lease.
+pub(super) fn send_from(run: Option<&Run>, step_id: Option<u32>) -> Result<SendFrom<'_>, Error> {
+    match (run, step_id) {
+        (Some(run), Some(step_id)) => Ok(SendFrom::Workflow {
+            lease: &run.lease,
+            step_id,
+        }),
+        (Some(run), None) => Ok(SendFrom::Step(&run.lease)),
+        (None, None) => Ok(SendFrom::Outside),
+        (None, Some(_)) => Err(Error::InvalidConfig(
+            "a send step ID requires a workflow run".to_owned(),
+        )),
+    }
+}
+
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
@@ -17,19 +32,7 @@ impl Engine {
         run: Option<&Run>,
         step_id: Option<u32>,
     ) -> Result<SendOutcome, Error> {
-        let from = match (run, step_id) {
-            (Some(run), Some(step_id)) => SendFrom::Workflow {
-                lease: &run.lease,
-                step_id,
-            },
-            (Some(run), None) => SendFrom::Step(&run.lease),
-            (None, None) => SendFrom::Outside,
-            (None, Some(_)) => {
-                return Err(Error::InvalidConfig(
-                    "a send step ID requires a workflow run".to_owned(),
-                ));
-            }
-        };
+        let from = send_from(run, step_id)?;
         let outcome = self
             .store
             .send(
@@ -53,19 +56,7 @@ impl Engine {
         run: Option<&Run>,
         step_id: Option<u32>,
     ) -> Result<SendOutcome, Error> {
-        let from = match (run, step_id) {
-            (Some(run), Some(step_id)) => SendFrom::Workflow {
-                lease: &run.lease,
-                step_id,
-            },
-            (Some(run), None) => SendFrom::Step(&run.lease),
-            (None, None) => SendFrom::Outside,
-            (None, Some(_)) => {
-                return Err(Error::InvalidConfig(
-                    "a send step ID requires a workflow run".into(),
-                ));
-            }
-        };
+        let from = send_from(run, step_id)?;
         let outcome = self.store.send_bulk(messages, serialization, from).await?;
         for (destination, _, _, _) in messages {
             self.wakeups.wake(&WakeKey::Workflow(destination.clone()));
@@ -159,7 +150,7 @@ impl Engine {
     }
 
     // shortcut: each waiter on another process re-reads the database every 250ms, so very many waiters mean many reads; upgrade with a single per-engine watcher if that load shows up.
-    async fn wait_turn(
+    pub(super) async fn wait_turn(
         &self,
         waiter: &Waiter,
         delay: &mut Duration,
