@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod attributes;
 mod events;
+mod forks;
 mod leases;
 mod migrations;
 mod queues;
@@ -25,6 +26,7 @@ mod workflow_management;
 mod workflows;
 
 pub use events::{EventRow, MessageRow, Poll, SendFrom, SendOutcome, StoredValue};
+pub use forks::ForkOptions;
 pub use queues::{PartitionLimits, PartitionUpdate};
 pub use schedules::{NewSchedule, ScheduleFire};
 pub use streams::StreamRead;
