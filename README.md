@@ -54,8 +54,8 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Stale owners blocked from saving results | ✅ | ✅ Rust store |
 | `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
 | `validate_args`, `pydantic_args_validator` | ✅ | 🚧 Implemented; workflow execution not verified |
-| `DBOSContextEnsure` | ✅ | 📅 |
-| `DBOS.asyncio_wait` | ✅ | 📅 |
+| `DBOSContextEnsure` | ✅ | ✅ One instance cannot be entered twice |
+| `DBOS.asyncio_wait` | ✅ | ✅ |
 | Async and sync functions | ✅ | ✅ |
 | `SetWorkflowID`, one run per workflow ID | ✅ | ✅ `reject` and `return-existing`. Other reuse policies are not in this API |
 | Replaying saved steps and stored errors | ✅ | ✅ |
@@ -83,7 +83,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | Cancel and resume | ✅ | ✅ `cancel_children`, `queue_name`, and bulk cancel and resume. No `shard_key` |
 | Fork and rewind | ✅ | 📅 |
 | Deleting old workflows | ✅ | ✅ `delete_workflow`, `delete_workflows` and `delete_finished_workflows`. Pending workflows and children of pending workflows stay. A deleted ID can run again |
-| `run_step`, `wait_first` | ✅ | 📅 |
+| `run_step`, `wait_first` | ✅ | ✅ `preemptible` is accepted on async `run_step` only; a sync step with `preemptible=True` is refused like DBOS |
 | Schedules | ✅ | ✅ Five-field UTC cron. A new schedule does not run a tick that has already passed, and changing the cron counts as a new schedule. Later, only the latest missed tick is enqueued, and that tick is skipped while a previous run of the same schedule is still pending. `register_schedule` takes `args` and `kwargs`, and `delete_schedule` removes one. `@DBOS.scheduled` takes no arguments and goes above `@DBOS.workflow()` |
 | Streams | ✅ | 📅 |
 | Debouncer | ✅ | 📅 |
