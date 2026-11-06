@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID, Serializer, StoreError, WorkflowSerializationFormat
+from yado import DBOS, DBOSConfig, SetWorkflowID, Serializer, StoreError, WorkflowSerializationFormat
 from tests.conftest import Database
 
 

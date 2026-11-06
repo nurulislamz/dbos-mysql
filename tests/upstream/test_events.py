@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 def test_send_recv(dbos: DBOS) -> None:
@@ -286,7 +286,7 @@ def test_get_events(dbos: DBOS) -> None:
 
 
 def test_send_bulk_bridge(dbos: DBOS) -> None:
-    from rust_dwos import SendMessage, WorkflowSerializationFormat
+    from yado import SendMessage, WorkflowSerializationFormat
 
     @DBOS.workflow()
     def receiver() -> list[Any]:

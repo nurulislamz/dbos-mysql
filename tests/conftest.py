@@ -14,7 +14,7 @@ import pymysql
 import pytest
 from _pytest.nodeid import NodeId
 
-from rust_dwos import DBOS, DBOSConfig
+from yado import DBOS, DBOSConfig
 
 MYSQL_PORT = int(os.environ.get("DBOS_TEST_DB_PORT", "13307"))
 MYSQL_PASSWORD = "dbos-test-root"

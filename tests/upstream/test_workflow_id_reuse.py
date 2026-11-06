@@ -3,7 +3,7 @@ import uuid
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, DBOSWorkflowIDInUseError, SetWorkflowID
+from yado import DBOS, DBOSException, DBOSWorkflowIDInUseError, SetWorkflowID
 
 
 def test_invalid_reuse_policy() -> None:

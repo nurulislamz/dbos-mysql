@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig
-from rust_dwos.cli import main
+from yado import DBOS, DBOSConfig
+from yado.cli import main
 
 
 def test_the_cli_lists_and_gets_workflows_from_the_system_database(
@@ -21,4 +21,4 @@ def test_the_cli_lists_and_gets_workflows_from_the_system_database(
     assert main(["--system-database-url", url, "workflow", "get", handle.workflow_id]) == 0
     assert json.loads(capsys.readouterr().out)["status"] == "SUCCESS"
     assert main(["--system-database-url", url, "workflow", "get", "missing"]) == 1
-    assert "dwos:" in capsys.readouterr().err
+    assert "yado:" in capsys.readouterr().err

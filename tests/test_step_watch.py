@@ -1,11 +1,11 @@
-"""The SDK calls for step attempt limits reach Rust and succeed. The rules are tested in dwos-core."""
+"""The SDK calls for step attempt limits reach Rust and succeed. The rules are tested in yado-core."""
 
 import asyncio
 import threading
 
 import pytest
 
-from rust_dwos import DBOS, DBOSStepTimeoutError
+from yado import DBOS, DBOSStepTimeoutError
 
 
 def test_sync_step_with_limits(dbos: DBOS) -> None:

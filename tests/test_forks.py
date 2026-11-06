@@ -1,6 +1,6 @@
 import asyncio
 
-from rust_dwos import DBOS, DBOSClient, SetWorkflowID
+from yado import DBOS, DBOSClient, SetWorkflowID
 
 from tests.conftest import Database
 

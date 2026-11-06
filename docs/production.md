@@ -49,7 +49,7 @@ A failed upgrade returns its error, keeps the rows, and is retried at the next s
 A small read-only page shows workflows, their status and each saved step. Your program never needs it.
 
 ```sh
-python -m rust_dwos.ui --db mysql://user:password@host:3306/database --port 8000
+python -m yado.ui --db mysql://user:password@host:3306/database --port 8000
 ```
 
 It answers only on your own machine and has no login, so do not expose the port without adding one. A URL passed with `--db` is visible to other users of the machine in the process list.
@@ -83,9 +83,9 @@ Annotate your functions to keep rich types with JSON. Without annotations:
 
 ## Security
 
-- Database credentials are the security boundary. There are no users or roles in rust-dwos.
+- Database credentials are the security boundary. There are no users or roles in yado.
 - Require TLS in the database URL. Without that, a connection can use plain text. TLS is tested on MySQL and Postgres.
-- `dwos-core` forbids `unsafe` Rust. The Python dependencies have no lock file and have not been audited.
+- `yado-core` forbids `unsafe` Rust. The Python dependencies have no lock file and have not been audited.
 - There has been no independent security review.
 
 ## SQLite warning

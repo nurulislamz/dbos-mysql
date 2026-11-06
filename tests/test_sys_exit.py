@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 from tests.conftest import Database, retry_until_success
 
 

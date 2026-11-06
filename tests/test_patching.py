@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID
+from yado import DBOS, DBOSConfig, SetWorkflowID
 
 
 def test_patch_and_application_version(config: DBOSConfig) -> None:

@@ -1,6 +1,6 @@
 # Add it to your app
 
-rust-dwos runs inside your program. You do not deploy anything new. You need the library, a database, and these steps.
+yado runs inside your program. You do not deploy anything new. You need the library, a database, and these steps.
 
 ## 1. Pick a database
 
@@ -10,7 +10,7 @@ rust-dwos runs inside your program. You do not deploy anything new. You need the
 | Postgres | You run several copies and can accept the open restart incident in `PROGRESS.md` |
 | SQLite | One machine only |
 
-The tables can share a database with your app, but a separate database is simpler to back up and limit. The table names are in [Architecture](architecture.md#tables). Your app's own data stays outside rust-dwos, because app database transactions are [not built yet](coming-soon.md).
+The tables can share a database with your app, but a separate database is simpler to back up and limit. The table names are in [Architecture](architecture.md#tables). Your app's own data stays outside yado, because app database transactions are [not built yet](coming-soon.md).
 
 ## 2. Set it up at startup
 
@@ -19,13 +19,13 @@ The order matters.
 ```python
 import os
 
-from rust_dwos import DBOS
+from yado import DBOS
 
 # 1. Decorators run at import, so import your workflows first.
 import myapp.workflows
 
 # 2. Configure once per process.
-DBOS(config={"name": "my-app", "system_database_url": os.environ["DWOS_URL"]})
+DBOS(config={"name": "my-app", "system_database_url": os.environ["YADO_URL"]})
 
 # 3. Connect, upgrade the schema, and start the background loops.
 DBOS.launch()
@@ -69,7 +69,7 @@ FastAPI needs no special support. This pattern, and `@app.get(...)` directly abo
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 @DBOS.workflow()

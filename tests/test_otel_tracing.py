@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, PropagateOtelContext
+from yado import DBOS, DBOSConfig, PropagateOtelContext
 
 
 @pytest.fixture(scope="module")

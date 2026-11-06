@@ -11,7 +11,7 @@ from typing import Any
 import psycopg
 import pymysql
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, SetWorkflowID
+from yado import DBOS, DBOSConfig, DBOSException, SetWorkflowID
 
 WORKER = int(os.environ["CHAOS_WORKER"])
 WORKERS = int(os.environ["CHAOS_WORKERS"])

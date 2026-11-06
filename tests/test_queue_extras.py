@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSQueueDeduplicatedError, SetEnqueueOptions, SetWorkflowAttributes, StoreError
+from yado import DBOS, DBOSConfig, DBOSException, DBOSQueueDeduplicatedError, SetEnqueueOptions, SetWorkflowAttributes, StoreError
 
 
 def test_deduplication_connects_to_queue(dbos: DBOS) -> None:

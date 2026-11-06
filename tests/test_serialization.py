@@ -11,8 +11,8 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
-from rust_dwos.serialization import Codec, decode_exception, encode_exception
+from yado import DBOS, DBOSConfig, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError
+from yado.serialization import Codec, decode_exception, encode_exception
 from tests.conftest import Database
 
 

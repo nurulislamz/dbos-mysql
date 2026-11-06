@@ -1,17 +1,17 @@
 # Pydantic AI
 
-`DwosDurability` makes a [Pydantic AI](https://ai.pydantic.dev) agent durable. Call `agent.run()` inside your own workflow. Each model request and each tool call becomes a step, so a crash resumes the agent without paying for the same model call twice.
+`YadoDurability` makes a [Pydantic AI](https://ai.pydantic.dev) agent durable. Call `agent.run()` inside your own workflow. Each model request and each tool call becomes a step, so a crash resumes the agent without paying for the same model call twice.
 
 ```sh
-uv pip install "rust-dwos[pydantic-ai]"
+uv pip install "yado[pydantic-ai]"
 ```
 
 ```python
 from pydantic_ai import Agent
-from rust_dwos import DBOS
-from rust_dwos.pydantic_ai import DwosDurability
+from yado import DBOS
+from yado.pydantic_ai import YadoDurability
 
-agent = Agent("openai:gpt-5", capabilities=[DwosDurability()])
+agent = Agent("openai:gpt-5", capabilities=[YadoDurability()])
 
 
 @DBOS.workflow()
@@ -22,7 +22,7 @@ async def answer(question: str) -> str:
 
 Outside a workflow the same agent runs normally, and nothing is saved. `agent.run_sync()` works inside a sync workflow.
 
-Pydantic AI's own `DBOSDurability` does not work with this package, because it imports the official `dbos` library. `DwosDurability` has the same shape and uses only the public rust-dwos API.
+Pydantic AI's own `DBOSDurability` does not work with this package, because it imports the official `dbos` library. `YadoDurability` has the same shape and uses only the public yado API.
 
 ## What becomes a step
 
@@ -41,7 +41,7 @@ Parallel tool calls each reserve a step ID when they are checked, in call order,
 ## Options
 
 ```python
-DwosDurability(
+YadoDurability(
     model_step_config={"retries_allowed": True, "max_attempts": 3},
     tool_step_config={"retries_allowed": True},
     event_stream_handler=handler,

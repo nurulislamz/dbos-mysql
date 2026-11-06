@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException
+from yado import DBOS, DBOSException
 
 
 def test_a_due_schedule_runs_its_workflow(dbos: DBOS, database) -> None:

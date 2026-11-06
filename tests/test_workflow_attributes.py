@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSException, SetWorkflowAttributes, SetWorkflowID
+from yado import DBOS, DBOSException, SetWorkflowAttributes, SetWorkflowID
 
 
 def test_workflow_attributes(dbos: DBOS) -> None:

@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, SetWorkflowID
-from rust_dwos.errors import DBOSStepTimeoutError
+from yado import DBOS, DBOSException, SetWorkflowID
+from yado.errors import DBOSStepTimeoutError
 
 pytestmark = pytest.mark.parametrize("database", ["mysql"], indirect=True)
 
@@ -274,7 +274,7 @@ def test_an_api_process_enqueues_and_the_worker_process_runs(dbos: DBOS, config)
     DBOS.register_queue("jobagami-notifications")
     api = textwrap.dedent(
         f"""
-        from rust_dwos import DBOS
+        from yado import DBOS
 
         @DBOS.workflow(name="SendEmailWorkflow")
         async def send_email(send_id: str) -> str:

@@ -1,4 +1,6 @@
-# rust-dwos
+# yado
+
+Yet another durable orchestrator.
 
 Durable workflows on Postgres, MySQL 8.4 and SQLite. A Rust core decides what runs. A thin Python layer only calls your function and returns the result. Finished steps are saved, so a crash resumes without repeating them.
 
@@ -40,7 +42,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 ### Databases
 
-| Feature | DBOS | rust-dwos |
+| Feature | DBOS | yado |
 |---|---|---|
 | Postgres | ✅ | 🚧 Full tests and crash tests pass. An older restart incident is unexplained, though it did not come back in 5 restart runs |
 | SQLite | ✅ | ✅ One machine only |
@@ -48,7 +50,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 ### Core workflows
 
-| Feature | DBOS | rust-dwos |
+| Feature | DBOS | yado |
 |---|---|---|
 | Workflow and step state storage | ✅ | ✅ Rust store |
 | Stale owners blocked from saving results | ✅ | ✅ Rust store |
@@ -72,7 +74,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 ### Coordination and control
 
-| Feature | DBOS | rust-dwos |
+| Feature | DBOS | yado |
 |---|---|---|
 | Durable sleep | ✅ | ✅ |
 | `send`, `recv`, `send_bulk` | ✅ | ✅ Bulk sends are atomic. `send_to_forks` delivers to forks of the destination |
@@ -90,7 +92,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 | External client (`DBOSClient`) | ✅ | ✅ Enqueue, send, events, results and status, list, cancel, resume, delete, attributes and queue management from outside a DBOS process. No fork, streams, schedules, versions, `*_in_transaction` or `shard_key` |
 | App database transactions (datasources) | ✅ | ✅ `SQLAlchemyDatasource`, `AsyncSQLAlchemyDatasource` and `run_tx_step`. SQLAlchemy is optional. The app-database role grants are untested on Postgres |
 | Patching and app versions | ✅ | 📅 |
-| Pydantic AI integration | ✅ | ✅ `rust_dwos.pydantic_ai.DwosDurability`. Each model request, tool call and event-handler call is a step; parallel tool calls reserve their steps in call order. MCP and dynamic toolsets are not tested |
+| Pydantic AI integration | ✅ | ✅ `yado.pydantic_ai.YadoDurability`. Each model request, tool call and event-handler call is a step; parallel tool calls reserve their steps in call order. MCP and dynamic toolsets are not tested |
 | Kafka | ✅ | ❌ |
 | Class-based workflows | ✅ | ❌ |
 | External object storage | ✅ | ❌ |
@@ -102,7 +104,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 
 No benchmark exists in this repository, and nothing has been measured side by side with DBOS. The times below are single samples on SQLite on a busy machine. DBOS's own published figures are about 1,000 workflows per second per Postgres vCPU, and 20K on 16 vCPU. Those are vendor figures, not checked here.
 
-| Check | DBOS | rust-dwos |
+| Check | DBOS | yado |
 |---|---|---|
 | Workflows and steps per second | ✅ Vendor figure: about 1,000 per Postgres vCPU, 20K on 16 vCPU | ❓ Not measured |
 | Extra time per step | ❓ | ❓ Not measured |
@@ -116,19 +118,19 @@ No benchmark exists in this repository, and nothing has been measured side by si
 
 ### Security
 
-| Check | DBOS | rust-dwos |
+| Check | DBOS | yado |
 |---|---|---|
 | Authentication and roles | ✅ | ❌ |
 | Safe stored format | ❓ | 🚧 Pickle by default, so database write access can run code. JSON is an option |
 | Encrypted database connections | ❓ | 🚧 Tested on MySQL and Postgres when the URL requires TLS. Without that, a connection can use plain text |
-| Memory safety | ❓ | ✅ `dwos-core` forbids `unsafe` code |
+| Memory safety | ❓ | ✅ `yado-core` forbids `unsafe` code |
 | Dependency audit | ❓ | 🚧 `cargo audit` 2026-11-05: one advisory, `rsa`, whose affected code is not reached. Accepted, because the client holds no private key. `pip-audit` of the installed Python packages found nothing, but they have no lock file |
 | Independent security review | ❓ | 📅 Not done |
 | Viewer access | ❓ | 🚧 Local only, with a host check and a content security policy. It has no login |
 
 ### Reliability
 
-| Check | DBOS | rust-dwos |
+| Check | DBOS | yado |
 |---|---|---|
 | `kill -9`, pause and terminate tests | ❓ | ✅ Pass on all 3. Under heavy parallel load, SQLite's 1 s test lease can lapse with no fault |
 | Database restart tests | ❓ | ✅ 3 seeds clean on MySQL and 5 on Postgres. An older Postgres run failed and is unexplained |
@@ -138,7 +140,7 @@ No benchmark exists in this repository, and nothing has been measured side by si
 
 ### Operations
 
-| Check | DBOS | rust-dwos |
+| Check | DBOS | yado |
 |---|---|---|
 | OpenTelemetry tracing | ✅ | ✅ `otlp_*` config, `DBOS.span`, `PropagateOtelContext`, spans for workflows and steps. Optional: a clean no-op when opentelemetry is not installed |
 | `log_level`, `console_log_level` | ✅ | ✅ Applied at launch |
@@ -151,7 +153,7 @@ No benchmark exists in this repository, and nothing has been measured side by si
 
 ### Design differences
 
-| Topic | DBOS | rust-dwos |
+| Topic | DBOS | yado |
 |---|---|---|
 | Core language | Python | Rust, with a Python SDK |
 | Crash detection | Executor IDs and ownership tokens | Leases that expire |
@@ -214,7 +216,7 @@ Each workflow keeps the format it started with, so you can switch without breaki
 
 ## Try it
 
-There is no release yet. You need Rust, [uv](https://docs.astral.sh/uv/), and Python 3.14. The install name is `rust-dwos`, the import is `rust_dwos`, and the class is `DBOS`.
+There is no release yet. You need Rust, [uv](https://docs.astral.sh/uv/), and Python 3.14. The install and import name is `yado`, and the class is `DBOS`.
 
 ```sh
 uv venv --python 3.14 .venv
@@ -226,7 +228,7 @@ maturin develop
 ```python
 import asyncio
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 @DBOS.step()
@@ -257,7 +259,7 @@ For MySQL, use `mysql://user:password@host:3306/database`. For Postgres, use `po
 A small read-only page shows workflows, their status, and each saved step. Your program never needs it.
 
 ```sh
-python -m rust_dwos.ui --db sqlite://app.sqlite --port 8000
+python -m yado.ui --db sqlite://app.sqlite --port 8000
 ```
 
 Then open <http://127.0.0.1:8000>. Stored values are shown as stored, without decoding. It answers only on your own machine and has no login, so do not expose the port without adding one. A database URL given with `--db` is visible to other users of the machine in the process list.

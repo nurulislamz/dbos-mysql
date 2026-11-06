@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle, WorkflowStatusString
+from yado import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle, WorkflowStatusString
 from tests.conftest import Database
 
 

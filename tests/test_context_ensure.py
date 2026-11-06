@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, DBOSContextEnsure, DBOSException, assert_current_dbos_context
+from yado import DBOS, DBOSConfig, DBOSContextEnsure, DBOSException, assert_current_dbos_context
 
 
 def test_ensure_context(dbos: DBOS, monkeypatch: pytest.MonkeyPatch) -> None:

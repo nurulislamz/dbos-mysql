@@ -1,4 +1,4 @@
-from rust_dwos import DBOS, DBOSClient
+from yado import DBOS, DBOSClient
 
 
 def test_client_completes_awakeable(dbos: DBOS, database) -> None:

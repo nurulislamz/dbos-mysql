@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig
+from yado import DBOS, DBOSConfig
 
 _CONSOLE = "__dbos_console_log_handler__"
 

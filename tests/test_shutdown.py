@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from rust_dwos import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSException, SetWorkflowID
+from yado import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSException, SetWorkflowID
 from tests.conftest import Database
 
 _PROGRAM = """
 import asyncio, os, signal, sys, threading, time
 from pathlib import Path
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 url, workflow_id, kind, mode, ready = sys.argv[1:]
 
@@ -173,7 +173,7 @@ async def test_an_async_body_stopped_by_a_base_exception_is_not_stored(dbos: DBO
 
 _DYING_LOOP_APP = """
 import asyncio, sys, time
-from rust_dwos import DBOS
+from yado import DBOS
 
 @DBOS.workflow(name="uses_a_thread")
 async def uses_a_thread() -> int:
@@ -212,7 +212,7 @@ def test_a_workflow_recovered_while_the_app_loop_closes_is_not_stored_as_an_erro
 
 _EXITING_APP = """
 import asyncio, sys, time
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 @DBOS.workflow()
 async def keeps_using_threads() -> None:

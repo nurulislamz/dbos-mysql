@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import (
+from yado import (
     DBOS,
     DBOSException,
     DBOSQueueDeduplicatedError,

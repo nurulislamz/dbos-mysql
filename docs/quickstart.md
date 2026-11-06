@@ -1,6 +1,6 @@
 # Quickstart
 
-This page installs rust-dwos from source, then kills a workflow halfway and watches it finish.
+This page installs yado from source, then kills a workflow halfway and watches it finish.
 
 ## Install
 
@@ -13,7 +13,7 @@ uv pip install maturin
 maturin develop
 ```
 
-The install name is `rust-dwos`, the import is `rust_dwos`, and the class is `DBOS`.
+The install and import name is `yado`, and the class is `DBOS`.
 
 ## Write a workflow
 
@@ -23,7 +23,7 @@ Save this as `demo.py`.
 import os
 import sys
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 @DBOS.step()
@@ -82,7 +82,7 @@ Run the command a third time. It prints only `result: 3`, because one workflow I
 ## Look at it
 
 ```sh
-python -m rust_dwos.ui --db sqlite://demo.sqlite --port 8000
+python -m yado.ui --db sqlite://demo.sqlite --port 8000
 ```
 
 Open <http://127.0.0.1:8000> to see the workflow and its saved steps.

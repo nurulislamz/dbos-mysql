@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/dwos-core", "crates/dwos-py"]
+members = ["crates/yado-core", "crates/yado-py"]
 resolver = "3"
 
 [workspace.package]

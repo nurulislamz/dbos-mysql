@@ -1,4 +1,4 @@
-site_name: rust-dwos
+site_name: yado
 site_description: Durable workflows on Postgres, MySQL and SQLite
 docs_dir: docs
 strict: true

@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 def test_wait_first(dbos: DBOS) -> None:

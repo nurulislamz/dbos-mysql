@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import make_pydantic_args_validator
+from yado import make_pydantic_args_validator
 
 
 def test_pydantic_validation_variadic_params() -> None:
@@ -54,7 +54,7 @@ def test_pydantic_validator_concurrent_first_calls(monkeypatch: pytest.MonkeyPat
 
 
 def test_workflow_pydantic_validation(dbos: Any) -> None:
-    from rust_dwos import DBOS, pydantic_args_validator
+    from yado import DBOS, pydantic_args_validator
 
     @DBOS.workflow(validate_args=pydantic_args_validator)
     def typed(n: int, *rest: int, **options: int) -> str:
@@ -67,7 +67,7 @@ def test_workflow_pydantic_validation(dbos: Any) -> None:
 
 def test_log_config(config: Any) -> None:
     import logging
-    from rust_dwos import DBOS
+    from yado import DBOS
 
     DBOS.destroy(destroy_registry=True)
     config.update(log_level="DEBUG", console_log_level="ERROR")
@@ -87,7 +87,7 @@ def test_log_config(config: Any) -> None:
 
 def test_log_config_before_launch() -> None:
     import logging
-    from rust_dwos import DBOS
+    from yado import DBOS
 
     logger = logging.getLogger("dbos")
     old_level = logger.level

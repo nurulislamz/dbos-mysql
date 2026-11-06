@@ -9,7 +9,7 @@ from pathlib import Path
 import pymysql
 import pytest
 
-from rust_dwos import StoreError, _native
+from yado import StoreError, _native
 
 MYSQL_PORT = int(os.environ.get("DBOS_TEST_DB_PORT", "13307"))
 MYSQL_PASSWORD = "dbos-test-root"
@@ -90,7 +90,7 @@ async def test_event_loop_stays_free_during_a_rust_await(engine: _native.Engine,
 
 
 async def test_rust_logs_reach_python_logging(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.INFO, logger="dwos_core"):
+    with caplog.at_level(logging.INFO, logger="yado_core"):
         await _native.Engine.connect(f"sqlite://{tmp_path / 'logs.sqlite'}")
     assert "connected to sqlite" in caplog.text
 

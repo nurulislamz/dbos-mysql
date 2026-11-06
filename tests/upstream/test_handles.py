@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, SetWorkflowID, WorkflowHandle
+from yado import DBOS, DBOSException, SetWorkflowID, WorkflowHandle
 
 
 def test_polling_interval_must_be_positive() -> None:

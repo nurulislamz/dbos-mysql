@@ -10,7 +10,7 @@ from typing import Any, List
 import pytest
 from pydantic import BaseModel
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, Queue, SetWorkflowID
+from yado import DBOS, DBOSConfig, DBOSException, Queue, SetWorkflowID
 
 
 

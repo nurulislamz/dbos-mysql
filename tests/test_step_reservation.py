@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSException
+from yado import DBOS, DBOSException
 
 
 def test_reservation_order_and_single_use(dbos: DBOS) -> None:

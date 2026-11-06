@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSAwaitedWorkflowCancelledError, SetWorkflowID
+from yado import DBOS, DBOSAwaitedWorkflowCancelledError, SetWorkflowID
 from tests.conftest import retry_until_success
 
 _BOUND = 15.0  # Seconds. A blocked body would hold get_result until the 60s test timeout.

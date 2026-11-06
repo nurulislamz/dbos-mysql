@@ -119,7 +119,7 @@ Median time for a claim of 10 slots, with worst enqueue during claims in bracket
 Latest, on 2026-11-05 after tasks 27 to 32: Rust **950 passed, 6 ignored, 0 failed** and Python **766 passed**, on SQLite, MySQL and Postgres. Both suites ran side by side in under 6 minutes. Run every check this way, with each run under 10 minutes:
 
 ```sh
-cargo test -p dwos-core --no-fail-fast &
+cargo test -p yado-core --no-fail-fast &
 .venv/bin/python -m pytest tests --ignore=tests/chaos -n 8 --dist=loadgroup &
 wait
 ```
@@ -170,7 +170,7 @@ The fixed seed in `test_chaos.py` never picks `db_restart`, so that fault needs 
 
 The completed rerun had two clean runs and one failed run: seed `1838798794`, 153 seconds, `db_restart=1`. It reported `wf-127` step 2 and `wf-301` step 3 starting after their saves. The earlier failure had the same shape. Treat these as real until proven otherwise; load is not an explanation.
 
-Core review found missing ownership checks before step execution decisions, a lease keeper that counted renewal time from the acknowledgment rather than the request, and claim retry handling that could lose committed descriptors after a lost acknowledgment. These are fixed independently with Rust checks. The exact incident is not reproduced or proven resolved. The supplied original log path was unavailable in this environment. A Rust reproduction now exists in `crates/dwos-core/tests/late_start_restart.rs`. It found no core bug and did not reproduce the incident at real settings. With the side-effect retry stretched to 1 s it produced 2 late stamps, both after `check_step` returned `Run` well before the save. This supports a harness artifact and does not prove it. Python chaos runs are still paused. To settle it, record the first attempt time and retry count in `_write_ledger` in `tests/chaos/worker.py`, and report them in `harness.py`.
+Core review found missing ownership checks before step execution decisions, a lease keeper that counted renewal time from the acknowledgment rather than the request, and claim retry handling that could lose committed descriptors after a lost acknowledgment. These are fixed independently with Rust checks. The exact incident is not reproduced or proven resolved. The supplied original log path was unavailable in this environment. A Rust reproduction now exists in `crates/yado-core/tests/late_start_restart.rs`. It found no core bug and did not reproduce the incident at real settings. With the side-effect retry stretched to 1 s it produced 2 late stamps, both after `check_step` returned `Run` well before the save. This supports a harness artifact and does not prove it. Python chaos runs are still paused. To settle it, record the first attempt time and retry count in `_write_ledger` in `tests/chaos/worker.py`, and report them in `harness.py`.
 
 ## Known problems
 

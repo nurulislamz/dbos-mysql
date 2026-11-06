@@ -1,4 +1,4 @@
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID
+from yado import DBOS, DBOSConfig, SetWorkflowID
 
 
 def test_status_records_the_executor(config: DBOSConfig) -> None:

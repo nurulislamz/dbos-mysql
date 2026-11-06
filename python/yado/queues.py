@@ -1,0 +1,431 @@
+from __future__ import annotations
+
+import contextvars
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
+
+from yado.errors import DBOSException
+from yado.attributes import _encode, start_attributes
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from yado.dbos import WorkflowHandle, WorkflowHandleAsync
+
+DEFAULT_QUEUE_POLLING_INTERVAL_SEC = 1.0
+
+
+class QueueRateLimit(TypedDict):
+    limit: int
+    period: float
+
+
+class EnqueueOptions(TypedDict):
+    workflow_name: str
+    queue_name: str
+    workflow_id: NotRequired[str]
+    workflow_id_reuse_policy: NotRequired[str]
+    workflow_timeout: NotRequired[float]
+    deduplication_id: NotRequired[str]
+    duplication_policy: NotRequired[str]
+    priority: NotRequired[int]
+    delay_seconds: NotRequired[float]
+    app_version: NotRequired[str]
+    queue_partition_key: NotRequired[str]
+    attributes: NotRequired[dict[str, Any]]
+
+# DBOS's own queues are named under this prefix, so users may not claim it.
+RESERVED_QUEUE_NAME_PREFIX = "_dbos_"
+
+# Presented by DBOS when it builds a Queue. Module-private and unguessable, so
+# the exported Queue is usable as a type but not as a constructor: a queue can
+# only come from DBOS.register_queue or DBOS.retrieve_queue.
+_INTERNAL_QUEUE_CONSTRUCTION = object()
+_enqueue_options: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("dbos_enqueue_options", default={})
+
+
+class SetEnqueueOptions:
+    def __init__(self, *, deduplication_id: str | None = None, duplication_policy: str | None = None, priority: int | None = None, delay_seconds: float | None = None, app_version: str | None = None, queue_partition_key: str | None = None) -> None:
+        self.options = {"deduplication_id": deduplication_id, "duplication_policy": duplication_policy, "priority": priority, "delay_seconds": delay_seconds, "app_version": app_version, "queue_partition_key": queue_partition_key}
+        self._token: contextvars.Token[dict[str, Any]] | None = None
+
+    def __enter__(self) -> SetEnqueueOptions:
+        if self._token is not None:
+            raise DBOSException("This SetEnqueueOptions is already in use")
+        self._token = _enqueue_options.set(self.options)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self._token is not None:
+            _enqueue_options.reset(self._token)
+            self._token = None
+
+
+def _dbos() -> Any:
+    from yado import dbos
+
+    return dbos
+
+
+class Queue:
+    """
+    Workflow queue.
+
+    Workflow queues allow workflows to be started at a later time, based on
+    concurrency limits. A queue is declared with ``DBOS.register_queue`` and
+    looked up with ``DBOS.retrieve_queue``.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        concurrency: int | None = None,
+        *,  # Disable positional arguments from here on
+        polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
+        # Proof the caller is DBOS itself; see _INTERNAL_QUEUE_CONSTRUCTION.
+        token: object = None,
+    ) -> None:
+        if token is not _INTERNAL_QUEUE_CONSTRUCTION:
+            raise DBOSException("Queue objects cannot be constructed directly. Declare a queue with DBOS.register_queue(name, ...) and look one up with DBOS.retrieve_queue(name).")
+        self.name = name
+        self._concurrency = concurrency
+        self._polling_interval_sec = polling_interval_sec
+
+    @staticmethod
+    def _validate_queue(
+        *,
+        name: str,
+        concurrency: int | None,
+        global_concurrency: int | None,
+        polling_interval_sec: float,
+        unsupported: dict[str, Any],
+    ) -> None:
+        """Validate queue configuration parameters, raising ValueError on bad input."""
+        if unsupported:
+            raise DBOSException(f"These queue options are not supported: {', '.join(sorted(unsupported))}")
+        if name.startswith(RESERVED_QUEUE_NAME_PREFIX):
+            raise ValueError(f"Queue name {name} is reserved: names starting with '{RESERVED_QUEUE_NAME_PREFIX}' belong to DBOS's internal queues.")
+        if concurrency is not None and global_concurrency is not None:
+            raise ValueError("concurrency is deprecated in favor of global_concurrency; set only one of them")
+        if polling_interval_sec <= 0:
+            raise ValueError("polling_interval_sec must be positive")
+
+    @property
+    def concurrency(self) -> int | None:
+        return self.global_concurrency
+
+    @property
+    def global_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        limit = instance._blocking(instance._engine.get_queue, self.name)
+        if limit is None:
+            raise DBOSException(f"queue {self.name} does not exist")
+        return _stored_limit(limit)
+
+    def set_global_concurrency(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_global_concurrency, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_global_concurrency_async(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_global_concurrency(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_global_concurrency_async(self) -> int | None:
+        limit = await _dbos()._running()._engine.get_queue(self.name)
+        if limit is None:
+            raise DBOSException(f"queue {self.name} does not exist")
+        return _stored_limit(limit)
+
+    @property
+    def worker_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_worker_concurrency, self.name)
+
+    def set_worker_concurrency(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_worker_concurrency, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_worker_concurrency_async(self, value: int | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_worker_concurrency(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_worker_concurrency_async(self) -> int | None:
+        return await _dbos()._running()._engine.get_worker_concurrency(self.name)
+
+    @property
+    def limiter(self) -> dict[str, Any] | None:
+        instance = _dbos()._running()
+        value = instance._blocking(instance._engine.get_limiter, self.name)
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    async def get_limiter_async(self) -> dict[str, Any] | None:
+        value = await _dbos()._running()._engine.get_limiter(self.name)
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    def set_limiter(self, value: dict[str, Any] | None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_limiter, self.name, value["limit"] if value else None, value["period"] if value else None)
+        instance._wake_queue(self.name)
+
+    async def set_limiter_async(self, value: dict[str, Any] | None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_limiter(self.name, value["limit"] if value else None, value["period"] if value else None)
+        instance._wake_queue(self.name)
+
+    @property
+    def partition_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_partition_limits, self.name)[0]
+
+    @property
+    def partition_worker_concurrency(self) -> int | None:
+        instance = _dbos()._running()
+        return instance._blocking(instance._engine.get_partition_limits, self.name)[1]
+
+    @property
+    def partition_limiter(self) -> dict[str, Any] | None:
+        instance = _dbos()._running()
+        value = instance._blocking(instance._engine.get_partition_limits, self.name)[2]
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    def _set_partition(self, field: str, value: int | None, period: float | None = None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.update_partition_limits, self.name, field, value, period)
+        instance._wake_queue(self.name)
+
+    async def _set_partition_async(self, field: str, value: int | None, period: float | None = None) -> None:
+        instance = _dbos()._running()
+        await instance._engine.update_partition_limits(self.name, field, value, period)
+        instance._wake_queue(self.name)
+
+    def set_partition_concurrency(self, value: int | None) -> None:
+        self._set_partition("concurrency", value)
+
+    def set_partition_worker_concurrency(self, value: int | None) -> None:
+        self._set_partition("worker_concurrency", value)
+
+    def set_partition_limiter(self, value: dict[str, Any] | None) -> None:
+        self._set_partition("limiter", value["limit"] if value else None, value["period"] if value else None)
+
+    async def set_partition_concurrency_async(self, value: int | None) -> None:
+        await self._set_partition_async("concurrency", value)
+
+    async def set_partition_worker_concurrency_async(self, value: int | None) -> None:
+        await self._set_partition_async("worker_concurrency", value)
+
+    async def set_partition_limiter_async(self, value: dict[str, Any] | None) -> None:
+        await self._set_partition_async("limiter", value["limit"] if value else None, value["period"] if value else None)
+
+    async def get_partition_concurrency_async(self) -> int | None:
+        return (await _dbos()._running()._engine.get_partition_limits(self.name))[0]
+
+    async def get_partition_worker_concurrency_async(self) -> int | None:
+        return (await _dbos()._running()._engine.get_partition_limits(self.name))[1]
+
+    async def get_partition_limiter_async(self) -> dict[str, Any] | None:
+        value = (await _dbos()._running()._engine.get_partition_limits(self.name))[2]
+        return {"limit": value[0], "period": value[1] / 1000} if value else None
+
+    @property
+    def polling_interval_sec(self) -> float:
+        instance = _dbos()._running()
+        millis = instance._blocking(instance._engine.get_polling_interval, self.name)
+        return millis / 1000 if millis is not None else DEFAULT_QUEUE_POLLING_INTERVAL_SEC
+
+    def set_polling_interval_sec(self, value: float) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_polling_interval, self.name, value)
+        instance._wake_queue(self.name)
+
+    async def set_polling_interval_sec_async(self, value: float) -> None:
+        instance = _dbos()._running()
+        await instance._engine.set_polling_interval(self.name, value)
+        instance._wake_queue(self.name)
+
+    async def get_polling_interval_sec_async(self) -> float:
+        millis = await _dbos()._running()._engine.get_polling_interval(self.name)
+        return millis / 1000 if millis is not None else DEFAULT_QUEUE_POLLING_INTERVAL_SEC
+
+    def enqueue(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        workflow_id = instance._blocking(instance._engine.enqueue, self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get(), **start_attributes())
+        return dbos.WorkflowHandle(workflow_id)
+
+    async def enqueue_async(self, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        workflow_id = await instance._engine.enqueue(self.name, *dbos._begin_args(dbos._info_of(func), args, kwargs), **_enqueue_options.get(), **start_attributes())
+        return dbos.WorkflowHandleAsync(workflow_id)
+
+
+def _stored_limit(concurrency: int) -> int | None:
+    return None if concurrency == 2**32 - 1 else concurrency
+
+
+def _enqueue_with_options_args(options: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], str, dict[str, Any]]:
+    dbos = _dbos()
+    return _options_args(options, args, kwargs, dbos._running()._engine.serialization, dbos._current_run.get(), dbos._current_step.get() is not None, dbos._next_workflow_id.get(), dbos._next_reuse_policy.get())
+
+
+def _options_args(options: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any], serialization: str, run: Any, in_step: bool, workflow_id: str | None, reuse_policy: str | None) -> tuple[tuple[Any, ...], str, dict[str, Any]]:
+    from yado.serialization import Codec
+
+    allowed = {"workflow_name", "queue_name", "workflow_id", "workflow_id_reuse_policy", "workflow_timeout", "deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key", "attributes"}
+    unknown = options.keys() - allowed
+    if unknown:
+        raise DBOSException(f"Unsupported enqueue options: {', '.join(sorted(unknown))}")
+    name = options["workflow_name"]
+    queue = options["queue_name"]
+    text = Codec(lambda *args, **kwargs: None).encode_input(args, kwargs, serialization)
+    timeout = options.get("workflow_timeout")
+    timeout_ms = int(timeout * 1000) if timeout is not None else None
+    begin = (name, text, None, options.get("workflow_id", workflow_id), run, in_step, timeout_ms, False, options.get("workflow_id_reuse_policy", reuse_policy))
+    enqueue = {key: options.get(key) for key in ("deduplication_id", "duplication_policy", "priority", "delay_seconds", "app_version", "queue_partition_key")}
+    enqueue.update({"attributes": _encode(options["attributes"])} if "attributes" in options else start_attributes())
+    return begin, queue, enqueue
+
+
+class Queues:
+    @classmethod
+    def listen_queues(cls, queues: list[str]) -> None:
+        instance = _dbos()._instance
+        if instance is None:
+            raise DBOSException("DBOS is not configured")
+        if instance._engine is not None:
+            raise DBOSException("listen_queues called after DBOS is launched")
+        if instance._listening_queues is not None:
+            raise DBOSException("listen_queues called more than once")
+        instance._listening_queues = set(queues)
+
+    @classmethod
+    def delete_queue(cls, name: str) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.delete_queue, name)
+
+    @classmethod
+    async def delete_queue_async(cls, name: str) -> None:
+        await _dbos()._running()._engine.delete_queue(name)
+
+    @classmethod
+    def list_queues(cls, *, application_name: str | list[str] | None = None) -> list[Queue]:
+        instance = _dbos()._running()
+        applications = [application_name] if isinstance(application_name, str) else application_name
+        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in instance._blocking(instance._engine.list_queues, applications)]
+
+    @classmethod
+    async def list_queues_async(cls, *, application_name: str | list[str] | None = None) -> list[Queue]:
+        applications = [application_name] if isinstance(application_name, str) else application_name
+        rows = await _dbos()._running()._engine.list_queues(applications)
+        return [Queue(name, _stored_limit(limit), token=_INTERNAL_QUEUE_CONSTRUCTION) for name, limit in rows]
+    @classmethod
+    def enqueue_workflow_with_options(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        begin, queue, enqueue = _enqueue_with_options_args(options, args, kwargs)
+        workflow_id = instance._blocking(instance._engine.enqueue, queue, *begin, **enqueue)
+        return dbos.WorkflowHandle(workflow_id)
+
+    @classmethod
+    async def enqueue_workflow_with_options_async(cls, options: dict[str, Any], *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
+        dbos = _dbos()
+        instance = dbos._running()
+        begin, queue, enqueue = _enqueue_with_options_args(options, args, kwargs)
+        workflow_id = await instance._engine.enqueue(queue, *begin, **enqueue)
+        return dbos.WorkflowHandleAsync(workflow_id)
+    @classmethod
+    def set_workflow_delay(cls, workflow_id: str, *, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None) -> None:
+        instance = _dbos()._running()
+        instance._blocking(instance._engine.set_workflow_delay, workflow_id, delay_seconds, delay_until_epoch_ms)
+
+    @classmethod
+    async def set_workflow_delay_async(cls, workflow_id: str, *, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None) -> None:
+        await _dbos()._running()._engine.set_workflow_delay(workflow_id, delay_seconds, delay_until_epoch_ms)
+
+    @classmethod
+    def register_queue(
+        cls,
+        name: str,
+        *,
+        global_concurrency: int | None = None,
+        worker_concurrency: int | None = None,
+        limiter: dict[str, Any] | None = None,
+        partition_concurrency: int | None = None,
+        partition_worker_concurrency: int | None = None,
+        partition_limiter: dict[str, Any] | None = None,
+        on_conflict: str = "update_if_latest_version",
+        polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
+        concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
+        **unsupported: Any,
+    ) -> Queue:
+        """Register a queue, persist its concurrency, and start pulling work from it in this process."""
+        Queue._validate_queue(name=name, concurrency=concurrency, global_concurrency=global_concurrency, polling_interval_sec=polling_interval_sec, unsupported=unsupported)
+        limit = concurrency if global_concurrency is None else global_concurrency
+        instance = _dbos()._running()
+        if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
+            raise DBOSException(f"Invalid on_conflict: {on_conflict}")
+        # shortcut: update_if_latest_version overwrites like always_update, since no latest app version is stored yet; upgrade with app versions.
+        instance._blocking(instance._engine.register_queue, name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None, polling_interval_sec)
+        limit = _stored_limit(instance._blocking(instance._engine.get_queue, name))
+        return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
+
+    @classmethod
+    async def register_queue_async(
+        cls,
+        name: str,
+        *,
+        global_concurrency: int | None = None,
+        worker_concurrency: int | None = None,
+        limiter: dict[str, Any] | None = None,
+        partition_concurrency: int | None = None,
+        partition_worker_concurrency: int | None = None,
+        partition_limiter: dict[str, Any] | None = None,
+        on_conflict: str = "update_if_latest_version",
+        polling_interval_sec: float = DEFAULT_QUEUE_POLLING_INTERVAL_SEC,
+        concurrency: int | None = None,  # Deprecated, retained for backwards compatibility
+        **unsupported: Any,
+    ) -> Queue:
+        """Async version of :meth:`register_queue`."""
+        Queue._validate_queue(name=name, concurrency=concurrency, global_concurrency=global_concurrency, polling_interval_sec=polling_interval_sec, unsupported=unsupported)
+        limit = concurrency if global_concurrency is None else global_concurrency
+        instance = _dbos()._running()
+        if on_conflict not in ("update_if_latest_version", "always_update", "never_update"):
+            raise DBOSException(f"Invalid on_conflict: {on_conflict}")
+        await instance._engine.register_queue(name, limit, worker_concurrency, on_conflict != "never_update", limiter["limit"] if limiter else None, limiter["period"] if limiter else None, partition_concurrency, partition_worker_concurrency, partition_limiter["limit"] if partition_limiter else None, partition_limiter["period"] if partition_limiter else None, polling_interval_sec)
+        limit = _stored_limit(await instance._engine.get_queue(name))
+        return instance._add_queue(Queue(name, limit, polling_interval_sec=polling_interval_sec, token=_INTERNAL_QUEUE_CONSTRUCTION))
+
+    @classmethod
+    def retrieve_queue(cls, name: str) -> Queue | None:
+        instance = _dbos()._running()
+        known = instance._queues.get(name)
+        concurrency = instance._blocking(instance._engine.get_queue, name)
+        if concurrency is None:
+            return None
+        if known is not None:
+            return known
+        return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
+
+    @classmethod
+    async def retrieve_queue_async(cls, name: str) -> Queue | None:
+        instance = _dbos()._running()
+        known = instance._queues.get(name)
+        concurrency = await instance._engine.get_queue(name)
+        if concurrency is None:
+            return None
+        if known is not None:
+            return known
+        return Queue(name, _stored_limit(concurrency), token=_INTERNAL_QUEUE_CONSTRUCTION)
+
+    @classmethod
+    def enqueue_workflow(cls, queue_name: str, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandle[Any]:
+        """Enqueue a workflow on a queue, returning a handle to the ongoing execution."""
+        return Queue(queue_name, token=_INTERNAL_QUEUE_CONSTRUCTION).enqueue(func, *args, **kwargs)
+
+    @classmethod
+    async def enqueue_workflow_async(cls, queue_name: str, func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> WorkflowHandleAsync[Any]:
+        """Async version of :meth:`enqueue_workflow`."""
+        return await Queue(queue_name, token=_INTERNAL_QUEUE_CONSTRUCTION).enqueue_async(func, *args, **kwargs)

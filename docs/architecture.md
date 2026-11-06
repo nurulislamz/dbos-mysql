@@ -1,16 +1,16 @@
 # Architecture
 
-rust-dwos is a library inside your process, with a database behind it. There is no coordinator, broker or worker service. A running copy of your program is the coordinator.
+yado is a library inside your process, with a database behind it. There is no coordinator, broker or worker service. A running copy of your program is the coordinator.
 
 ```mermaid
 flowchart TB
     subgraph A["Your process (any number of copies)"]
         direction TB
         C["Your workflow and step functions"]
-        P["Python SDK (rust_dwos)<br/>calls your function, converts values"]
-        R["Rust core (dwos-core)<br/>step IDs, replay, leases, recovery, SQL"]
+        P["Python SDK (yado)<br/>calls your function, converts values"]
+        R["Rust core (yado-core)<br/>step IDs, replay, leases, recovery, SQL"]
         C <--> P
-        P -- "PyO3 bindings (dwos-py)" --> R
+        P -- "PyO3 bindings (yado-py)" --> R
     end
     R --> D[("Postgres, MySQL 8.4 or SQLite")]
 ```
@@ -159,7 +159,7 @@ One transaction does the admission: it revokes expired owners, counts the remain
 | `workflow_schedules` | Cron schedules and their last fire time |
 | `dwos_schema_migrations` | Which numbered migrations have run |
 
-Table names follow DBOS, but the shape does not. rust-dwos cannot read rows written by another DBOS SDK.
+Table names follow DBOS, but the shape does not. yado cannot read rows written by another DBOS SDK.
 
 ## Running several copies
 
@@ -171,7 +171,7 @@ Every copy of your program connects to the same database. Rows hold all the shar
 
 The database sets the limit, because each step and each workflow writes to it. DBOS publishes a rule of thumb for Postgres, about 1,000 workflows or steps per vCPU per second. That figure is not checked here and may not apply to this engine.
 
-Nothing has been measured for rust-dwos. Known costs from reading the code:
+Nothing has been measured for yado. Known costs from reading the code:
 
 - Each sleeper or waiter with no local wake reads about 4 times per second.
 - Each queue slot re-scans pending rows while holding the queue row lock, which also blocks enqueues.
@@ -193,15 +193,15 @@ The SQL is written once, through the `sqlx` `Any` driver. Only these differ per 
 
 | Part | File |
 |---|---|
-| SQL | `crates/dwos-core/src/store/<feature>.rs` |
-| Decisions | `crates/dwos-core/src/engine/<feature>.rs` |
-| Tables | `crates/dwos-core/schema/<database>/NNN_<change>.sql` |
-| Bindings | `crates/dwos-py/src/<feature>.rs` |
-| Python API | `python/rust_dwos/<feature>.py` |
+| SQL | `crates/yado-core/src/store/<feature>.rs` |
+| Decisions | `crates/yado-core/src/engine/<feature>.rs` |
+| Tables | `crates/yado-core/schema/<database>/NNN_<change>.sql` |
+| Bindings | `crates/yado-py/src/<feature>.rs` |
+| Python API | `python/yado/<feature>.py` |
 
 ## How it differs from DBOS
 
-| Topic | DBOS | rust-dwos |
+| Topic | DBOS | yado |
 |---|---|---|
 | Core language | Python | Rust, with a Python SDK |
 | Databases | Postgres, SQLite | Postgres, MySQL 8.4, SQLite |

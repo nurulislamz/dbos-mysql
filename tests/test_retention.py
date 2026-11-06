@@ -2,8 +2,8 @@ import time
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig
-from rust_dwos.errors import DBOSException
+from yado import DBOS, DBOSConfig
+from yado.errors import DBOSException
 
 
 def test_delete_calls_reach_the_core(dbos: DBOS) -> None:

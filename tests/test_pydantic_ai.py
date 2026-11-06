@@ -12,8 +12,8 @@ from pydantic_ai.capabilities import AbstractCapability  # noqa: E402
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart, ToolReturnPart  # noqa: E402
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel  # noqa: E402
 
-from rust_dwos import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError  # noqa: E402
-from rust_dwos.pydantic_ai import DwosDurability  # noqa: E402
+from yado import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSWorkflowCancelledError  # noqa: E402
+from yado.pydantic_ai import YadoDurability  # noqa: E402
 from tests.conftest import Database, retry_until_success  # noqa: E402
 
 
@@ -53,7 +53,7 @@ class _SleepThenDelaySlowTool(AbstractCapability[Any]):
 
 
 def _agent(calls: dict[str, int], **durability: Any) -> Agent[None, str]:
-    agent = Agent(_two_tools_then_text(calls), name="writer", capabilities=[_SleepThenDelaySlowTool(), DwosDurability(**durability)])
+    agent = Agent(_two_tools_then_text(calls), name="writer", capabilities=[_SleepThenDelaySlowTool(), YadoDurability(**durability)])
 
     @agent.tool_plain
     async def slow(x: int) -> int:
@@ -116,7 +116,7 @@ def test_cancel_reaches_the_workflow_as_dbos_workflow_cancelled_error(dbos: DBOS
             return ModelResponse(parts=[ToolCallPart("stop", {})])
         return ModelResponse(parts=[TextPart("not reached")])
 
-    agent = Agent(FunctionModel(respond), name="stopper", capabilities=[DwosDurability()])
+    agent = Agent(FunctionModel(respond), name="stopper", capabilities=[YadoDurability()])
 
     @agent.tool_plain
     async def stop() -> str:

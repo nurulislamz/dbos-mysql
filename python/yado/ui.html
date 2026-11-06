@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>yado workflows</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --ground: #f6f6f3;
+  --surface: #ffffff;
+  --ink: #1c1d1b;
+  --muted: #5d605a;
+  --line: #dcdcd6;
+  --link: #0b5f63;
+  --focus: #0b5f63;
+  --pending-bg: #dcebf5; --pending-ink: #0f4566;
+  --success-bg: #dcefe0; --success-ink: #17542a;
+  --error-bg: #f8dfdc; --error-ink: #8a1f16;
+  --limit-bg: #f6e8c6; --limit-ink: #66470a;
+  --cancel-bg: #ecece7; --cancel-ink: #3f413c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #161715;
+    --surface: #1f201e;
+    --ink: #eeeeea;
+    --muted: #a9aca5;
+    --line: #383a36;
+    --link: #7fd0d4;
+    --focus: #7fd0d4;
+    --pending-bg: #17364a; --pending-ink: #b7dcf3;
+    --success-bg: #173a22; --success-ink: #b5e5c3;
+    --error-bg: #4a1f1b; --error-ink: #f9c6c0;
+    --limit-bg: #453410; --limit-ink: #f3dc9f;
+    --cancel-bg: #2a2b28; --cancel-ink: #c8cbc3;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+a { color: var(--link); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.shell { max-width: 1240px; margin: 0 auto; padding: 0 24px 48px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 16px 0; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-right: auto; }
+.brand svg { display: block; }
+.stamp { color: var(--muted); font-size: 13px; }
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  min-height: 32px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
+h1 { font-size: 24px; line-height: 1.25; margin: 8px 0 4px; overflow-wrap: anywhere; }
+h1:focus { outline: none; }
+h2 { font-size: 16px; margin: 28px 0 8px; }
+.finding { margin: 0 0 16px; }
+.filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.alert {
+  background: var(--error-bg);
+  color: var(--error-ink);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0 0 12px;
+}
+.alert:empty { display: none; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table { width: 100%; border-collapse: collapse; }
+caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+th { text-align: left; font-size: 13px; font-weight: 500; color: var(--muted); }
+th, td { padding: 8px 12px; vertical-align: top; }
+tbody td { border-top: 1px solid var(--line); }
+.num { text-align: right; white-space: nowrap; }
+.id { overflow-wrap: anywhere; font-weight: 500; }
+.message { color: var(--muted); padding: 16px 12px; margin: 0; }
+.chip {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.chip-PENDING { background: var(--pending-bg); color: var(--pending-ink); }
+.chip-SUCCESS { background: var(--success-bg); color: var(--success-ink); }
+.chip-ERROR { background: var(--error-bg); color: var(--error-ink); }
+.chip-MAX_RECOVERY_ATTEMPTS_EXCEEDED { background: var(--limit-bg); color: var(--limit-ink); }
+.chip-CANCELLED { background: var(--cancel-bg); color: var(--cancel-ink); }
+.back { display: inline-block; padding: 4px 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px 24px; margin: 16px 0 0; }
+.facts dt { color: var(--muted); font-size: 13px; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+pre {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps pre { background: var(--ground); margin: 6px 12px 12px; border-radius: 4px; }
+.step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 12px 12px 6px; }
+.step-name { font-weight: 500; overflow-wrap: anywhere; }
+.step-id, .step-kind { color: var(--muted); font-size: 13px; }
+.note { color: var(--muted); font-size: 13px; margin: 24px 0 0; }
+@media (max-width: 1024px) {
+  .shell { padding: 0 16px 32px; }
+  button { min-height: 44px; padding: 4px 12px; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  table, tbody { display: block; }
+  tbody tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px; border-top: 1px solid var(--line); }
+  tbody tr:first-child { border-top: 0; }
+  tbody td, tbody td.num { display: block; border: 0; padding: 0; text-align: left; }
+  td.id { grid-column: 1; grid-row: 1; }
+  td.state { grid-column: 2; grid-row: 1; }
+  td.name, td.num, td.when { grid-column: 1 / -1; color: var(--muted); font-size: 13px; white-space: normal; }
+  td[data-label]::before { content: attr(data-label) ": "; }
+  td.id a { display: inline-block; padding: 4px 0; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="bar">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+        <path d="M16 10a6 6 0 1 1-2-4.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        <circle cx="16" cy="4" r="2.5" fill="currentColor"/>
+      </svg>
+      <span>yado</span>
+    </div>
+    <span class="stamp" id="stamp" role="status"></span>
+    <button type="button" id="pause" aria-pressed="false">Pause refresh</button>
+  </header>
+  <main id="view"></main>
+</div>
+<script>
+"use strict";
+const REFRESH_MS = 5000;
+const LABELS = {
+  PENDING: "Pending",
+  SUCCESS: "Succeeded",
+  ERROR: "Failed",
+  MAX_RECOVERY_ATTEMPTS_EXCEEDED: "Recovery limit reached",
+  CANCELLED: "Cancelled",
+};
+const view = document.getElementById("view");
+const stamp = document.getElementById("stamp");
+const pauseButton = document.getElementById("pause");
+let paused = false;
+let filter = "ALL";
+let timer = null;
+let navigation = 0;
+let shown = null;
+
+// Every value goes in through text nodes or setAttribute, so stored data can never run as code.
+function el(tag, attributes, ...children) {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attributes || {})) {
+    if (value !== null && value !== undefined) node.setAttribute(name, value);
+  }
+  node.append(...children.filter((child) => child !== null && child !== undefined));
+  return node;
+}
+
+function label(status) { return LABELS[status] || status; }
+function chip(status) { return el("span", { class: `chip chip-${status}` }, label(status)); }
+function workflowHref(id) { return `#/workflows/${encodeURIComponent(id)}`; }
+
+function when(ms) {
+  if (ms === null || ms === undefined) return "—";
+  const date = new Date(ms);
+  return el("time", { datetime: date.toISOString() }, date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" }));
+}
+
+async function getJson(path) {
+  let response;
+  try {
+    response = await fetch(path, { headers: { Accept: "application/json" } });
+  } catch {
+    throw new Error("The viewer is not responding.");
+  }
+  let body = null;
+  try { body = await response.json(); } catch { body = null; }
+  if (!response.ok) {
+    const error = new Error((body && body.error) || `The viewer answered with status ${response.status}.`);
+    error.status = response.status;
+    throw error;
+  }
+  return body;
+}
+
+function finding(rows) {
+  const count = (status) => rows.filter((row) => row.status === status).length;
+  const total = rows.length;
+  if (total === 0) return "No workflows yet.";
+  const noun = total === 1 ? "workflow" : "workflows";
+  const failed = count("ERROR");
+  const limited = count("MAX_RECOVERY_ATTEMPTS_EXCEEDED");
+  const cancelled = count("CANCELLED");
+  if (failed || limited || cancelled) {
+    const parts = [];
+    if (failed) parts.push(`${failed} failed`);
+    if (limited) parts.push(`${limited} reached the recovery limit`);
+    if (cancelled) parts.push(`${cancelled} cancelled`);
+    return `${parts.join(" and ")}, out of ${total} ${noun}.`;
+  }
+  const pending = count("PENDING");
+  if (pending) return `${pending} of ${total} ${noun} pending. None failed.`;
+  return total === 1 ? "The 1 workflow succeeded." : `All ${total} workflows succeeded.`;
+}
+
+function filterButton(key, text, count) {
+  const button = el("button", { type: "button", "aria-pressed": String(filter === key), "data-key": `filter:${key}` }, `${text} ${count}`);
+  button.addEventListener("click", () => {
+    filter = key;
+    if (shown) renderList(shown.rows, shown.problem);
+  });
+  return button;
+}
+
+function workflowRow(row) {
+  return el("tr", null,
+    el("td", { class: "id" }, el("a", { href: workflowHref(row.workflow_id), "data-key": `workflow:${row.workflow_id}` }, row.workflow_id)),
+    el("td", { class: "state" }, chip(row.status)),
+    el("td", { class: "name", "data-label": "Name" }, row.name),
+    el("td", { class: "num", "data-label": "Attempts" }, `${row.recovery_attempts} of ${row.max_recovery_attempts ?? "unlimited"}`),
+    el("td", { class: "when", "data-label": "Created" }, when(row.created_at_ms)),
+    el("td", { class: "when", "data-label": "Updated" }, when(row.updated_at_ms)),
+  );
+}
+
+function renderList(rows, problem) {
+  shown = { rows, problem };
+  const statuses = Object.keys(LABELS).concat([...new Set(rows.map((row) => row.status))].filter((s) => !(s in LABELS)));
+  const filtered = filter === "ALL" ? rows : rows.filter((row) => row.status === filter);
+  const buttons = [filterButton("ALL", "All", rows.length)];
+  for (const status of statuses) buttons.push(filterButton(status, label(status), rows.filter((row) => row.status === status).length));
+  const empty = rows.length === 0
+    ? "Workflows appear here once your program starts one."
+    : `No workflows with the status ${filter === "ALL" ? "" : label(filter)}.`;
+  const body = filtered.length
+    ? el("tbody", null, ...filtered.map(workflowRow))
+    : null;
+  const table = el("table", null,
+    el("caption", null, "Workflows, newest first"),
+    el("thead", null, el("tr", null,
+      el("th", { scope: "col" }, "Workflow ID"),
+      el("th", { scope: "col" }, "Status"),
+      el("th", { scope: "col" }, "Name"),
+      el("th", { scope: "col", class: "num" }, "Attempts"),
+      el("th", { scope: "col" }, "Created"),
+      el("th", { scope: "col" }, "Updated"),
+    )),
+    body,
+  );
+  swap(
+    el("h1", { tabindex: "-1" }, "Workflows"),
+    el("p", { class: "finding" }, finding(rows)),
+    el("p", { class: "alert", role: "alert" }, problem || ""),
+    el("div", { class: "filters", role: "group", "aria-label": "Filter by status" }, ...buttons),
+    el("div", { class: "panel" }, table, filtered.length ? null : el("p", { class: "message" }, empty)),
+  );
+}
+
+function valueBlock(title, value, missing) {
+  const content = value === null || value === undefined
+    ? el("p", { class: "message" }, missing)
+    : el("pre", { tabindex: "0", "aria-label": title }, value);
+  return [el("h2", null, title), el("div", { class: "panel" }, content)];
+}
+
+function stepItem(step) {
+  let kind = "Saved output";
+  if (step.error !== null) kind = "Saved error";
+  else if (step.child_workflow_id !== null) kind = "Child workflow";
+  const value = step.error !== null ? step.error : step.output;
+  return el("li", null,
+    el("div", { class: "step-head" },
+      el("span", { class: "step-id" }, `Step ${step.step_id}`),
+      el("span", { class: "step-name" }, step.step_name),
+      el("span", { class: "step-kind" }, kind),
+      step.child_workflow_id === null ? null : el("a", { href: workflowHref(step.child_workflow_id), "data-key": `child:${step.step_id}` }, step.child_workflow_id),
+    ),
+    value === null ? null : el("pre", { tabindex: "0", "aria-label": `Step ${step.step_id} value` }, value),
+  );
+}
+
+function renderDetail(workflow, steps, problem) {
+  const fact = (name, value) => el("div", null, el("dt", null, name), el("dd", null, value));
+  const unfinished = workflow.status === "PENDING" ? "Not finished yet." : "None stored.";
+  const outcome = workflow.error !== null
+    ? valueBlock("Error", workflow.error, unfinished)
+    : valueBlock("Output", workflow.output, unfinished);
+  swap(
+    el("a", { class: "back", href: "#/", "data-key": "back" }, "All workflows"),
+    el("h1", { tabindex: "-1" }, workflow.workflow_id),
+    chip(workflow.status),
+    el("p", { class: "alert", role: "alert" }, problem || ""),
+    el("dl", { class: "facts" },
+      fact("Name", workflow.name),
+      fact("Attempts", `${workflow.recovery_attempts} of ${workflow.max_recovery_attempts ?? "unlimited"}`),
+      fact("Parent workflow", workflow.parent_workflow_id === null
+        ? "—"
+        : el("a", { href: workflowHref(workflow.parent_workflow_id), "data-key": "parent" }, workflow.parent_workflow_id)),
+      fact("Created", when(workflow.created_at_ms)),
+      fact("Updated", when(workflow.updated_at_ms)),
+      fact("Completed", when(workflow.completed_at_ms)),
+    ),
+    ...outcome,
+    ...valueBlock("Input", workflow.input, "None stored."),
+    el("h2", null, `Steps saved: ${steps.length}`),
+    el("div", { class: "panel" }, steps.length
+      ? el("ol", { class: "steps" }, ...steps.map(stepItem))
+      : el("p", { class: "message" }, "No steps saved yet.")),
+    el("p", { class: "note" }, "Values are shown exactly as stored, without decoding."),
+  );
+}
+
+// A refresh replaces the page, so put keyboard focus back where it was.
+function swap(...nodes) {
+  const key = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+  view.replaceChildren(...nodes);
+  if (!key) return;
+  for (const node of view.querySelectorAll("[data-key]")) {
+    if (node.dataset.key === key) { node.focus(); return; }
+  }
+}
+
+function message(title, text, isError) {
+  const parts = [el("h1", { tabindex: "-1" }, title), el("p", isError ? { class: "alert", role: "alert" } : { class: "finding", role: "status" }, text)];
+  if (location.hash.startsWith("#/workflows/")) parts.unshift(el("a", { class: "back", href: "#/" }, "All workflows"));
+  view.replaceChildren(...parts);
+}
+
+function currentId() {
+  const match = location.hash.match(/^#\/workflows\/(.+)$/);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+}
+
+function stampNow() {
+  stamp.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+}
+
+async function load(id, ticket, state) {
+  try {
+    let text;
+    let draw;
+    if (id === null) {
+      const data = await getJson("/api/workflows");
+      text = JSON.stringify(data);
+      draw = (problem) => renderList(data.workflows, problem);
+    } else {
+      // shortcut: browsers collapse workflow IDs of "." and "..", so those cannot be opened, encode them differently if anyone uses them.
+      const path = `/api/workflows/${encodeURIComponent(id)}`;
+      const [workflow, steps] = await Promise.all([getJson(path), getJson(`${path}/steps`)]);
+      text = JSON.stringify([workflow, steps]);
+      draw = (problem) => renderDetail(workflow, steps.steps, problem);
+    }
+    if (ticket !== navigation) return;
+    if (text !== state.text || state.problem) draw(null);
+    state.text = text;
+    state.draw = draw;
+    state.problem = false;
+    stampNow();
+  } catch (error) {
+    // Redrawing the same alert would make a screen reader repeat it on every refresh.
+    if (ticket !== navigation || state.problem === error.message) return;
+    state.problem = error.message;
+    if (state.draw && error.status !== 404) {
+      state.draw(`${error.message} Showing the last data read.`);
+    } else if (error.status === 404) {
+      state.draw = null;
+      state.text = null;
+      message("Workflow not found", error.message, false);
+    } else {
+      message(id === null ? "Workflows" : "Workflow", error.message, true);
+    }
+  }
+}
+
+function schedule(id, ticket, state) {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    if (ticket !== navigation) return;
+    if (!paused && !document.hidden) await load(id, ticket, state);
+    if (ticket === navigation) schedule(id, ticket, state);
+  }, REFRESH_MS);
+}
+
+async function route() {
+  navigation += 1;
+  const ticket = navigation;
+  const id = currentId();
+  const state = { text: null, draw: null, problem: false };
+  shown = null;
+  clearTimeout(timer);
+  message(id === null ? "Workflows" : "Workflow", "Loading…", false);
+  await load(id, ticket, state);
+  if (ticket !== navigation) return;
+  const heading = view.querySelector("h1");
+  if (heading && moveFocus) heading.focus();
+  moveFocus = true;
+  schedule(id, ticket, state);
+}
+
+let moveFocus = false;
+pauseButton.addEventListener("click", () => {
+  paused = !paused;
+  pauseButton.setAttribute("aria-pressed", String(paused));
+  pauseButton.textContent = paused ? "Refresh paused" : "Pause refresh";
+});
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

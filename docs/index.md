@@ -1,6 +1,8 @@
 # Introduction
 
-rust-dwos runs durable workflows on Postgres, MySQL 8.4 or SQLite. If your program crashes, it starts again where it stopped. Steps that already finished do not run again.
+Yet another durable orchestrator.
+
+yado runs durable workflows on Postgres, MySQL 8.4 or SQLite. If your program crashes, it starts again where it stopped. Steps that already finished do not run again.
 
 It is a library. You add decorators to your Python functions and point them at a database. There is no extra server to run.
 
@@ -9,7 +11,7 @@ It is a library. You add decorators to your Python functions and point them at a
 ## What it looks like
 
 ```python
-from rust_dwos import DBOS
+from yado import DBOS
 
 
 @DBOS.step()

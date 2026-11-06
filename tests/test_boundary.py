@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-PACKAGE = Path(__file__).parent.parent / "python" / "rust_dwos"
+PACKAGE = Path(__file__).parent.parent / "python" / "yado"
 SOURCES = sorted(PACKAGE.glob("*.py"))
 DATABASE_DRIVERS = {"asyncpg", "mysql", "psycopg", "psycopg2", "pymysql", "sqlalchemy", "sqlite3"}
 SQL = re.compile(r"\b(SELECT\b.+\bFROM|INSERT\s+INTO|UPDATE\b.+\bSET|DELETE\s+FROM|CREATE\s+TABLE|DROP\s+TABLE)\b", re.DOTALL)

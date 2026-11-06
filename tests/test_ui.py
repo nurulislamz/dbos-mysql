@@ -12,8 +12,8 @@ from urllib.parse import quote
 
 import pytest
 
-from rust_dwos import DBOS, SetWorkflowID, StoreError
-from rust_dwos.ui import _CSP, _DB_FAILED, _PAGE, Viewer
+from yado import DBOS, SetWorkflowID, StoreError
+from yado.ui import _CSP, _DB_FAILED, _PAGE, Viewer
 from tests.conftest import Database
 
 SECRET = "hunter2-secret"
@@ -137,7 +137,7 @@ def test_missing_tables_get_a_clear_message_and_are_not_created(database: Databa
     viewer = open_viewer()
     status, body = _json(viewer, "/api/workflows")
     assert status == 503
-    assert "no rust-dwos tables" in body["error"]
+    assert "no yado tables" in body["error"]
     with pytest.raises(Exception, match="workflow_status"):
         database.execute("SELECT 1 FROM workflow_status")
 
@@ -204,7 +204,7 @@ def test_database_errors_are_redacted(database: Database, open_viewer: Any, caps
 
 
 def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, "-m", "rust_dwos.ui", *arguments], capture_output=True, text=True, timeout=60, check=False)
+    return subprocess.run([sys.executable, "-m", "yado.ui", *arguments], capture_output=True, text=True, timeout=60, check=False)
 
 
 def test_failed_start_does_not_print_the_password() -> None:

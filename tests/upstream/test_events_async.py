@@ -5,7 +5,7 @@ from typing import Optional
 
 import pytest
 
-from rust_dwos import DBOS, SetWorkflowID
+from yado import DBOS, SetWorkflowID
 
 
 async def test_send_recv_async(dbos: DBOS) -> None:

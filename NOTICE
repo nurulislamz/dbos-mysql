@@ -1,20 +1,20 @@
-rust-dwos
+yado
 Unofficial project, not affiliated with DBOS, Inc.
 The engine in this repository is this project's code.
 
 tests/upstream contains tests adapted from dbos-transact-py and dbos-transact-ts,
 Copyright (c) DBOS, Inc., used under the MIT License. See tests/upstream/LICENSE-DBOS.
 
-python/rust_dwos/dbos.py, queues.py, timeouts.py, sleep.py, events.py and workflow_management.py copy API shapes
+python/yado/dbos.py, queues.py, timeouts.py, sleep.py, events.py and workflow_management.py copy API shapes
 (DBOS.step retry predicates, Queue, SetWorkflowTimeout, SetWorkflowID workflow_id_reuse_policy, get_result polling_interval_sec, cancel_children, resume queue_name, bulk cancel and resume, DBOS.sleep, events and messages, workflow management) from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., used under the MIT License. See tests/upstream/LICENSE-DBOS.
 
-python/rust_dwos/validation.py, sdk_calls.py, step_reservation.py, wait_first.py and context.py adapt behavior from dbos-transact-py
+python/yado/validation.py, sdk_calls.py, step_reservation.py, wait_first.py and context.py adapt behavior from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
 
-python/rust_dwos/client.py copies the DBOSClient API shape from dbos-transact-py
+python/yado/client.py copies the DBOSClient API shape from dbos-transact-py
 at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
-python/rust_dwos/datasources.py adapts dbos/_datasource.py, _datasource_sqlite.py, _datasource_postgres.py
+python/yado/datasources.py adapts dbos/_datasource.py, _datasource_sqlite.py, _datasource_postgres.py
 and _datasource_migration.py from dbos-transact-py at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.
-python/rust_dwos/debouncer.py copies the Debouncer and DebouncerClient API shape and option checks from
+python/yado/debouncer.py copies the Debouncer and DebouncerClient API shape and option checks from
 dbos-transact-py dbos/_debouncer.py at commit 236142b, Copyright (c) DBOS, Inc., under the MIT License.

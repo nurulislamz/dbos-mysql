@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle, WorkflowHandleAsync
+from yado import DBOS, DBOSConfig, SetWorkflowID, WorkflowHandle, WorkflowHandleAsync
 from tests.conftest import Database
 
 

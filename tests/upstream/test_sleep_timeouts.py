@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from rust_dwos import (
+from yado import (
     DBOS,
     DBOSAwaitedWorkflowCancelledError,
     DBOSException,

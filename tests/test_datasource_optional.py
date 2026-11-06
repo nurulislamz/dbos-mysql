@@ -5,16 +5,16 @@ import sys
 _WITHOUT_SQLALCHEMY = """
 import sys
 sys.modules["sqlalchemy"] = None
-import rust_dwos
-from rust_dwos import *
+import yado
+from yado import *
 try:
-    rust_dwos.SQLAlchemyDatasource
+    yado.SQLAlchemyDatasource
 except ImportError as error:
-    assert "rust-dwos[sqlalchemy]" in str(error), error
+    assert "yado[sqlalchemy]" in str(error), error
 else:
     raise SystemExit("SQLAlchemyDatasource loaded without SQLAlchemy")
 """
 
 
-def test_rust_dwos_imports_without_sqlalchemy() -> None:
+def test_yado_imports_without_sqlalchemy() -> None:
     subprocess.run([sys.executable, "-c", _WITHOUT_SQLALCHEMY], check=True, timeout=60)  # noqa: S603

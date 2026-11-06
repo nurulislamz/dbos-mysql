@@ -4,7 +4,7 @@ from collections.abc import Iterator
 import pytest
 
 from tests.conftest import Database
-from rust_dwos import DBOS, DBOSClient, DBOSException, DBOSNonExistentWorkflowError, EnqueueOptions
+from yado import DBOS, DBOSClient, DBOSException, DBOSNonExistentWorkflowError, EnqueueOptions
 
 
 @pytest.fixture

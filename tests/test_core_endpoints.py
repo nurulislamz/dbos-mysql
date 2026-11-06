@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from rust_dwos import _native
+from yado import _native
 
 # No concurrency limit is stored as the largest 32-bit value.
 UNLIMITED = 2**32 - 1

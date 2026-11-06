@@ -9,9 +9,9 @@ import pytest
 
 sa = pytest.importorskip("sqlalchemy")
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSLeaseLostError, SetWorkflowID  # noqa: E402
-from rust_dwos import datasources  # noqa: E402
-from rust_dwos.datasources import AsyncSQLAlchemyDatasource, DBOSInitializationError, SQLAlchemyDatasource  # noqa: E402
+from yado import DBOS, DBOSConfig, DBOSException, DBOSLeaseLostError, SetWorkflowID  # noqa: E402
+from yado import datasources  # noqa: E402
+from yado.datasources import AsyncSQLAlchemyDatasource, DBOSInitializationError, SQLAlchemyDatasource  # noqa: E402
 from tests.conftest import Database  # noqa: E402
 
 text = sa.text

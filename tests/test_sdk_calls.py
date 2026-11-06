@@ -3,7 +3,7 @@ import logging
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException
+from yado import DBOS, DBOSException
 
 
 def test_run_step(dbos: DBOS) -> None:

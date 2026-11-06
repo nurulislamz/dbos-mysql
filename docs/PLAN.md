@@ -1,4 +1,4 @@
-# rust-dwos: plan
+# yado: plan
 
 Durable workflows on Postgres, MySQL 8.4 and SQLite. Unofficial, and not affiliated with DBOS, Inc.
 
@@ -54,7 +54,7 @@ Two checks apply the rule:
 
 Rust holds SQL, step IDs, replay, leases, recovery, retry limits and delays, recovery limits, stored statuses and formats, and what happens when a workflow ends.
 
-`tests/test_boundary.py` fails if `python/rust_dwos/` imports a database driver, contains SQL, or calls something `_native.pyi` does not declare. It cannot catch every misplaced decision, so reviews check the rule too.
+`tests/test_boundary.py` fails if `python/yado/` imports a database driver, contains SQL, or calls something `_native.pyi` does not declare. It cannot catch every misplaced decision, so reviews check the rule too.
 
 ## Where a new feature goes
 
@@ -62,11 +62,11 @@ Each feature gets its own files, so features can be built in parallel without co
 
 | Part | File |
 |---|---|
-| SQL | `crates/dwos-core/src/store/<feature>.rs`, as an `impl Store` block |
-| Decisions | `crates/dwos-core/src/engine/<feature>.rs`, as an `impl Engine` block |
-| Tables | A new numbered `schema/<database>/NNN_<change>.sql` for each database, listed in `crates/dwos-core/src/store/migrations.rs`. Never edit a file that has shipped, including `001_init.sql`. Migrations must keep every row; see [`dwos-core/README.md`](../crates/dwos-core/README.md#schema-upgrades) |
-| Python API | `python/rust_dwos/<feature>.py`, as a class that `DBOS` inherits from |
-| Bindings | `crates/dwos-py/src/<feature>.rs`, as its own `#[pymethods] impl PyEngine` block |
+| SQL | `crates/yado-core/src/store/<feature>.rs`, as an `impl Store` block |
+| Decisions | `crates/yado-core/src/engine/<feature>.rs`, as an `impl Engine` block |
+| Tables | A new numbered `schema/<database>/NNN_<change>.sql` for each database, listed in `crates/yado-core/src/store/migrations.rs`. Never edit a file that has shipped, including `001_init.sql`. Migrations must keep every row; see [`yado-core/README.md`](../crates/yado-core/README.md#schema-upgrades) |
+| Python API | `python/yado/<feature>.py`, as a class that `DBOS` inherits from |
+| Bindings | `crates/yado-py/src/<feature>.rs`, as its own `#[pymethods] impl PyEngine` block |
 
 ## Reuse
 
@@ -90,7 +90,7 @@ What may differ per database: the schema and migration files, "now in millisecon
 
 The core now offers durable FIFO enqueue and global lease-owner concurrency. Queue metadata and membership use new companion tables; workflow identity, status, results and ownership remain in the existing workflow row. A queue transaction revokes expired owners, counts all remaining tokens and admits compatible work. Ordinary recovery and direct resume claims exclude queue members. Relative timeout budgets begin on first admission; inherited deadlines apply while waiting. The latest registration with a limit sets it, so during a rolling deploy processes on different code can overwrite each other until the old ones stop.
 
-Stop old workers before upgrading the schema or using queues: older claim SQL does not enforce queue admission, and old workers do not read the schema version. The core API and remaining SDK obligations are described in [`dwos-core/README.md`](../crates/dwos-core/README.md).
+Stop old workers before upgrading the schema or using queues: older claim SQL does not enforce queue admission, and old workers do not read the schema version. The core API and remaining SDK obligations are described in [`yado-core/README.md`](../crates/yado-core/README.md).
 
 ## Behaviour we keep
 
@@ -114,4 +114,4 @@ Streams, fork, a TypeScript SDK, and a separate coordinator. Schedules are five-
 
 ## Web viewer
 
-`python -m rust_dwos.ui` is an optional, read-only page for looking at workflows and steps. Programs never need it. It listens on `127.0.0.1` with no login, so do not expose it without adding one.
+`python -m yado.ui` is an optional, read-only page for looking at workflows and steps. Programs never need it. It listens on `127.0.0.1` with no login, so do not expose it without adding one.

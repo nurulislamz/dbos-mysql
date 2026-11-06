@@ -1,6 +1,6 @@
 # Reference
 
-Everything is imported from `rust_dwos`. Most calls that do I/O have an `_async` version, for example `DBOS.send_async`.
+Everything is imported from `yado`. Most calls that do I/O have an `_async` version, for example `DBOS.send_async`.
 
 ## Configuration
 

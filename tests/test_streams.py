@@ -1,6 +1,6 @@
 import pytest
 
-from rust_dwos import DBOS, DBOSException, DBOSStreamTimeoutError, SetWorkflowID
+from yado import DBOS, DBOSException, DBOSStreamTimeoutError, SetWorkflowID
 
 
 def test_write_read_and_close_a_stream(dbos: DBOS) -> None:

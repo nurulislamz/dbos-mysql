@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from rust_dwos import DBOS, DBOSException, DBOSMaxStepRetriesExceeded
+from yado import DBOS, DBOSException, DBOSMaxStepRetriesExceeded
 
 
 class ShouldRetryFatalError(Exception):

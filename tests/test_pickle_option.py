@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from rust_dwos import DBOS, DBOSConfig, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError, SetWorkflowID
+from yado import DBOS, DBOSConfig, DBOSException, DBOSMaxStepRetriesExceeded, DBOSRecordedError, SetWorkflowID
 from tests.conftest import Database
 from tests.crash_app import register
 

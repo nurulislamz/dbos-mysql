@@ -296,31 +296,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
-name = "dwos-core"
-version = "0.0.1"
-dependencies = [
- "log",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "dwos-py"
-version = "0.0.1"
-dependencies = [
- "dwos-core",
- "log",
- "pyo3",
- "pyo3-async-runtimes",
- "pyo3-log",
- "tokio",
-]
-
-[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1875,6 +1850,31 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "yado-core"
+version = "0.0.1"
+dependencies = [
+ "log",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "yado-py"
+version = "0.0.1"
+dependencies = [
+ "log",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "pyo3-log",
+ "tokio",
+ "yado-core",
+]
 
 [[package]]
 name = "yoke"

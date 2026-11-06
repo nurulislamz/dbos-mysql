@@ -5,8 +5,8 @@ from typing import List
 
 import pytest
 
-from rust_dwos import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSNonExistentWorkflowError, SetWorkflowID
-from rust_dwos.dbos import WorkflowStatus
+from yado import DBOS, DBOSAwaitedWorkflowCancelledError, DBOSNonExistentWorkflowError, SetWorkflowID
+from yado.dbos import WorkflowStatus
 
 
 @pytest.mark.asyncio

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import psycopg
 
-from rust_dwos import DBOS
+from yado import DBOS
 
 PG = {"host": "127.0.0.1", "port": int(os.environ.get("DBOS_TEST_PG_PORT", "13309")), "user": "postgres", "password": "dbos-test-root", "autocommit": True}
 STEPS_PER_WORKFLOW = 50
