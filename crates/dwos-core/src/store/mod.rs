@@ -397,7 +397,7 @@ impl Store {
     }
 
     /// Lets this store claim rows written by the custom serializer `tag`, a tag from `custom_format`.
-    pub fn with_custom(mut self, tag: &str) -> Self {
+    pub(crate) fn with_custom(mut self, tag: &str) -> Self {
         self.custom = Some(tag.to_owned());
         self
     }
