@@ -146,7 +146,9 @@ fn files_after_init(backend: Backend) -> [&'static str; 14] {
 
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
-        Backend::Sqlite => vec![1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30],
+        Backend::Sqlite => vec![
+            1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30,
+        ],
         Backend::MySql => vec![
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30,
         ],
