@@ -9,7 +9,7 @@ Results come from 3 full runs against SQLite and MySQL 8.4. `pass/fail` in a res
 - **rewritten**: written again in pytest from the upstream scenario.
 - **dropped**: not carried over.
 
-Counts: adapted: 36, dropped: 4, passing: 17, rewritten: 11. Every test that was not dropped passes on both backends. The workflow-management rows were run once, on SQLite, MySQL and Postgres. The reuse-policy and handles rows passed on SQLite and MySQL.
+Counts: adapted: 42, dropped: 5, passing: 21, rewritten: 12. Every test that was not dropped passes on both backends. The workflow-management rows were run once, on SQLite, MySQL and Postgres. The reuse-policy and handles rows passed on SQLite and MySQL.
 
 | Test | Source | Commit | Status | SQLite | MySQL | Reason |
 |---|---|---|---|---|---|---|
@@ -94,3 +94,15 @@ Counts: adapted: 36, dropped: 4, passing: 17, rewritten: 11. Every test that was
 | `test_async_ds_records_and_replays` | dbos-transact-py `tests/test_datasource.py` | 236142b | adapted | pass | pass | One `@ads.transaction` step instead of three call styles. aiosqlite on SQLite, aiomysql on MySQL. Skips without greenlet. |
 | Postgres-only datasource tests: serialization retry, lost commit acknowledgement, least-privilege role, adopting an unversioned table, concurrent and frozen migrators | dbos-transact-py `tests/test_datasource.py` | 236142b | dropped | not run | not run | They need psycopg errors or Postgres roles and advisory locks. Postgres is not tested in this slice. |
 | Remaining datasource tests: other async copies, ORM objects, custom sessionmaker, `schema_translate_map`, locked pre-check retry, stale error, lost race, `reserve_step`, `_delete_checkpoints` | dbos-transact-py `tests/test_datasource.py` | 236142b | dropped | not run | not run | Not adapted yet. `_delete_checkpoints` is for rewind, which rust-dwos does not have. |
+| `test_debouncer` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | Drops the recovery rerun at the end, which needs `set_workflow_status`. |
+| `test_debouncer_timeout` | dbos-transact-py `tests/test_debouncer.py` | 236142b | passing | pass | pass |  |
+| `test_multiple_debouncers` | dbos-transact-py `tests/test_debouncer.py` | 236142b | passing | pass | pass |  |
+| `test_debouncer_queue` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | Drops the `app_version` pass-through, which needs `GlobalParams`. |
+| `test_debouncer_async` | dbos-transact-py `tests/test_debouncer.py` | 236142b | passing | pass | pass |  |
+| `test_debouncer_client` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | No `DBOSClient` yet: a stand-in exposes `_engine` and `retrieve_workflow`. |
+| `test_debounce_flip_clears_dedup` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | Reads `DBOS.get_workflow_status`, which has no `is_debounced` field. |
+| `test_debounce_cancel_then_redebounce` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | Reads `DBOS.get_workflow_status`. |
+| `test_debounce_user_dedup_conflict_raises` | dbos-transact-py `tests/test_debouncer.py` | 236142b | adapted | pass | pass | Uses a named queue, since users cannot enqueue on the internal queue here. |
+| `test_debounce_fixed_workflow_id_reuse` | dbos-transact-py `tests/test_debouncer.py` | 236142b | passing | pass | pass |  |
+| `test_debounce_rejects_caller_dedup_and_delay` | dbos-transact-py `tests/test_debouncer.py` | 236142b | rewritten | pass | pass | One parametrized case per rejected option, checked through `SetEnqueueOptions` and `SetWorkflowID`. |
+| `test_debouncer_client_async`, `test_debounce_deadline_caps_initial_delay`, `test_debounce_inworkflow_*`, `test_debounce_retries_replayed_portable_dedup_error`, `test_debounce_bounce_path_does_not_leak_pinned_id`, `test_debounce_pinned_id_survives_enqueue_dedup_race`, `test_debounce_key_collision_between_workflows`, `test_debounce_ownership_across_applications`, `test_debounce_targets_another_application`, `test_debounce_bounce_atomic_with_checkpoint`, `test_debounce_bounce_checkpoint_survives_post_commit_crash` | dbos-transact-py `tests/test_debouncer.py` | 236142b | dropped | not run | not run | They read DBOS's `_sys_db`, debug triggers or `_classify_bounce`, or need `DBOSClient`. The timeout cap, key collision, in-workflow replay and atomic checkpoint are tested in Rust in `crates/dwos-core/tests/debounce.rs`. |

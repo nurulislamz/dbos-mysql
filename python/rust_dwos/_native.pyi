@@ -347,6 +347,27 @@ class Engine:
         attributes: str | None = None,
         blocking: bool = False,
     ) -> asyncio.Future[str] | str: ...
+    def debounce(
+        self,
+        queue: str,
+        name: str,
+        input: str,
+        max_recovery_attempts: int | None,
+        debounce_key: str,
+        debounce_period_sec: float,
+        debounce_timeout_sec: float | None = None,
+        workflow_id: str | None = None,
+        parent: Run | None = None,
+        in_step: bool = False,
+        timeout_ms: int | None = None,
+        reuse_policy: str | None = None,
+        serialization: str | None = None,
+        *,
+        app_version: str | None = None,
+        application_name: str | None = None,
+        attributes: str | None = None,
+        blocking: bool = False,
+    ) -> asyncio.Future[str] | str: ...
     def set_workflow_delay(self, workflow_id: str, delay_seconds: float | None = None, delay_until_epoch_ms: int | None = None, *, blocking: bool = False) -> asyncio.Future[None] | None: ...
     def claim_queue(self, queue: str, names: list[str]) -> asyncio.Future[list[Claim]]: ...
     def wake_queue(self, queue: str) -> None: ...

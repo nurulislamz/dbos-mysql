@@ -17,6 +17,7 @@ use pyo3_async_runtimes::tokio::{future_into_py, get_runtime};
 
 mod attributes;
 mod datasources;
+mod debounce;
 mod events;
 mod forks;
 mod queues;

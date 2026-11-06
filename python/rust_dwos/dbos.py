@@ -34,6 +34,7 @@ from rust_dwos.forks import Forks
 from rust_dwos.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from rust_dwos.retention import Retention, retention_policy_of
 from rust_dwos.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
+from rust_dwos.debouncer import resume_internal_queue
 from rust_dwos.serialization import Codec, Serializer, allow_pickle, decode_exception, encode_exception, set_custom_serializer
 from rust_dwos.sleep import Sleep
 from rust_dwos.streams import Streams
@@ -437,6 +438,8 @@ class DBOS(WaitFirst, SDKCalls, Sleep, WorkflowManagement, Forks, WorkflowAttrib
             custom_serializer = custom if isinstance(custom, Serializer) else None
             set_custom_serializer(custom_serializer, self._engine.serialization if custom_serializer is not None else None)
             flush_schedules(self)
+            # A debounced workflow left waiting by an earlier run still needs a puller after a restart.
+            resume_internal_queue(self)
         except BaseException:
             if self._engine is not None:
                 self._engine.close()
