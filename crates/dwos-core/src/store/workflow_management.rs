@@ -270,6 +270,16 @@ impl Store {
         if filter.completed_before_ms.is_some() {
             sql.push_str(" AND completed_at <= ?");
         }
+        match filter.is_fork {
+            Some(true) => sql.push_str(" AND forked_from IS NOT NULL"),
+            Some(false) => sql.push_str(" AND forked_from IS NULL"),
+            None => {}
+        }
+        match filter.was_forked_from {
+            Some(true) => sql.push_str(" AND was_forked_from != 0"),
+            Some(false) => sql.push_str(" AND was_forked_from = 0"),
+            None => {}
+        }
         match filter.has_parent {
             Some(true) => sql.push_str(" AND parent_workflow_id IS NOT NULL"),
             Some(false) => sql.push_str(" AND parent_workflow_id IS NULL"),

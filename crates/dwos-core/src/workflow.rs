@@ -199,6 +199,8 @@ pub struct WorkflowFilter {
     pub queue_names: Option<Vec<String>>,
     pub app_versions: Option<Vec<String>>,
     pub forked_from: Option<Vec<String>>,
+    pub is_fork: Option<bool>,
+    pub was_forked_from: Option<bool>,
     pub users: Option<Vec<String>>,
     pub queues_only: bool,
     pub statuses: Option<Vec<Status>>,

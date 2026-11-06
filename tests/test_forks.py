@@ -1,4 +1,8 @@
-from rust_dwos import DBOS, SetWorkflowID
+import asyncio
+
+from rust_dwos import DBOS, DBOSClient, SetWorkflowID
+
+from tests.conftest import Database
 
 calls: list[int] = []
 
@@ -46,3 +50,29 @@ async def test_async_fork_and_rewind_reach_the_core(dbos: DBOS) -> None:
     rewound = await DBOS.rewind_workflow_async(handle.workflow_id)
     assert await rewound.get_result() == "done"
     await DBOS.send_async(handle.workflow_id, "hi", send_to_forks=True)
+
+
+def test_list_fork_filters(dbos: DBOS, database: Database) -> None:
+    @DBOS.workflow()
+    def wf() -> str:
+        return "done"
+
+    with SetWorkflowID("original"):
+        assert wf() == "done"
+    with SetWorkflowID("fork"):
+        assert DBOS.fork_workflow("original", 1).get_result() == "done"
+
+    client = DBOSClient(system_database_url=database.url)
+    try:
+        for list_workflows in (DBOS.list_workflows, client.list_workflows):
+            assert [row.workflow_id for row in list_workflows(is_fork=True)] == ["fork"]
+            assert [row.workflow_id for row in list_workflows(was_forked_from=True)] == ["original"]
+            assert [row.workflow_id for row in list_workflows(is_fork=False, was_forked_from=True)] == ["original"]
+        async def check_async() -> None:
+            for list_workflows in (DBOS.list_workflows_async, client.list_workflows_async):
+                assert [row.workflow_id for row in await list_workflows(is_fork=True, was_forked_from=False)] == ["fork"]
+                assert await list_workflows(is_fork=True, was_forked_from=True) == []
+
+        asyncio.run(check_async())
+    finally:
+        client.destroy()

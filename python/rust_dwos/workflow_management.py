@@ -143,13 +143,15 @@ class WorkflowManagement:
         queue_name: str | list[str] | None = None,
         app_version: str | list[str] | None = None,
         forked_from: str | list[str] | None = None,
+        is_fork: bool | None = None,
+        was_forked_from: bool | None = None,
         user: str | list[str] | None = None,
         queues_only: bool = False,
     ) -> list[WorkflowStatus]:
         dbos = _dbos()
         instance = dbos._running()
         filters = _filters(workflow_ids, status, start_time, end_time, completed_after, completed_before, name, parent_workflow_id, limit, offset, sort_desc, workflow_id_prefix, has_parent)
-        filters.update(queue_name=_as_list(queue_name), app_version=_as_list(app_version), forked_from=_as_list(forked_from), user=_as_list(user), queues_only=queues_only)
+        filters.update(queue_name=_as_list(queue_name), app_version=_as_list(app_version), forked_from=_as_list(forked_from), is_fork=is_fork, was_forked_from=was_forked_from, user=_as_list(user), queues_only=queues_only)
         rows = instance._blocking(instance._engine.list_workflows, **filters)
         return [dbos._status_of(row, load_input=load_input, load_output=load_output) for row in rows]
 
@@ -175,12 +177,14 @@ class WorkflowManagement:
         queue_name: str | list[str] | None = None,
         app_version: str | list[str] | None = None,
         forked_from: str | list[str] | None = None,
+        is_fork: bool | None = None,
+        was_forked_from: bool | None = None,
         user: str | list[str] | None = None,
         queues_only: bool = False,
     ) -> list[WorkflowStatus]:
         dbos = _dbos()
         filters = _filters(workflow_ids, status, start_time, end_time, completed_after, completed_before, name, parent_workflow_id, limit, offset, sort_desc, workflow_id_prefix, has_parent)
-        filters.update(queue_name=_as_list(queue_name), app_version=_as_list(app_version), forked_from=_as_list(forked_from), user=_as_list(user), queues_only=queues_only)
+        filters.update(queue_name=_as_list(queue_name), app_version=_as_list(app_version), forked_from=_as_list(forked_from), is_fork=is_fork, was_forked_from=was_forked_from, user=_as_list(user), queues_only=queues_only)
         rows = await dbos._running()._engine.list_workflows(**filters)
         return [dbos._status_of(row, load_input=load_input, load_output=load_output) for row in rows]
 
