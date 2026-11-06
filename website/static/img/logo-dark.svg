@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="yado">
+  <title>yado: 宿, an inn</title>
+  <path d="M10 10H54V54H33.5V44H30.5V54H10Z" fill="#6b8fd6"/>
+  <line x1="5" y1="9" x2="59" y2="9" stroke="#c9925a" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(17 12) scale(.3)" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M50 6V15M16 32V22H84V32"/>
+    <path d="M37 37L25 58M31 49V94"/>
+    <path d="M44 41H88M66 41L60 52M47 54H84V92H47ZM47 73H84"/>
+  </g>
+</svg>

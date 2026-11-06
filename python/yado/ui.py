@@ -33,9 +33,33 @@ _SUMMARY_FIELDS = (
     "created_at_ms",
     "updated_at_ms",
     "completed_at_ms",
+    "queue_name",
+    "schedule_name",
+    "application_version",
+    "executor_id",
 )
-_DETAIL_FIELDS = (*_SUMMARY_FIELDS, "input", "output", "error")
-_STEP_FIELDS = ("step_id", "step_name", "output", "error", "child_workflow_id")
+_DETAIL_FIELDS = (
+    *_SUMMARY_FIELDS,
+    "input",
+    "output",
+    "error",
+    "serialization",
+    "forked_from",
+    "attributes",
+    "workflow_deadline_epoch_ms",
+    "priority",
+    "deduplication_id",
+    "queue_partition_key",
+)
+_STEP_FIELDS = (
+    "step_id",
+    "step_name",
+    "output",
+    "error",
+    "child_workflow_id",
+    "started_at_epoch_ms",
+    "completed_at_epoch_ms",
+)
 
 
 def _inline_hashes(tag: str) -> str:

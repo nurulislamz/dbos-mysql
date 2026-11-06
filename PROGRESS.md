@@ -1,6 +1,6 @@
 # Progress
 
-Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The minimum is done on MySQL and SQLite. Postgres waits on the unexplained late-start incident (task 35). Next: a long soak, then the "Not needed to use it" list.
+Now: UTC cron schedules and migration 013 are in. A new schedule does not run a tick that has already passed. Later, only the latest missed tick is enqueued, and it is skipped while a previous run of that schedule is still pending. Queue rate limits, priorities and partitions are columns only. The minimum is done on MySQL and SQLite. Postgres waits on the unexplained late-start incident (task 35). A long soak is not part of finishing the core. Next: task 35, the remaining decisions in `dbos.py`, then patching and app versions.
 
 Status: todo, in progress, blocked, done. A task is done only when its proof passes and it has merged. Update this file only on the main line, after a merge.
 
@@ -8,7 +8,7 @@ Status: todo, in progress, blocked, done. A task is done only when its proof pas
 
 "Use it" means a Python program runs durable workflows on a real database, and survives crashes and redeploys. This is a proposed minimum, see decision D1.
 
-**Usable on MySQL and SQLite** for the features below, as of 2026-11-05: every task in the minimum is done except task 35, which only Postgres needs. It has not run in production, and has had no long soak. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
+**Usable on MySQL and SQLite** for the features below, as of 2026-11-05: every task in the minimum is done except task 35, which only Postgres needs. It has not run in production. A long soak is not required to finish the core. Status as of 2026-11-05, from reading the code and from recorded results. Nothing was rerun for this list.
 
 ### Features in the minimum
 
@@ -58,6 +58,7 @@ Work from the top. Task numbers continue from the history table below.
 | D2 | Must all 3 databases be ready, or can you start with one? | Start with MySQL. Its crash tests passed before the newest features, and this takes the Postgres incident out of the minimum. SQLite is for one machine only. Postgres then stays marked as not ready |
 | D3 | When can the Python crash tests resume? They are paused, and task 36 needs them | After tasks 33 and 34 |
 | D4 | What backlog speed is good enough for task 32? | Set to a claim under 1 s at 100k waiting and 100k finished rows. Change it if you need more |
+| D5 | Does finishing the core require a long soak? | No. The stress tests already pass. A multi-hour run is not a gate |
 
 ### Not needed to use it
 

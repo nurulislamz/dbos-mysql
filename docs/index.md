@@ -1,3 +1,7 @@
+---
+slug: /
+---
+
 # Introduction
 
 Yet another durable orchestrator.
@@ -68,4 +72,4 @@ The Python API copies [DBOS Transact](https://github.com/dbos-inc/dbos-transact-
 - New here: the [Quickstart](quickstart.md) makes a workflow survive a crash.
 - Have an app: [Add it to your app](integrate.md).
 - Want to know how it works: [Architecture](architecture.md).
-- Coming from Temporal: [Temporal patterns](temporal-patterns.md) shows which of its design patterns work here.
+- Coming from Temporal: [Temporal patterns](patterns/index.md) walks the same catalog, in the same page shape, and says which patterns work here.
