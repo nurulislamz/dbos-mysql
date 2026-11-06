@@ -47,6 +47,16 @@ with SetWorkflowID(f"welcome-{user_id}"):
 
 A relative timeout starts on first admission, so waiting does not use it up. A deadline inherited from a parent keeps running while the child waits.
 
+## Ordering and limits
+
+Use `SetEnqueueOptions(priority=1)` around `enqueue` to assign a priority. Lower numbers start first, with FIFO order within a priority. Entries without a priority start before entries with one. Priority does not interrupt running work.
+
+Set `limiter={"limit": 5, "period": 1.0}` on `DBOS.register_queue` to limit workflow starts across all workers. The limit applies to starts, not individual steps.
+
+Set `partition_concurrency=2` or `partition_limiter` on `DBOS.register_queue`, and pass `queue_partition_key` in `SetEnqueueOptions`, to limit each partition. Admission can skip a partition at its limit. Entries without a partition key cannot start while partition limits are active.
+
+Use `SetEnqueueOptions(delay_seconds=3600)` around `enqueue` to delay a start. `DBOS.set_workflow_delay(workflow_id, delay_seconds=0)` makes a delayed entry eligible to start, and `DBOS.cancel_workflow(workflow_id)` cancels it.
+
 ## Limits to know
 
 - **The latest registration with a limit sets it.** During a rolling deploy, old and new code can overwrite each other until the old processes stop.
@@ -55,5 +65,3 @@ A relative timeout starts on first admission, so waiting does not use it up. A d
 - **A large backlog is not measured.** Each slot re-scans pending rows while holding the queue row lock.
 - **Names starting with `_dbos_` are reserved.**
 - **Unsupported options fail.** `register_queue` raises `DBOSException` naming them.
-
-> **Coming soon:** priorities, rate limits, partitions, per-worker limits, deduplication and delayed starts. Queues are plain FIFO today. Some columns for these exist, but nothing reads them.
