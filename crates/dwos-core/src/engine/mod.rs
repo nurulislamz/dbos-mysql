@@ -50,7 +50,8 @@ pub struct EngineConfig {
     /// Name of a user Serializer. It takes the place of `pickle`.
     pub custom: Option<String>,
     pub read_only: bool,
-    /// Stamped on the rows this process starts or claims. Ownership still comes from the lease.
+    /// Stamped on the rows this process starts or claims, and the worker that queue limits count.
+    /// `None` gives the engine a random one. Ownership still comes from the lease.
     pub executor_id: Option<String>,
 }
 
@@ -292,7 +293,8 @@ impl Engine {
             store
         };
         let store = store.with_identity(Identity {
-            executor_id: config.executor_id.clone(),
+            // Each engine is a worker, so the per-worker queue limit needs an ID even when none is given.
+            executor_id: Some(config.executor_id.clone().unwrap_or_else(new_token)),
             ..Identity::default()
         });
         // Store::connect_read_only has already checked the schema.
