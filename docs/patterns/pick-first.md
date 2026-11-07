@@ -20,6 +20,16 @@ Three providers can quote a shipment. Waiting for the slowest one dominates the 
 
 ## Solution
 
+The workflow returns the first completed result and requests cancellation of the other runs.
+
+```mermaid
+flowchart LR
+    W[Workflow] --> A[Alternative A]
+    W --> B[Alternative B]
+    A -->|first result| R[Return result]
+    R -.->|cancel| B
+```
+
 Start every racer, wait for the first handle to finish, and cancel the others.
 
 ```python

@@ -20,6 +20,15 @@ An account balance updated from many services races. Two handlers read the old b
 
 ## Solution
 
+Each entity has a workflow ID. Commands arrive as messages and the workflow publishes state as an event.
+
+```mermaid
+flowchart LR
+    C[Caller] -->|send command| W[Entity workflow]
+    W -->|publish state| E[Event]
+    R[Reader] -->|get event| E
+```
+
 Own the entity with one workflow. Apply commands one at a time.
 
 ```python

@@ -20,6 +20,18 @@ One parent starting a child per record, for a million records, writes a million 
 
 ## Solution
 
+The parent divides work into child workflows. Results are combined as they return up the tree.
+
+```mermaid
+flowchart TD
+    A[Whole dataset] --> B[First half]
+    A --> C[Second half]
+    B --> D[Process leaves]
+    C --> E[Process leaves]
+    D --> F[Combine results]
+    E --> F
+```
+
 Split until the slice is at the leaf size, then process it.
 
 ```python

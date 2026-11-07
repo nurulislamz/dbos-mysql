@@ -20,6 +20,17 @@ Fan-out of 10,000 children starts 10,000 workflows together. The downstream API 
 
 ## Solution
 
+The queue limits how many child workflows run at once. As a child finishes, another can start.
+
+```mermaid
+flowchart LR
+    P[Parent submits chunks] --> Q[Queue]
+    Q -->|up to concurrency limit| A[Running child]
+    Q -->|up to concurrency limit| B[Running child]
+    A --> R[Results]
+    B --> R
+```
+
 Enqueue one workflow per record on a queue whose concurrency is the window size.
 
 ```python

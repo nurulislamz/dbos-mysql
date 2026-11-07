@@ -26,6 +26,15 @@ A render job has to run on the machine that holds the source files. A shared que
 
 ## Solution
 
+A host-specific queue directs work to the process that registered that queue.
+
+```mermaid
+flowchart LR
+    P[Producer] --> Q[Host-specific queue]
+    Q --> H[Host with queue registered]
+    H --> W[Run workflow]
+```
+
 Register a queue named for the host, only on that host.
 
 ```python

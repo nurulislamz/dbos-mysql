@@ -20,6 +20,19 @@ Booking a trip charges a card and then reserves a seat. The reserve fails. The c
 
 ## Solution
 
+If the seat reservation fails, the example runs release and refund in reverse registration order.
+
+```mermaid
+flowchart LR
+    C[Register refund] --> D[Charge]
+    D --> E[Register release]
+    E --> F[Reserve seat]
+    F -->|success| G[Booked]
+    F -->|failure| H[Release]
+    H --> I[Refund]
+    I --> J[Raise error]
+```
+
 Append the compensation before the forward step, so a crash during the forward step still knows what to undo if that step did take effect. Each function is a step.
 
 ```python

@@ -18,6 +18,17 @@ A fraud-check API bills every call. A bug that always returns 500 will retry unt
 
 ## Solution
 
+A failed step retries until it succeeds or reaches its configured attempt limit.
+
+```mermaid
+flowchart LR
+    A[Run step] --> B{Succeeded?}
+    B -->|yes| C[Continue workflow]
+    B -->|no| D{Attempts left?}
+    D -->|yes, after delay| A
+    D -->|no| E[Raise retry error]
+```
+
 Turn retries on and set the count.
 
 ```python

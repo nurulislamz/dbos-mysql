@@ -20,6 +20,19 @@ A caller wants to know, before it returns, that the account workflow accepted a 
 
 ## Solution
 
+The calls are separate: the caller sends a request, and the workflow publishes the answer for the caller to read.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant W as Workflow
+    participant E as Event
+    C->>W: Send request
+    W->>W: Receive and apply request
+    W->>E: Publish answer
+    C->>E: Read answer
+```
+
 There is no Update API. Write the three steps yourself.
 
 1. `yado.send` the request, with an idempotency key.

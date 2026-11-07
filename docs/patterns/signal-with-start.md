@@ -20,6 +20,17 @@ An order workflow should exist once, and every later "item added" event should r
 
 ## Solution
 
+The caller starts or finds the workflow by ID, then sends a message in a separate call.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant W as Workflow ID
+    C->>W: Start if needed
+    C->>W: Send message
+    W->>W: Receive and process message
+```
+
 Pick the workflow ID from the business key. Start under that ID, then send.
 
 ```python

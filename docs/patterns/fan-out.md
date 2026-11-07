@@ -20,6 +20,18 @@ A nightly job processes a million rows. One workflow that handles each row as a 
 
 ## Solution
 
+The parent starts a child for each chunk and collects every result.
+
+```mermaid
+flowchart LR
+    P[Parent workflow] --> A[Child: chunk 1]
+    P --> B[Child: chunk 2]
+    P --> C[Child: chunk 3]
+    A --> R[Collect results]
+    B --> R
+    C --> R
+```
+
 Pass each child an offset and a length. The child loads its own rows. The parent only stores two integers per child.
 
 ```python

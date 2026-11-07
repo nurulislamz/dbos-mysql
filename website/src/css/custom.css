@@ -1,4 +1,69 @@
 :root {
-  --ifm-font-family-base: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --ifm-code-font-size: 95%;
+  --ifm-color-primary: #294d83;
+  --ifm-color-primary-dark: #254575;
+  --ifm-color-primary-darker: #233f6c;
+  --ifm-color-primary-darkest: #1c3459;
+  --ifm-color-primary-light: #315a96;
+  --ifm-color-primary-lighter: #365f9e;
+  --ifm-color-primary-lightest: #446fac;
+  --ifm-font-family-base: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ifm-code-font-size: 90%;
+  --ifm-global-radius: 6px;
+  --yado-rule: #dce3eb;
+  --yado-surface: #f5f7fa;
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #a9c7f1;
+  --ifm-color-primary-dark: #89b3eb;
+  --ifm-color-primary-darker: #79a9e8;
+  --ifm-color-primary-darkest: #4b8add;
+  --ifm-color-primary-light: #c9dbf7;
+  --ifm-color-primary-lighter: #d9e5fa;
+  --ifm-color-primary-lightest: #fff;
+  --yado-rule: #354252;
+  --yado-surface: #202a35;
+}
+
+.navbar {
+  border-bottom: 1px solid var(--yado-rule);
+  box-shadow: none;
+}
+
+.markdown { line-height: 1.75; }
+
+.markdown h1, .markdown h2, .markdown h3 {
+  letter-spacing: -0.025em;
+  line-height: 1.25;
+}
+
+.markdown h1 { font-size: clamp(2rem, 4vw, 3rem); }
+
+.markdown h2 {
+  border-bottom: 1px solid var(--yado-rule);
+  padding-bottom: 0.5rem;
+  margin-top: 2.5rem;
+}
+
+.markdown blockquote {
+  background: var(--yado-surface);
+  border-left: 3px solid var(--ifm-color-primary);
+  color: var(--ifm-font-color-base);
+  padding: 0.75rem 1rem;
+}
+
+.markdown blockquote > :last-child { margin-bottom: 0; }
+
+.theme-mermaid {
+  background: var(--yado-surface);
+  border: 1px solid var(--yado-rule);
+  border-radius: var(--ifm-global-radius);
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  padding: 1.5rem;
+}
+
+.menu__link:focus-visible, a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
 }

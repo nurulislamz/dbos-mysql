@@ -6,6 +6,20 @@ Temporal organizes these patterns by the problem they solve. Each page here foll
 
 Of the 35 patterns, **28 work today**. **Five have no single call yet**: [request and response](request-response.md), [continue-as-new](continue-as-new.md), [a time budget across retries](wall-time-retries.md), [an error that sets the next wait](delayed-retry.md), and the [batch iterator](batch-iterator.md). Two more work except for one feature: [heartbeat details](long-running-step.md) on a long-running step, and a [deadline while a pinned host is dead](worker-queues.md). Those pages show the closest thing you can write. None of this needs a separate server.
 
+## How the patterns fit together
+
+A workflow coordinates durable steps. It can start child workflows, exchange messages with callers, and use queues to control when work starts. Each pattern page explains the limits of its yado implementation.
+
+```mermaid
+flowchart LR
+    C[Caller] -->|start or send| W[Workflow]
+    Q[Queue] -->|admit work| W
+    W --> S[Steps]
+    W --> CH[Child workflows]
+    S --> E[External services]
+    W -->|publish state| R[Readers]
+```
+
 ## Names
 
 | Temporal | Here |

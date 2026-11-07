@@ -20,6 +20,17 @@ A refund above a limit needs a manager. An email with a link, plus a row you hop
 
 ## Solution
 
+The workflow waits for a decision. A timeout takes the escalation path.
+
+```mermaid
+flowchart LR
+    W[Publish approval request] --> R[Wait for decision]
+    P[Approver] -->|send decision| R
+    R -->|approved| A[Issue refund]
+    R -->|rejected| N[Reject request]
+    R -->|timeout| E[Escalate]
+```
+
 Receive on a topic. Treat timeout as its own branch.
 
 ```python

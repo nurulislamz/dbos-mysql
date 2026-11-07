@@ -20,6 +20,15 @@ A partner API allows five calls per second. `global_concurrency=5` still lets al
 
 ## Solution
 
+A queue limits workflow starts across processes before work reaches the downstream service.
+
+```mermaid
+flowchart LR
+    P[Producers] --> Q[Rate-limited queue]
+    Q -->|limited starts| W[Workflows]
+    W --> S[Downstream service]
+```
+
 ```python
 import yado
 from yado import SetEnqueueOptions

@@ -20,6 +20,18 @@ Charging, reserving stock, and writing the invoice can happen together. Running 
 
 ## Solution
 
+Independent work runs concurrently; the workflow waits for all results.
+
+```mermaid
+flowchart LR
+    W[Workflow] --> A[Work A]
+    W --> B[Work B]
+    W --> C[Work C]
+    A --> J[Collect all results]
+    B --> J
+    C --> J
+```
+
 Gather the calls. Each call is a step or a child workflow, so its result is saved under a stable step.
 
 ```python

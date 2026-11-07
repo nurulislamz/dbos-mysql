@@ -27,6 +27,16 @@ One workflow that performs every stage of an order stores every step in one list
 
 ## Solution
 
+A parent starts child workflows and waits for their separate results.
+
+```mermaid
+flowchart LR
+    P[Parent workflow] --> A[Child A]
+    P --> B[Child B]
+    A --> R[Parent collects results]
+    B --> R
+```
+
 Call the other workflow from the parent. The engine saves the child's ID on the parent. On replay it finds that child and does not start a second one. If you do not set an ID, the child ID is `<parent id>-<step number>`.
 
 ### Wait for the child
