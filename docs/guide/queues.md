@@ -3,19 +3,19 @@
 A queue starts workflows later, in order, with a limit on how many run at once. The limit holds across every copy of your program.
 
 ```python
-queue = DBOS.register_queue("emails", global_concurrency=5)
+queue = yado.register_queue("emails", global_concurrency=5)
 
 handle = queue.enqueue(send_welcome, "user-1")
 print(handle.get_result())
 ```
 
-`register_queue` needs a launched DBOS, so call it after `DBOS.launch()`. It saves the limit and starts pulling work from the queue in this process. Only a process that registered the queue runs its work.
+`register_queue` needs a launched DBOS, so call it after `yado.launch()`. It saves the limit and starts pulling work from the queue in this process. Only a process that registered the queue runs its work.
 
 Elsewhere you can look up a queue or enqueue by name:
 
 ```python
-queue = DBOS.retrieve_queue("emails")
-handle = DBOS.enqueue_workflow("emails", send_welcome, "user-1")
+queue = yado.retrieve_queue("emails")
+handle = yado.enqueue_workflow("emails", send_welcome, "user-1")
 ```
 
 Async code uses `register_queue_async`, `enqueue_async` and `enqueue_workflow_async`.
@@ -51,11 +51,11 @@ A relative timeout starts on first admission, so waiting does not use it up. A d
 
 Use `SetEnqueueOptions(priority=1)` around `enqueue` to assign a priority. Lower numbers start first, with FIFO order within a priority. Entries without a priority start before entries with one. Priority does not interrupt running work.
 
-Set `limiter={"limit": 5, "period": 1.0}` on `DBOS.register_queue` to limit workflow starts across all workers. The limit applies to starts, not individual steps.
+Set `limiter={"limit": 5, "period": 1.0}` on `yado.register_queue` to limit workflow starts across all workers. The limit applies to starts, not individual steps.
 
-Set `partition_concurrency=2` or `partition_limiter` on `DBOS.register_queue`, and pass `queue_partition_key` in `SetEnqueueOptions`, to limit each partition. Admission can skip a partition at its limit. Entries without a partition key cannot start while partition limits are active.
+Set `partition_concurrency=2` or `partition_limiter` on `yado.register_queue`, and pass `queue_partition_key` in `SetEnqueueOptions`, to limit each partition. Admission can skip a partition at its limit. Entries without a partition key cannot start while partition limits are active.
 
-Use `SetEnqueueOptions(delay_seconds=3600)` around `enqueue` to delay a start. `DBOS.set_workflow_delay(workflow_id, delay_seconds=0)` makes a delayed entry eligible to start, and `DBOS.cancel_workflow(workflow_id)` cancels it.
+Use `SetEnqueueOptions(delay_seconds=3600)` around `enqueue` to delay a start. `yado.set_workflow_delay(workflow_id, delay_seconds=0)` makes a delayed entry eligible to start, and `yado.cancel_workflow(workflow_id)` cancels it.
 
 ## Limits to know
 

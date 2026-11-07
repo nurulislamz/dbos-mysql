@@ -21,10 +21,11 @@ One tenant enqueues 10,000 sync jobs. `global_concurrency=20` lets that tenant o
 ## Solution
 
 ```python
-from yado import DBOS, SetEnqueueOptions
+import yado
+from yado import SetEnqueueOptions
 
 
-queue = DBOS.register_queue(
+queue = yado.register_queue(
     "api",
     global_concurrency=20,
     partition_concurrency=2,

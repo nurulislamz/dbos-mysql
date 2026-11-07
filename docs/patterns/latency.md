@@ -6,9 +6,9 @@ Temporal's latency patterns exist because a workflow task and an activity task a
 
 ## Patterns in this section
 
-- [Local steps](local-steps.md). Every `@DBOS.step()` already runs in-process. There is no second kind of step.
+- [Local steps](local-steps.md). Every `@yado.step()` already runs in-process. There is no second kind of step.
 - [Early return with local steps](early-return-local.md). The caller's first answer comes from those in-process steps.
-- [Eager start](eager-start.md). `DBOS.start_workflow` runs the body in the caller. Queued work waits to be admitted instead.
+- [Eager start](eager-start.md). `yado.start_workflow` runs the body in the caller. Queued work waits to be admitted instead.
 
 ## Choosing a pattern
 

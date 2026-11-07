@@ -23,22 +23,23 @@ Save this as `demo.py`.
 import os
 import sys
 
+import yado
 from yado import DBOS, SetWorkflowID
 
 
-@DBOS.step()
+@yado.step()
 def step_one() -> int:
     print("step one ran", flush=True)
     return 1
 
 
-@DBOS.step()
+@yado.step()
 def step_two() -> int:
     print("step two ran")
     return 2
 
 
-@DBOS.workflow()
+@yado.workflow()
 def demo() -> int:
     total = step_one()
     if "crash" in sys.argv:
@@ -48,10 +49,10 @@ def demo() -> int:
 
 # A short lease makes recovery quick for this demo. The default is 30 seconds.
 DBOS(config={"name": "demo", "system_database_url": "sqlite://demo.sqlite", "lease_seconds": 5})
-DBOS.launch()
+yado.launch()
 with SetWorkflowID("demo-1"):
     print("result:", demo())
-DBOS.destroy()
+yado.destroy()
 ```
 
 ## Crash it
@@ -95,6 +96,6 @@ Open <http://127.0.0.1:8000> to see the workflow and its saved steps.
 | MySQL 8.4 | `mysql://user:password@host:3306/database` |
 | Postgres | `postgres://user:password@host:5432/database` |
 
-The tables are created at `DBOS.launch()`.
+The tables are created at `yado.launch()`.
 
 **Next:** [Add it to your app](integrate.md).

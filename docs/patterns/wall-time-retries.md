@@ -21,18 +21,19 @@ A wall-time budget is a business SLA. The step may retry as many times as it lik
 Start a child workflow with a workflow timeout. The timeout is stored when the child starts. When it passes, the child becomes `CANCELLED`.
 
 ```python
-from yado import DBOS, SetWorkflowTimeout
+import yado
+from yado import SetWorkflowTimeout
 
 
-@DBOS.workflow()
+@yado.workflow()
 def charge_once(order_id: str) -> str:
     return charge(order_id)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def checkout(order_id: str) -> str:
     with SetWorkflowTimeout(120):
-        handle = DBOS.start_workflow(charge_once, order_id)
+        handle = yado.start_workflow(charge_once, order_id)
     return handle.get_result()
 ```
 

@@ -23,26 +23,26 @@ An API should return "accepted" and an ID quickly, then send email and update a 
 Start the workflow in the caller. The first steps run in that process. `set_event` marks the phase the HTTP handler is allowed to return.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.step()
+@yado.step()
 def validate(order_id: str) -> dict:
     return {"order_id": order_id, "ok": True}
 
 
-@DBOS.workflow()
+@yado.workflow()
 def accept(order_id: str) -> str:
     summary = validate(order_id)
-    DBOS.set_event("init", summary)
+    yado.set_event("init", summary)
     send_email(order_id)
     notify_warehouse(order_id)
     return order_id
 
 
 def post_order(order_id: str) -> dict:
-    handle = DBOS.start_workflow(accept, order_id)
-    ready = DBOS.get_event(handle.workflow_id, "init", timeout_seconds=5)
+    handle = yado.start_workflow(accept, order_id)
+    ready = yado.get_event(handle.workflow_id, "init", timeout_seconds=5)
     if ready is None:
         raise TimeoutError(order_id)
     return ready

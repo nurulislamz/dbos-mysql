@@ -30,7 +30,7 @@ A workflow that is still running replays on the new code. If the steps changed, 
 
 ### Changing the schema
 
-`DBOS.launch()` applies numbered migrations and keeps all rows. Several processes can start at once. They take turns, and each migration applies once.
+`yado.launch()` applies numbered migrations and keeps all rows. Several processes can start at once. They take turns, and each migration applies once.
 
 **Before upgrading:** stop every older worker and take a backup. Older workers do not read the schema version, so nothing stops them. Their claims can bypass queue admission, and their writes can fail.
 
@@ -94,7 +94,7 @@ Do not open the workflow database with Python's `sqlite3` in a process that also
 
 ## Monitoring
 
-Use `DBOS.list_workflows` for counts by status, and watch `recovery_attempts`. Logs use the `dbos` logger, and `log_level` and `console_log_level` configure it.
+Use `yado.list_workflows` for counts by status, and watch `recovery_attempts`. Logs use the `dbos` logger, and `log_level` and `console_log_level` configure it.
 
 > **Coming soon:** OpenTelemetry tracing and published benchmarks. Speed, memory use and behaviour with a large backlog have not been measured.
 

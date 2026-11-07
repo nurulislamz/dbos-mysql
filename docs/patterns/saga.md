@@ -23,10 +23,10 @@ Booking a trip charges a card and then reserves a seat. The reserve fails. The c
 Append the compensation before the forward step, so a crash during the forward step still knows what to undo if that step did take effect. Each function is a step.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def book(trip_id: str) -> str:
     undo = []
     try:

@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Start the workflow in the background. Publish the early result with `DBOS.set_event`. The caller reads it with `DBOS.get_event` and returns. The workflow keeps going.
+Start the workflow in the background. Publish the early result with `yado.set_event`. The caller reads it with `yado.get_event` and returns. The workflow keeps going.
 
 :::
 
@@ -21,21 +21,21 @@ Building a report validates the request and assigns an ID in milliseconds, then 
 Start the workflow, wait only for the event that says the first phase is done, and return that to the caller.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def build(report_id: str) -> str:
     summary = validate(report_id)
-    DBOS.set_event("init", summary)
+    yado.set_event("init", summary)
     render(report_id)
-    DBOS.set_event("done", True)
+    yado.set_event("done", True)
     return summary
 
 
 def request_report(report_id: str) -> str:
-    handle = DBOS.start_workflow(build, report_id)
-    ready = DBOS.get_event(handle.workflow_id, "init", timeout_seconds=10)
+    handle = yado.start_workflow(build, report_id)
+    ready = yado.get_event(handle.workflow_id, "init", timeout_seconds=10)
     if ready is None:
         raise TimeoutError(report_id)
     return ready

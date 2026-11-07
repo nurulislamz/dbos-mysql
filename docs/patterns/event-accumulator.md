@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Each `DBOS.send` uses its own idempotency key. The workflow loops on `DBOS.recv` with a timeout. `None` means the window closed.
+Each `yado.send` uses its own idempotency key. The workflow loops on `yado.recv` with a timeout. `None` means the window closed.
 
 :::
 
@@ -23,13 +23,13 @@ A page of analytics events should be written as one batch, not one row per event
 Send each event with an idempotency key. Receive in a loop. A timeout starts the next stage.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def collect(page_id: str) -> list[str]:
     batch: list[str] = []
-    while (item := DBOS.recv("page", timeout_seconds=30)) is not None:
+    while (item := yado.recv("page", timeout_seconds=30)) is not None:
         batch.append(item)
     write_batch(page_id, batch)
     return batch
@@ -38,7 +38,7 @@ def collect(page_id: str) -> list[str]:
 A producer, from a webhook or another workflow:
 
 ```python
-DBOS.send(page_id, event_id, topic="page", idempotency_key=event_id)
+yado.send(page_id, event_id, topic="page", idempotency_key=event_id)
 ```
 
 The timeout is the quiet period. Every message that arrives before it elapses is part of the batch and resets the wait, because each `recv` starts a new timeout only after a message has been taken.

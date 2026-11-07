@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Use `SetWorkflowID` with the entity ID, then `DBOS.recv` and `DBOS.set_event`. A very long life stores every command, and recovery replays them all.
+Use `SetWorkflowID` with the entity ID, then `yado.recv` and `yado.set_event`. A very long life stores every command, and recovery replays them all.
 
 :::
 
@@ -23,35 +23,36 @@ An account balance updated from many services races. Two handlers read the old b
 Own the entity with one workflow. Apply commands one at a time.
 
 ```python
-from yado import DBOS, SetWorkflowID
+import yado
+from yado import SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 def account(account_id: str) -> None:
     balance = 0
     while True:
-        command = DBOS.recv("command", timeout_seconds=3600)
+        command = yado.recv("command", timeout_seconds=3600)
         if command is None:
             continue
         balance += command["amount"]
-        DBOS.set_event("balance", balance)
+        yado.set_event("balance", balance)
 
 
 def open_account(account_id: str) -> None:
     with SetWorkflowID(account_id):
-        DBOS.start_workflow(account, account_id)
+        yado.start_workflow(account, account_id)
 ```
 
 Send a command from anywhere:
 
 ```python
-DBOS.send(account_id, {"amount": 10}, topic="command", idempotency_key=command_id)
+yado.send(account_id, {"amount": 10}, topic="command", idempotency_key=command_id)
 ```
 
 Read the latest balance without waiting for the workflow to finish:
 
 ```python
-DBOS.get_event(account_id, "balance", timeout_seconds=5)
+yado.get_event(account_id, "balance", timeout_seconds=5)
 ```
 
 `recv` returns `None` when the hour passes with no command. The loop waits again. The workflow stays the same run, so messages that arrive during the gap are still queued.

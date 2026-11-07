@@ -25,15 +25,15 @@ Gather the calls. Each call is a step or a child workflow, so its result is save
 ```python
 import asyncio
 
-from yado import DBOS
+import yado
 
 
-@DBOS.step()
+@yado.step()
 async def reserve(sku: str) -> str:
     return warehouse.reserve(sku)
 
 
-@DBOS.workflow()
+@yado.workflow()
 async def prepare(sku: str) -> list[str]:
     stock, price = await asyncio.gather(reserve(sku), quote(sku))
     return [stock, price]
@@ -42,9 +42,9 @@ async def prepare(sku: str) -> list[str]:
 To fan out child workflows and collect their results:
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def prepare_all(skus: list[str]) -> list[str]:
-    handles = [DBOS.start_workflow(reserve_one, sku) for sku in skus]
+    handles = [yado.start_workflow(reserve_one, sku) for sku in skus]
     return [handle.get_result() for handle in handles]
 ```
 

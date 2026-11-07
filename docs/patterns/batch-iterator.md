@@ -23,10 +23,11 @@ An export walks every row newer than a cursor. Stuffing each page into one workf
 Make "start the next page" the last saved step of this page. The next page has its own workflow ID.
 
 ```python
-from yado import DBOS, SetWorkflowID
+import yado
+from yado import SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 def export_page(cursor: str | None) -> str | None:
     rows, next_cursor = load_page(cursor)
     for row in rows:
@@ -34,7 +35,7 @@ def export_page(cursor: str | None) -> str | None:
     if next_cursor is None:
         return cursor
     with SetWorkflowID(f"export-{next_cursor}"):
-        DBOS.start_workflow(export_page, next_cursor)
+        yado.start_workflow(export_page, next_cursor)
     return next_cursor
 ```
 

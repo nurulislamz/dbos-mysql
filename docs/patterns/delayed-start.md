@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Enqueue with `SetEnqueueOptions(delay_seconds=...)`. `DBOS.set_workflow_delay` moves the start earlier or later.
+Enqueue with `SetEnqueueOptions(delay_seconds=...)`. `yado.set_workflow_delay` moves the start earlier or later.
 
 :::
 
@@ -23,10 +23,11 @@ This fits a grace period, a reminder, or any job that should be durable from the
 Register a queue and enqueue with a delay. The queue's concurrency limit still applies when the delay ends.
 
 ```python
-from yado import DBOS, SetEnqueueOptions
+import yado
+from yado import SetEnqueueOptions
 
 
-queue = DBOS.register_queue("later")
+queue = yado.register_queue("later")
 
 with SetEnqueueOptions(delay_seconds=3600):
     handle = queue.enqueue(send_email, "user-1")
@@ -37,10 +38,10 @@ The status reads as `DELAYED` until the workflow is eligible, then `ENQUEUED` or
 Start early, or replace the delay:
 
 ```python
-DBOS.set_workflow_delay(handle.workflow_id, delay_seconds=0)
+yado.set_workflow_delay(handle.workflow_id, delay_seconds=0)
 ```
 
-Cancel before it starts with `DBOS.cancel_workflow(handle.workflow_id)`.
+Cancel before it starts with `yado.cancel_workflow(handle.workflow_id)`.
 
 Give the workflow a stable ID if a retry of the request must not enqueue a second copy:
 
@@ -59,7 +60,7 @@ Use a delayed start when:
 - Callers need the workflow ID immediately, so they can cancel or reschedule.
 - The delay should survive a process restart.
 
-Use a [schedule](../guide/time.md#schedules) for a cron. Use `DBOS.sleep` at the start of a workflow that is already running.
+Use a [schedule](../guide/time.md#schedules) for a cron. Use `yado.sleep` at the start of a workflow that is already running.
 
 ## Trade-offs
 

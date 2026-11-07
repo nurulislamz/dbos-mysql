@@ -4,7 +4,7 @@
 
 :::warning[Not supported yet]
 
-`should_retry` can only say yes or no. It cannot set the next delay. Catch the error in the workflow, `DBOS.sleep` for the reported wait, and call the step again.
+`should_retry` can only say yes or no. It cannot set the next delay. Catch the error in the workflow, `yado.sleep` for the reported wait, and call the step again.
 
 :::
 
@@ -21,7 +21,7 @@ A step backoff of one second, doubled each time, does not match "try again in 15
 Turn retries off on the step. Let the workflow own the loop.
 
 ```python
-from yado import DBOS
+import yado
 
 
 class RetryLater(Exception):
@@ -29,7 +29,7 @@ class RetryLater(Exception):
         self.seconds = seconds
 
 
-@DBOS.step()
+@yado.step()
 def call_api(order_id: str) -> str:
     response = client.post(order_id)
     if response.status_code == 429:
@@ -38,19 +38,19 @@ def call_api(order_id: str) -> str:
     return response.text
 
 
-@DBOS.workflow()
+@yado.workflow()
 def place(order_id: str) -> str:
     for _ in range(5):
         try:
             return call_api(order_id)
         except RetryLater as error:
-            DBOS.sleep(error.seconds)
+            yado.sleep(error.seconds)
     return call_api(order_id)
 ```
 
-`DBOS.sleep` stores an absolute wake time. Each failed attempt is a saved step, so replay does not call the API again for an attempt that already returned `RetryLater`.
+`yado.sleep` stores an absolute wake time. Each failed attempt is a saved step, so replay does not call the API again for an attempt that already returned `RetryLater`.
 
-The step has retries off, so `RetryLater` is saved as that attempt's outcome and the workflow's `except` runs. A step with `retries_allowed=True` would swallow the exception inside the step, where you cannot `DBOS.sleep`.
+The step has retries off, so `RetryLater` is saved as that attempt's outcome and the workflow's `except` runs. A step with `retries_allowed=True` would swallow the exception inside the step, where you cannot `yado.sleep`.
 
 ## When to use
 

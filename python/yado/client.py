@@ -13,7 +13,7 @@ from yado.errors import DBOSException
 from yado.events import SendMessage, WorkflowSerializationFormat, _bulk_args, _check_outcome, _decode, _timeout_ms
 from yado.queues import _INTERNAL_QUEUE_CONSTRUCTION, DEFAULT_QUEUE_POLLING_INTERVAL_SEC, EnqueueOptions, Queue, _options_args, _stored_limit
 from yado.serialization import Serializer, allow_pickle, set_custom_serializer
-from yado.wait_first import _handles as _by_id
+from yado._wait_first import _handles as _by_id
 from yado.workflow_management import _as_list, _filters
 
 

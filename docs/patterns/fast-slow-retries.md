@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Use a step with a short interval and a small `max_attempts`. Catch `DBOSMaxStepRetriesExceeded`, then loop: `DBOS.sleep` for the slow interval and call a step that does not retry.
+Use a step with a short interval and a small `max_attempts`. Catch `DBOSMaxStepRetriesExceeded`, then loop: `yado.sleep` for the slow interval and call a step that does not retry.
 
 :::
 
@@ -21,26 +21,27 @@ The fast phase is the step retry policy. The slow phase is a workflow loop, beca
 ## Solution
 
 ```python
+import yado
 from yado import DBOS, DBOSMaxStepRetriesExceeded
 
 
-@DBOS.step(retries_allowed=True, max_attempts=10, interval_seconds=1, backoff_rate=1)
+@yado.step(retries_allowed=True, max_attempts=10, interval_seconds=1, backoff_rate=1)
 def fast(order_id: str) -> str:
     return payments.charge(order_id, idempotency_key=f"{DBOS.workflow_id}-fast")
 
 
-@DBOS.step()
+@yado.step()
 def once(order_id: str) -> str:
     return payments.charge(order_id, idempotency_key=f"{DBOS.workflow_id}-slow-{DBOS.step_id}")
 
 
-@DBOS.workflow()
+@yado.workflow()
 def checkout(order_id: str) -> str:
     try:
         return fast(order_id)
     except DBOSMaxStepRetriesExceeded:
         while True:
-            DBOS.sleep(300)
+            yado.sleep(300)
             try:
                 return once(order_id)
             except Exception:

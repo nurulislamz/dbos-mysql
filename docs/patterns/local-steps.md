@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-This is how every step already runs. `@DBOS.step()` executes in the workflow's process. There is no local-versus-remote distinction to opt into.
+This is how every step already runs. `@yado.step()` executes in the workflow's process. There is no local-versus-remote distinction to opt into.
 
 :::
 
@@ -23,15 +23,15 @@ In a server-based system, a tiny lookup pays a full activity round trip: schedul
 Make the lookup a step. It runs where the workflow runs.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.step()
+@yado.step()
 def load_flags(user_id: str) -> dict:
     return flags.get(user_id)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def greet(user_id: str) -> str:
     if load_flags(user_id).get("beta"):
         return render_beta(user_id)

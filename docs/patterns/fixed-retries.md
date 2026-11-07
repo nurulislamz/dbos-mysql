@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`@DBOS.step(retries_allowed=True, max_attempts=..., interval_seconds=..., backoff_rate=...)`. Retries are off unless `retries_allowed` is true.
+`@yado.step(retries_allowed=True, max_attempts=..., interval_seconds=..., backoff_rate=...)`. Retries are off unless `retries_allowed` is true.
 
 :::
 
@@ -21,10 +21,11 @@ A fraud-check API bills every call. A bug that always returns 500 will retry unt
 Turn retries on and set the count.
 
 ```python
+import yado
 from yado import DBOS
 
 
-@DBOS.step(retries_allowed=True, max_attempts=3, interval_seconds=1, backoff_rate=2)
+@yado.step(retries_allowed=True, max_attempts=3, interval_seconds=1, backoff_rate=2)
 def charge(order_id: str) -> str:
     return payments.charge(
         order_id,
@@ -37,10 +38,11 @@ def charge(order_id: str) -> str:
 When the count runs out, the step raises `DBOSMaxStepRetriesExceeded`. That exception is saved. Its `.errors` lists each attempt's exception. The workflow can catch it.
 
 ```python
+import yado
 from yado import DBOSMaxStepRetriesExceeded
 
 
-@DBOS.workflow()
+@yado.workflow()
 def checkout(order_id: str) -> str:
     try:
         return charge(order_id)

@@ -5,14 +5,14 @@ All of these use the database clock and survive restarts.
 ## Durable sleep
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def reminder(user_id: str) -> None:
     send_first(user_id)
-    DBOS.sleep(7 * 24 * 3600)
+    yado.sleep(7 * 24 * 3600)
     send_second(user_id)
 ```
 
-The first call saves an absolute wake time as a step. If the process restarts, the workflow replays and sleeps only for what is left. Async code uses `await DBOS.sleep_async(...)`.
+The first call saves an absolute wake time as a step. If the process restarts, the workflow replays and sleeps only for what is left. Async code uses `await yado.sleep_async(...)`.
 
 A cancel wakes a sleeper in about 4 ms on the same engine, or about 250 ms from another process. Outside a workflow, or inside a step, this is a plain sleep.
 
@@ -22,7 +22,7 @@ A sleep longer than `max_run_seconds` (default 1 hour) passes through that limit
 
 ```python
 with SetWorkflowTimeout(60):
-    handle = DBOS.start_workflow(report, "q3")
+    handle = yado.start_workflow(report, "q3")
 ```
 
 The clock starts when the workflow starts running. When the deadline passes, the workflow becomes `CANCELLED` and a waiter gets `DBOSAwaitedWorkflowCancelledError`.
@@ -38,28 +38,28 @@ For one attempt of one step, use [`timeout_seconds`](steps.md#timeouts).
 A schedule enqueues a workflow on a five-field UTC cron.
 
 ```python
-@DBOS.scheduled("0 8 * * *", queue="reports")
-@DBOS.workflow()
+@yado.scheduled("0 8 * * *", queue="reports")
+@yado.workflow()
 def morning_report() -> None:
     ...
 
 
 DBOS(config=config)
-DBOS.launch()
-DBOS.register_queue("reports")  # Needs a launched DBOS.
+yado.launch()
+yado.register_queue("reports")  # Needs a launched DBOS.
 ```
 
-`@DBOS.scheduled` goes above `@DBOS.workflow()`, and that workflow takes no arguments. To pass arguments, or make schedules per user, use `register_schedule`:
+`@yado.scheduled` goes above `@yado.workflow()`, and that workflow takes no arguments. To pass arguments, or make schedules per user, use `register_schedule`:
 
 ```python
-DBOS.register_schedule(
+yado.register_schedule(
     "digest-user-1",
     digest,
     "0 8 * * *",
     queue="reports",
     args=("user-1",),
 )
-DBOS.delete_schedule("digest-user-1")
+yado.delete_schedule("digest-user-1")
 ```
 
 The name identifies the schedule. Registering the same name again updates it. Deleting a missing name is not an error, and runs already started keep going.

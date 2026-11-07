@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-A short poll is one step that calls `DBOS.heartbeat()`. A long poll is a workflow loop: one step per attempt, then `DBOS.sleep`.
+A short poll is one step that calls `yado.heartbeat()`. A long poll is a workflow loop: one step per attempt, then `yado.sleep`.
 
 :::
 
@@ -25,17 +25,17 @@ A carrier API returns "label pending" for minutes. Sleeping in the process is lo
 
 ### Frequent polling, one step
 
-The step owns the loop. `heartbeat_timeout_seconds` fails the attempt if `DBOS.heartbeat()` stops.
+The step owns the loop. `heartbeat_timeout_seconds` fails the attempt if `yado.heartbeat()` stops.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.step(heartbeat_timeout_seconds=30, timeout_seconds=600)
+@yado.step(heartbeat_timeout_seconds=30, timeout_seconds=600)
 def poll_once() -> str | None:
     for _ in range(20):
         status = client.status()
-        DBOS.heartbeat()
+        yado.heartbeat()
         if status is not None:
             return status
     return None
@@ -48,10 +48,10 @@ The next attempt does not receive the last status you passed to `heartbeat`. `he
 Sleep in the workflow. Each sleep is stored, and a restart waits only for what is left.
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def poll(shipment_id: str) -> str:
     while (status := read_status(shipment_id)) is None:
-        DBOS.sleep(60)
+        yado.sleep(60)
     return status
 ```
 
@@ -71,7 +71,7 @@ A single step is fewer rows and a coarser resume point. A step per attempt resum
 
 ## Pitfalls
 
-- `DBOS.sleep` inside a step is an ordinary sleep. Put the durable wait in the workflow.
+- `yado.sleep` inside a step is an ordinary sleep. Put the durable wait in the workflow.
 - A sync step that ignores its timeout keeps running until it returns. Heartbeat after the timeout raises, which gives the body a place to stop.
 - Polling forever needs a workflow timeout or a max number of attempts, or the run never completes.
 

@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.start_workflow` writes the row and runs the body in the caller. That is the normal path. Work you put on a queue waits until a process that registered the queue admits it.
+`yado.start_workflow` writes the row and runs the body in the caller. That is the normal path. Work you put on a queue waits until a process that registered the queue admits it.
 
 :::
 
@@ -23,11 +23,11 @@ A system that always parks a new workflow on a queue adds a poll interval to eve
 Call `start_workflow` and, if you need the result, wait on the handle.
 
 ```python
-from yado import DBOS
+import yado
 
 
 def on_request(order_id: str) -> str:
-    handle = DBOS.start_workflow(fulfil, order_id)
+    handle = yado.start_workflow(fulfil, order_id)
     return handle.get_result()
 ```
 
@@ -36,7 +36,7 @@ The body of `fulfil` starts in this process. `get_result` returns when it finish
 To opt into a hop, enqueue:
 
 ```python
-queue = DBOS.register_queue("fulfilment", global_concurrency=10)
+queue = yado.register_queue("fulfilment", global_concurrency=10)
 handle = queue.enqueue(fulfil, order_id)
 ```
 

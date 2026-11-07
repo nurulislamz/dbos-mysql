@@ -38,13 +38,13 @@ from yado.retention import Retention, retention_policy_of
 from yado.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
 from yado.debouncer import resume_internal_queue
 from yado.serialization import Codec, Serializer, allow_pickle, decode_exception, encode_exception, set_custom_serializer
-from yado.sleep import Sleep
+from yado._sleep import Sleep
 from yado.streams import Streams
 from yado.sdk_calls import SDKCalls
 from yado.step_reservation import _reserved_step
 from yado.timeouts import _timeout_override, timeout_start_args
 from yado.workflow_management import WorkflowManagement
-from yado.wait_first import WaitFirst
+from yado._wait_first import WaitFirst
 from yado.validation import make_pydantic_args_validator, pydantic_args_validator, ValidateArgsCallable
 
 logger = logging.getLogger("dbos")

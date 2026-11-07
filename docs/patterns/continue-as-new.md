@@ -21,23 +21,24 @@ An [entity workflow](entity-workflow.md) that handles one command a minute store
 There is no continue-as-new call. The workaround is to start the successor under a new ID as the last thing the current run does, and to tell callers the new ID.
 
 ```python
-from yado import DBOS, SetWorkflowID
+import yado
+from yado import SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 def account(account_id: str, balance: int, generation: int) -> int:
     seen = 0
     while seen < 1000:
-        command = DBOS.recv("command", timeout_seconds=3600)
+        command = yado.recv("command", timeout_seconds=3600)
         if command is None:
             continue
         balance += command["amount"]
-        DBOS.set_event("balance", balance)
+        yado.set_event("balance", balance)
         seen += 1
     nxt = f"{account_id}-{generation + 1}"
     with SetWorkflowID(nxt):
-        DBOS.start_workflow(account, account_id, balance, generation + 1)
-    DBOS.set_event("next_id", nxt)
+        yado.start_workflow(account, account_id, balance, generation + 1)
+    yado.set_event("next_id", nxt)
     return balance
 ```
 

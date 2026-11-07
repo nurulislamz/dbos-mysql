@@ -61,7 +61,7 @@ Compared with [`dbos-transact-py`](https://github.com/dbos-inc/dbos-transact-py)
 |---|---|---|
 | Workflow and step state storage | ✅ | ✅ |
 | Stale owners blocked from saving results | ✅ | ✅ |
-| `@DBOS.workflow()`, `@DBOS.step()` | ✅ | ✅ |
+| `@yado.workflow()`, `@yado.step()` | ✅ | ✅ |
 | `validate_args`, `pydantic_args_validator` | ✅ | 🚧 Implemented; workflow execution not verified |
 | `DBOSContextEnsure` | ✅ | ✅ One instance cannot be entered twice |
 | `DBOS.asyncio_wait` | ✅ | ✅ |
@@ -174,7 +174,7 @@ What this project rejects or does not run, so nothing fails silently.
 |---|---|
 | Unknown `DBOSConfig` keys | `DBOSException` naming the keys |
 | Queue options that are not supported | `DBOSException` naming the options |
-| Using DBOS after `os.fork` | `DBOSException`. Call `DBOS.launch()` in the child |
+| Using DBOS after `os.fork` | `DBOSException`. Call `yado.launch()` in the child |
 | MessagePack | Not built. The user deferred it |
 | Python chaos tests (`tests/chaos`) | Not in the normal test run. See `PROGRESS.md` for how to run them |
 | Ignored tests | `cargo test` reports the ignored Rust tests. See `PROGRESS.md` |
@@ -235,15 +235,16 @@ maturin develop
 ```python
 import asyncio
 
+import yado
 from yado import DBOS, SetWorkflowID
 
 
-@DBOS.step()
+@yado.step()
 async def add_one(value: int) -> int:
     return value + 1
 
 
-@DBOS.workflow()
+@yado.workflow()
 async def double_after_add(value: int) -> int:
     return await add_one(value) * 2
 
@@ -254,9 +255,9 @@ async def main() -> None:
 
 
 DBOS(config={"name": "my-app", "system_database_url": "sqlite://app.sqlite"})
-DBOS.launch()
+yado.launch()
 asyncio.run(main())
-DBOS.destroy()
+yado.destroy()
 ```
 
 For MySQL, use `mysql://user:password@host:3306/database`. For Postgres, use `postgres://user:password@host:5432/database`.

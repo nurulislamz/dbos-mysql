@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Call the child directly, or start it with `DBOS.start_workflow`. The child's ID is saved as a step of the parent, so replay attaches to the same child.
+Call the child directly, or start it with `yado.start_workflow`. The child's ID is saved as a step of the parent, so replay attaches to the same child.
 
 :::
 
@@ -34,15 +34,15 @@ Call the other workflow from the parent. The engine saves the child's ID on the 
 A direct call starts the child and blocks until it returns.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def refund(order_id: str) -> str:
     return issue_refund(order_id)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def cancel_order(order_id: str) -> str:
     receipt = refund(order_id)
     notify(order_id)
@@ -54,21 +54,21 @@ def cancel_order(order_id: str) -> str:
 `start_workflow` returns as soon as the child row exists. `get_result` waits.
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def cancel_order(order_id: str) -> str:
-    handle = DBOS.start_workflow(refund, order_id)
+    handle = yado.start_workflow(refund, order_id)
     notify(order_id)
     return handle.get_result()
 ```
 
-Async code uses `await DBOS.start_workflow_async(...)` and `await handle.get_result()`.
+Async code uses `await yado.start_workflow_async(...)` and `await handle.get_result()`.
 
 ## When the parent ends
 
 The child keeps running after the parent finishes. Cancelling the parent does not cancel the child unless you ask for that:
 
 ```python
-DBOS.cancel_workflow(parent_id, cancel_children=True)
+yado.cancel_workflow(parent_id, cancel_children=True)
 ```
 
 ## When to use

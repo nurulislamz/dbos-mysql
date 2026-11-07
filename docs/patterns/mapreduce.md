@@ -23,13 +23,14 @@ One parent starting a child per record, for a million records, writes a million 
 Split until the slice is at the leaf size, then process it.
 
 ```python
+import yado
 from yado import DBOS, SetWorkflowID
 
 
 LEAF = 100
 
 
-@DBOS.workflow()
+@yado.workflow()
 def reduce(offset: int, length: int, depth: int) -> int:
     if length <= LEAF or depth >= 16:
         return process_slice(offset, length)
@@ -38,7 +39,7 @@ def reduce(offset: int, length: int, depth: int) -> int:
     for child_offset, child_length in ((offset, mid), (offset + mid, length - mid)):
         child_id = f"{DBOS.workflow_id}-{child_offset}"
         with SetWorkflowID(child_id):
-            handles.append(DBOS.start_workflow(reduce, child_offset, child_length, depth + 1))
+            handles.append(yado.start_workflow(reduce, child_offset, child_length, depth + 1))
     return sum(handle.get_result() for handle in handles)
 ```
 

@@ -19,10 +19,11 @@ A step with eight attempts and a one-minute backoff fails half an hour after the
 ## Solution
 
 ```python
+import yado
 from yado import DBOS
 
 
-@DBOS.step(retries_allowed=True, max_attempts=8, interval_seconds=60)
+@yado.step(retries_allowed=True, max_attempts=8, interval_seconds=60)
 def call() -> str:
     status = DBOS.step_status
     if status is not None and status.current_attempt >= 4:

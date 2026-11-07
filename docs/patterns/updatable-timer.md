@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.recv` with a timeout waits until a message arrives or the deadline passes. The deadline is stored, so a restart does not reset the wait.
+`yado.recv` with a timeout waits until a message arrives or the deadline passes. The deadline is stored, so a restart does not reset the wait.
 
 :::
 
@@ -14,21 +14,21 @@ An updatable timer is a sleep that the outside world can still change. The workf
 
 ## Problem
 
-A trial ends in fourteen days. Support can extend it. A normal `DBOS.sleep(14 days)` is durable, and it is also fixed. Cancelling and starting a new workflow loses the rest of the state. Sleeping in a loop of one-minute polls wakes thousands of times for no change.
+A trial ends in fourteen days. Support can extend it. A normal `yado.sleep(14 days)` is durable, and it is also fixed. Cancelling and starting a new workflow loses the rest of the state. Sleeping in a loop of one-minute polls wakes thousands of times for no change.
 
 ## Solution
 
 Wait on the message topic with a timeout equal to the time left. A message is the update. `None` means the deadline passed.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def trial(user_id: str) -> str:
     left = 14 * 24 * 3600
     while True:
-        update = DBOS.recv("deadline", timeout_seconds=left)
+        update = yado.recv("deadline", timeout_seconds=left)
         if update is None:
             return expire(user_id)
         left = update["seconds"]
@@ -36,7 +36,7 @@ def trial(user_id: str) -> str:
 
 The message carries the new duration, measured from the moment it arrives. `recv` stores the deadline as an absolute time, so a restart finishes the current wait instead of starting it over. Do not read the clock in the workflow. A duration that must be computed from the wall clock belongs in a step.
 
-Send an update with [signal with start](signal-with-start.md) or `DBOS.send` if the workflow is already running.
+Send an update with [signal with start](signal-with-start.md) or `yado.send` if the workflow is already running.
 
 ## When to use
 
@@ -46,7 +46,7 @@ Use an updatable timer when:
 - The wait must survive a restart without starting over.
 - You would otherwise poll.
 
-Use `DBOS.sleep` when the duration is fixed. See [Sleep](../guide/time.md#durable-sleep).
+Use `yado.sleep` when the duration is fixed. See [Sleep](../guide/time.md#durable-sleep).
 
 ## Trade-offs
 

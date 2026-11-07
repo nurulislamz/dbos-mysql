@@ -7,7 +7,7 @@ The workflow stays durable. The outside system stays an ordinary API, a webhook,
 ## Patterns in this section
 
 - [Polling an external service](polling.md). A short poll heartbeats inside one step. A long poll sleeps in the workflow between attempts.
-- [Long-running steps](long-running-step.md). A step calls `DBOS.heartbeat()` so a stuck attempt is noticed. The next attempt cannot read what the heartbeat sent.
+- [Long-running steps](long-running-step.md). A step calls `yado.heartbeat()` so a stuck attempt is noticed. The next attempt cannot read what the heartbeat sent.
 - [Delayed start](delayed-start.md). The workflow row exists now and starts after a delay.
 - [Delayed callback](delayed-callback.md). Sleep, call out, and wait for the other side to send the result back.
 - [Approval](approval.md). Block until a person approves or the wait times out.

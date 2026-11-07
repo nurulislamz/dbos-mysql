@@ -22,22 +22,22 @@ A caller wants to know, before it returns, that the account workflow accepted a 
 
 There is no Update API. Write the three steps yourself.
 
-1. `DBOS.send` the request, with an idempotency key.
-2. The workflow `recv`s it, decides, and `DBOS.set_event`s the answer under a key the caller knows.
-3. The caller `DBOS.get_event`s that key.
+1. `yado.send` the request, with an idempotency key.
+2. The workflow `recv`s it, decides, and `yado.set_event`s the answer under a key the caller knows.
+3. The caller `yado.get_event`s that key.
 
 ```python
-from yado import DBOS
+import yado
 
 
 def debit(account_id: str, request_id: str, amount: int) -> int:
-    DBOS.send(
+    yado.send(
         account_id,
         {"id": request_id, "amount": amount},
         topic="debit",
         idempotency_key=request_id,
     )
-    answer = DBOS.get_event(account_id, request_id, timeout_seconds=10)
+    answer = yado.get_event(account_id, request_id, timeout_seconds=10)
     if answer is None:
         raise TimeoutError(request_id)
     return answer["balance"]
@@ -46,15 +46,15 @@ def debit(account_id: str, request_id: str, amount: int) -> int:
 The workflow side:
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def account() -> None:
     balance = 0
     while True:
-        request = DBOS.recv("debit", timeout_seconds=3600)
+        request = yado.recv("debit", timeout_seconds=3600)
         if request is None:
             continue
         balance -= request["amount"]
-        DBOS.set_event(request["id"], {"balance": balance})
+        yado.set_event(request["id"], {"balance": balance})
 ```
 
 ## When to use

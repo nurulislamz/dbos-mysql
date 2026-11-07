@@ -3,7 +3,7 @@
 A workflow is a function that always finishes. If the process dies, it runs again from the top, and its saved steps return their stored values.
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def fulfil(order_id: str) -> str:
     receipt = charge(order_id)
     ship(order_id)
@@ -18,14 +18,14 @@ The body may run many times, and it must call the same steps in the same order e
 
 ```python
 # Wrong: a different value on each run can pick a different branch.
-@DBOS.workflow()
+@yado.workflow()
 def bad() -> None:
     if random.random() > 0.5:
         step_a()
 
 
 # Right: the choice is saved, so replay takes the same branch.
-@DBOS.step()
+@yado.step()
 def choose() -> float:
     return random.random()
 ```
@@ -56,18 +56,18 @@ Inside a workflow, `DBOS.workflow_id` and `DBOS.step_id` give the current values
 ## Starting in the background
 
 ```python
-handle = DBOS.start_workflow(fulfil, "123")
+handle = yado.start_workflow(fulfil, "123")
 print(handle.workflow_id)
 print(handle.get_status().status)
 print(handle.get_result())
 ```
 
-Async code uses `await DBOS.start_workflow_async(...)`, and `await handle.get_result()`.
+Async code uses `await yado.start_workflow_async(...)`, and `await handle.get_result()`.
 
 Another process can reach the same run by ID:
 
 ```python
-handle = DBOS.retrieve_workflow("order-123")
+handle = yado.retrieve_workflow("order-123")
 ```
 
 `get_result(polling_interval_sec=2.0)` sets the longest wait between database reads. The default cap is 250 ms.
@@ -77,9 +77,9 @@ handle = DBOS.retrieve_workflow("order-123")
 A workflow can call or start another workflow. The child's ID is saved as a step of the parent, so replay finds the same child and does not start a second one. Without an explicit ID, the child's ID is `<parent id>-<step number>`.
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def parent() -> str:
-    handle = DBOS.start_workflow(child, "input")
+    handle = yado.start_workflow(child, "input")
     return handle.get_result()
 ```
 
@@ -98,11 +98,11 @@ Attributes are kept. `__cause__` and tracebacks are lost.
 
 ## Recovery limit
 
-`@DBOS.workflow(max_recovery_attempts=10)` sets how many times a run may be recovered. The default is 100. Past the limit the row ends as `MAX_RECOVERY_ATTEMPTS_EXCEEDED`. This stops a workflow that crashes its process from doing so forever. `DBOS.resume_workflow` can restart it.
+`@yado.workflow(max_recovery_attempts=10)` sets how many times a run may be recovered. The default is 100. Past the limit the row ends as `MAX_RECOVERY_ATTEMPTS_EXCEEDED`. This stops a workflow that crashes its process from doing so forever. `yado.resume_workflow` can restart it.
 
 ## Validating arguments
 
-`@DBOS.workflow(validate_args=pydantic_args_validator)` checks arguments against the type hints. This is written, but the workflow execution path is not verified yet.
+`@yado.workflow(validate_args=pydantic_args_validator)` checks arguments against the type hints. This is written, but the workflow execution path is not verified yet.
 
 ## Inputs and outputs
 

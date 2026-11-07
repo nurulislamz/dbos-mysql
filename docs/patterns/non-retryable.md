@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Pass `should_retry` to `@DBOS.step`. It receives the exception and returns whether this attempt should be retried. An async step may pass an async predicate.
+Pass `should_retry` to `@yado.step`. It receives the exception and returns whether this attempt should be retried. An async step may pass an async predicate.
 
 :::
 
@@ -23,14 +23,14 @@ A step with `max_attempts=5` will submit the same invalid payload five times. If
 Retry only the errors you believe are transient.
 
 ```python
-from yado import DBOS
+import yado
 
 
 class ValidationError(Exception):
     pass
 
 
-@DBOS.step(
+@yado.step(
     retries_allowed=True,
     max_attempts=5,
     should_retry=lambda error: not isinstance(error, ValidationError),

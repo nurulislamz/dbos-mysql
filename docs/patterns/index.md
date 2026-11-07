@@ -13,8 +13,8 @@ Of the 35 patterns, **28 work today**. **Five have no single call yet**: [reques
 | Workflow | Workflow |
 | Activity | [Step](../guide/steps.md) |
 | Task queue | [Queue](../guide/queues.md) |
-| Signal | [`DBOS.send`](../guide/communication.md) and `DBOS.recv` |
-| Query | [`DBOS.set_event`](../guide/communication.md) and `DBOS.get_event` |
+| Signal | [`yado.send`](../guide/communication.md) and `yado.recv` |
+| Query | [`yado.set_event`](../guide/communication.md) and `yado.get_event` |
 | Update | No single call. See [Request and response](request-response.md) |
 
 ## Task orchestration

@@ -21,10 +21,11 @@ A queue mixes password-reset emails with a nightly digest. FIFO runs the digest 
 ## Solution
 
 ```python
-from yado import DBOS, SetEnqueueOptions
+import yado
+from yado import SetEnqueueOptions
 
 
-mail = DBOS.register_queue("mail", global_concurrency=5)
+mail = yado.register_queue("mail", global_concurrency=5)
 
 
 def send_reset(user_id: str) -> None:

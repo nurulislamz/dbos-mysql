@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.sleep` stores the wake time. `DBOS.recv` waits for the callback. Pass `DBOS.workflow_id` to the other system so it knows where to `send`.
+`yado.sleep` stores the wake time. `yado.recv` waits for the callback. Pass `DBOS.workflow_id` to the other system so it knows where to `send`.
 
 :::
 
@@ -21,19 +21,20 @@ A payment provider captures an hour from now and posts the result to a URL. Hold
 Sleep, submit with the workflow ID as the callback token, then receive.
 
 ```python
+import yado
 from yado import DBOS
 
 
-@DBOS.step()
+@yado.step()
 def submit(order_id: str, callback: str) -> None:
     payments.capture_later(order_id, callback_token=callback)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def charge_later(order_id: str) -> str:
-    DBOS.sleep(3600)
+    yado.sleep(3600)
     submit(order_id, callback=DBOS.workflow_id)
-    result = DBOS.recv("provider", timeout_seconds=86400)
+    result = yado.recv("provider", timeout_seconds=86400)
     if result is None:
         return "timed out"
     return result
@@ -43,7 +44,7 @@ The provider's webhook handler sends into the workflow. It does not need to be a
 
 ```python
 def provider_webhook(token: str, body: dict, delivery_id: str) -> None:
-    DBOS.send(token, body, topic="provider", idempotency_key=delivery_id)
+    yado.send(token, body, topic="provider", idempotency_key=delivery_id)
 ```
 
 The message is stored if it arrives before `recv`. A retry of the webhook with the same `idempotency_key` does not add a second message.

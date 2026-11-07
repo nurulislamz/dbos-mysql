@@ -8,13 +8,13 @@ uv pip install "yado[pydantic-ai]"
 
 ```python
 from pydantic_ai import Agent
-from yado import DBOS
+import yado
 from yado.pydantic_ai import YadoDurability
 
 agent = Agent("openai:gpt-5", capabilities=[YadoDurability()])
 
 
-@DBOS.workflow()
+@yado.workflow()
 async def answer(question: str) -> str:
     result = await agent.run(question)
     return result.output
@@ -32,7 +32,7 @@ Pydantic AI's own `DBOSDurability` does not work with this package, because it i
 | Function tool call | `<agent>__function_toolset__<toolset id>.call_tool:<tool>` |
 | MCP or dynamic toolset call | `<agent>__mcp_server__<id>.call_tool` or `<agent>__dynamic_toolset__<id>.call_tool:<tool>` |
 | Event handler, for each event | `<agent>__event_stream_handler` |
-| A wait in the agent loop | `DBOS.sleep` |
+| A wait in the agent loop | `yado.sleep` |
 
 `<agent>` is the agent's `name`, then the capability's `name=`, then `agent`. The names are only labels, so two agents can share one. A replay that reaches a different step name stops with an error rather than handing one tool another tool's result.
 
@@ -54,7 +54,7 @@ YadoDurability(
 | `models` | Extra models by ID, for switching models at run time. A `Model` object used at run time must be listed here |
 | `event_stream_handler` | Model events reach it live inside the model step. Every other event runs it in its own step |
 | `name` | Prefix of the step names |
-| `model_step_config`, `tool_step_config`, `mcp_step_config`, `event_stream_handler_step_config` | Step options, as `@DBOS.step()` takes them |
+| `model_step_config`, `tool_step_config`, `mcp_step_config`, `event_stream_handler_step_config` | Step options, as `@yado.step()` takes them |
 | `parallel_execution_mode` | `"parallel_ordered_events"` (the default) or `"sequential"`. A run with a workspace always runs tools one at a time |
 
 ## Things to know

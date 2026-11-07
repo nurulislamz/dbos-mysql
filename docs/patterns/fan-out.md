@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.start_workflow` once per chunk, then `get_result` on each handle. Give each child a deterministic ID so a replay does not start it twice.
+`yado.start_workflow` once per chunk, then `get_result` on each handle. Give each child a deterministic ID so a replay does not start it twice.
 
 :::
 
@@ -23,10 +23,11 @@ A nightly job processes a million rows. One workflow that handles each row as a 
 Pass each child an offset and a length. The child loads its own rows. The parent only stores two integers per child.
 
 ```python
+import yado
 from yado import DBOS, SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 def page(offset: int, length: int) -> int:
     rows = load_rows(offset, length)
     for row in rows:
@@ -34,13 +35,13 @@ def page(offset: int, length: int) -> int:
     return len(rows)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def fan(total: int, length: int = 100) -> int:
     handles = []
     for offset in range(0, total, length):
         child_id = f"{DBOS.workflow_id}-{offset}"
         with SetWorkflowID(child_id):
-            handles.append(DBOS.start_workflow(page, offset, length))
+            handles.append(yado.start_workflow(page, offset, length))
     return sum(handle.get_result() for handle in handles)
 ```
 

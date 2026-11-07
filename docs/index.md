@@ -15,20 +15,21 @@ It is a library. You add decorators to your Python functions and point them at a
 ## What it looks like
 
 ```python
+import yado
 from yado import DBOS
 
 
-@DBOS.step()
+@yado.step()
 def charge(order_id: str) -> str:
     return payments.charge(order_id, idempotency_key=f"{DBOS.workflow_id}-{DBOS.step_id}")
 
 
-@DBOS.step()
+@yado.step()
 def ship(order_id: str) -> str:
     return warehouse.ship(order_id)
 
 
-@DBOS.workflow()
+@yado.workflow()
 def fulfil(order_id: str) -> str:
     receipt = charge(order_id)
     return f"{receipt}: {ship(order_id)}"

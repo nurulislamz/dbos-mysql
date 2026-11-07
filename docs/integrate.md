@@ -19,6 +19,7 @@ The order matters.
 ```python
 import os
 
+import yado
 from yado import DBOS
 
 # 1. Decorators run at import, so import your workflows first.
@@ -28,25 +29,25 @@ import myapp.workflows
 DBOS(config={"name": "my-app", "system_database_url": os.environ["YADO_URL"]})
 
 # 3. Connect, upgrade the schema, and start the background loops.
-DBOS.launch()
+yado.launch()
 
 # 4. Queues need a launched DBOS.
-DBOS.register_queue("emails", global_concurrency=5)
+yado.register_queue("emails", global_concurrency=5)
 ```
 
-`DBOS.launch()` starts recovery, so register every workflow before calling it. A process only claims workflows whose names it has registered.
+`yado.launch()` starts recovery, so register every workflow before calling it. A process only claims workflows whose names it has registered.
 
 ## 3. Mark your functions
 
 Put anything that touches the outside world in a step. Keep the workflow body to plain decisions, because it runs again on recovery.
 
 ```python
-@DBOS.step(retries_allowed=True, max_attempts=5)
+@yado.step(retries_allowed=True, max_attempts=5)
 def send_email(to: str, body: str) -> None:
     mailer.send(to, body, idempotency_key=f"{DBOS.workflow_id}-{DBOS.step_id}")
 
 
-@DBOS.workflow()
+@yado.workflow()
 def welcome(user_id: str) -> None:
     user = load_user(user_id)  # This should be a step too.
     send_email(user["email"], "Welcome")
@@ -58,21 +59,22 @@ Give each piece of work an ID that comes from your domain. A retried HTTP reques
 
 ```python
 with SetWorkflowID(f"welcome-{user_id}"):
-    handle = DBOS.start_workflow(welcome, user_id)
+    handle = yado.start_workflow(welcome, user_id)
 ```
 
 ## A web server example
 
-FastAPI needs no special support. This pattern, and `@app.get(...)` directly above `@DBOS.workflow()`, ran on SQLite. FastAPI is not part of this repository's tests.
+FastAPI needs no special support. This pattern, and `@app.get(...)` directly above `@yado.workflow()`, ran on SQLite. FastAPI is not part of this repository's tests.
 
 ```python
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+import yado
 from yado import DBOS, SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 async def welcome(user_id: str) -> str:
     return await send_email(user_id)
 
@@ -80,9 +82,9 @@ async def welcome(user_id: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     DBOS(config={"name": "my-app", "system_database_url": URL})
-    DBOS.launch()
+    yado.launch()
     yield
-    DBOS.destroy()
+    yado.destroy()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -91,11 +93,11 @@ app = FastAPI(lifespan=lifespan)
 @app.post("/users/{user_id}/welcome")
 async def post_welcome(user_id: str) -> dict[str, str]:
     with SetWorkflowID(f"welcome-{user_id}"):
-        handle = await DBOS.start_workflow_async(welcome, user_id)
+        handle = await yado.start_workflow_async(welcome, user_id)
     return {"workflow_id": handle.workflow_id}
 ```
 
-When `DBOS.launch()` is called inside a running event loop, background async workflows run on that loop while it is alive.
+When `yado.launch()` is called inside a running event loop, background async workflows run on that loop while it is alive.
 
 ## Rules to follow
 
@@ -104,8 +106,8 @@ When `DBOS.launch()` is called inside a running event loop, background async wor
 | Call steps in the same order on every run | Steps are matched by number and name. A change raises `DBOSUnexpectedStepError` or a similar error on replay |
 | Do not change a workflow while old runs are unfinished | Version patching is [not built yet](coming-soon.md). Let old runs finish or cancel them |
 | Keep class paths stable | The default pickle format stores the path. A rename can break recovery of unfinished runs |
-| Call `DBOS.launch()` after `os.fork`, not before | DBOS raises `DBOSException` if used after a fork |
-| Call `DBOS.destroy()` on shutdown | Running workflows are released at once. Otherwise they wait for their lease to run out |
+| Call `yado.launch()` after `os.fork`, not before | DBOS raises `DBOSException` if used after a fork |
+| Call `yado.destroy()` on shutdown | Running workflows are released at once. Otherwise they wait for their lease to run out |
 | Keep database write access to admins and your program | With pickle, a database writer can run code in your process. See [Stored values](production.md#stored-values) |
 
 ## Running several copies

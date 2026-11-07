@@ -23,10 +23,11 @@ Fan-out of 10,000 children starts 10,000 workflows together. The downstream API 
 Enqueue one workflow per record on a queue whose concurrency is the window size.
 
 ```python
-from yado import DBOS, SetWorkflowID
+import yado
+from yado import SetWorkflowID
 
 
-queue = DBOS.register_queue("records", global_concurrency=10)
+queue = yado.register_queue("records", global_concurrency=10)
 
 
 def submit(record_ids: list[str]) -> None:

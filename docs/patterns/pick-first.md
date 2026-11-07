@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.wait_first` waits on workflow handles. `DBOS.asyncio_wait(..., return_when=asyncio.FIRST_COMPLETED)` waits on steps.
+`yado.wait_first` waits on workflow handles. `yado.asyncio_wait(..., return_when=asyncio.FIRST_COMPLETED)` waits on steps.
 
 :::
 
@@ -23,16 +23,16 @@ Three providers can quote a shipment. Waiting for the slowest one dominates the 
 Start every racer, wait for the first handle to finish, and cancel the others.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def quote(order_id: str) -> str:
-    handles = [DBOS.start_workflow(racer, order_id, name) for name in ("a", "b", "c")]
-    winner = DBOS.wait_first(handles)
+    handles = [yado.start_workflow(racer, order_id, name) for name in ("a", "b", "c")]
+    winner = yado.wait_first(handles)
     for handle in handles:
         if handle is not winner:
-            DBOS.cancel_workflow(handle.workflow_id)
+            yado.cancel_workflow(handle.workflow_id)
     return winner.get_result()
 ```
 
@@ -43,7 +43,7 @@ For steps in an async workflow, race the awaitables:
 ```python
 import asyncio
 
-done, pending = await DBOS.asyncio_wait(calls, return_when=asyncio.FIRST_COMPLETED)
+done, pending = await yado.asyncio_wait(calls, return_when=asyncio.FIRST_COMPLETED)
 ```
 
 Cancel the `pending` set yourself. `asyncio_wait` does not cancel them.

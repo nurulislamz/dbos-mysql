@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-Catch `DBOSMaxStepRetriesExceeded`, publish a status event, and `DBOS.recv` the correction. `recv` has a timeout, so loop when the wait should stay open.
+Catch `DBOSMaxStepRetriesExceeded`, publish a status event, and `yado.recv` the correction. `recv` has a timeout, so loop when the wait should stay open.
 
 :::
 
@@ -19,26 +19,27 @@ A shipping step rejects an address the carrier does not serve. Retrying the same
 ## Solution
 
 ```python
-from yado import DBOS, DBOSMaxStepRetriesExceeded
+import yado
+from yado import DBOSMaxStepRetriesExceeded
 
 
-@DBOS.workflow()
+@yado.workflow()
 def fulfil(order_id: str, address: str) -> str:
     charge(order_id)
     try:
         return ship(address)
     except DBOSMaxStepRetriesExceeded:
-        DBOS.set_event("status", "AWAITING_CORRECTION")
+        yado.set_event("status", "AWAITING_CORRECTION")
         fixed = None
         while fixed is None:
-            fixed = DBOS.recv("correction", timeout_seconds=86400)
+            fixed = yado.recv("correction", timeout_seconds=86400)
         return ship(fixed)
 ```
 
 The support tool sends the new address:
 
 ```python
-DBOS.send(workflow_id, new_address, topic="correction", idempotency_key=f"{workflow_id}:address")
+yado.send(workflow_id, new_address, topic="correction", idempotency_key=f"{workflow_id}:address")
 ```
 
 `ship` is a step. The first call's failure is saved, so recovery does not ship the bad address again. The second call is a new step, with the corrected address.

@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-A queue runs only on a process that has called `DBOS.register_queue` for that name. A queue per host is a queue whose name is the host, registered only there.
+A queue runs only on a process that has called `yado.register_queue` for that name. A queue per host is a queue whose name is the host, registered only there.
 
 :::
 
@@ -31,21 +31,22 @@ Register a queue named for the host, only on that host.
 ```python
 import socket
 
-from yado import DBOS, SetWorkflowID
+import yado
+from yado import SetWorkflowID
 
 
-@DBOS.workflow()
+@yado.workflow()
 def render_here(job_id: str) -> str:
     return render_local_files(job_id)
 
 
 def register_host_queue() -> None:
-    DBOS.register_queue(f"host-{socket.gethostname()}", global_concurrency=1)
+    yado.register_queue(f"host-{socket.gethostname()}", global_concurrency=1)
 
 
 def submit(job_id: str, host: str):
     with SetWorkflowID(job_id):
-        return DBOS.enqueue_workflow(f"host-{host}", render_here, job_id)
+        return yado.enqueue_workflow(f"host-{host}", render_here, job_id)
 ```
 
 `register_host_queue` runs at startup on the render machine. `submit` can run anywhere. `enqueue_workflow` writes the queue entry. It does not make the caller pull from the queue. The host has to have registered that name, or the entry waits until one does.

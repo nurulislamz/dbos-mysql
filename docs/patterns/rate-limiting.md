@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.register_queue(..., limiter={"limit": N, "period": seconds})`. The cap is on starts of workflows from that queue, across every process. It is not a cap on steps inside a running workflow.
+`yado.register_queue(..., limiter={"limit": N, "period": seconds})`. The cap is on starts of workflows from that queue, across every process. It is not a cap on steps inside a running workflow.
 
 :::
 
@@ -21,10 +21,11 @@ A partner API allows five calls per second. `global_concurrency=5` still lets al
 ## Solution
 
 ```python
-from yado import DBOS, SetEnqueueOptions
+import yado
+from yado import SetEnqueueOptions
 
 
-queue = DBOS.register_queue(
+queue = yado.register_queue(
     "api",
     limiter={"limit": 5, "period": 1.0},
 )
@@ -36,7 +37,7 @@ with SetEnqueueOptions(priority=1):
 `call_api` is a workflow whose body makes the partner call in a step. Five of those workflows may start each second. Further enqueued workflows wait for the next period and for a concurrency slot, if you set one.
 
 ```python
-queue = DBOS.register_queue(
+queue = yado.register_queue(
     "api",
     global_concurrency=5,
     limiter={"limit": 5, "period": 1.0},

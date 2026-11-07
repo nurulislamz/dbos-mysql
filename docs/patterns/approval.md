@@ -4,7 +4,7 @@
 
 :::note[Supported]
 
-`DBOS.recv` waits for the decision. Your UI or webhook calls `DBOS.send` with the approver and the answer. A timeout returns `None`.
+`yado.recv` waits for the decision. Your UI or webhook calls `yado.send` with the approver and the answer. A timeout returns `None`.
 
 :::
 
@@ -23,13 +23,13 @@ A refund above a limit needs a manager. An email with a link, plus a row you hop
 Receive on a topic. Treat timeout as its own branch.
 
 ```python
-from yado import DBOS
+import yado
 
 
-@DBOS.workflow()
+@yado.workflow()
 def refund(order_id: str, amount: int) -> str:
-    DBOS.set_event("pending", {"order_id": order_id, "amount": amount})
-    decision = DBOS.recv("approval", timeout_seconds=86400)
+    yado.set_event("pending", {"order_id": order_id, "amount": amount})
+    decision = yado.recv("approval", timeout_seconds=86400)
     if decision is None:
         escalate(order_id)
         return "escalated"
@@ -43,7 +43,7 @@ def refund(order_id: str, amount: int) -> str:
 The approval endpoint sends the decision. Use an idempotency key so a double click is one message.
 
 ```python
-DBOS.send(
+yado.send(
     workflow_id,
     {"approver": user, "ok": True},
     topic="approval",
@@ -51,7 +51,7 @@ DBOS.send(
 )
 ```
 
-`DBOS.get_event(workflow_id, "pending")` is what the UI reads to show the request.
+`yado.get_event(workflow_id, "pending")` is what the UI reads to show the request.
 
 ## When to use
 

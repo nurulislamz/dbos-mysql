@@ -80,7 +80,7 @@ So recovery is simple. It calls the workflow function again from the top, with t
 
 This is why a workflow body must be deterministic, and why outside work belongs in steps.
 
-Other durable calls use the same numbers. `DBOS.sleep`, `send`, `recv`, `set_event`, `get_event` and starting a child workflow all take step IDs. Work inside a step belongs to that step's result and takes no ID of its own.
+Other durable calls use the same numbers. `yado.sleep`, `send`, `recv`, `set_event`, `get_event` and starting a child workflow all take step IDs. Work inside a step belongs to that step's result and takes no ID of its own.
 
 ## How crash recovery works
 
@@ -125,7 +125,7 @@ sequenceDiagram
 
 ## Shutdown is not failure
 
-`DBOS.destroy()` tells the engine it is closing, then cancels running work. An error raised after that is not stored as a final result. The lease is released, and the workflow runs again on the next start.
+`yado.destroy()` tells the engine it is closing, then cancels running work. An error raised after that is not stored as a final result. The lease is released, and the workflow runs again on the next start.
 
 ## Time
 

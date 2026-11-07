@@ -20,15 +20,16 @@ Constructing an HTTP client inside the workflow runs that constructor again on e
 
 ## Solution
 
-Create the client next to `DBOS.launch`, and close over it.
+Create the client next to `yado.launch`, and close over it.
 
 ```python
+import yado
 from yado import DBOS
 
 payments = PaymentsClient("https://payments.internal")
 
 
-@DBOS.step()
+@yado.step()
 def charge(order_id: str) -> str:
     return payments.charge(
         order_id,
@@ -36,7 +37,7 @@ def charge(order_id: str) -> str:
     )
 
 
-@DBOS.workflow()
+@yado.workflow()
 def checkout(order_id: str) -> str:
     return charge(order_id)
 ```
@@ -47,7 +48,7 @@ Prefer passing the client into a factory if you want the binding to be obvious:
 
 ```python
 def make_charge(client: PaymentsClient):
-    @DBOS.step()
+    @yado.step()
     def charge(order_id: str) -> str:
         return client.charge(order_id, idempotency_key=f"{DBOS.workflow_id}-{DBOS.step_id}")
 
@@ -72,7 +73,7 @@ A process-wide client is shared by concurrent steps. It has to be safe for that,
 
 - `DBOS.workflow_id` and `DBOS.step_id` are empty outside a workflow. A test that calls `charge` directly needs a fake key, or the client has to tolerate a missing one. Branch on `DBOS.workflow_id` if the same function is used both ways.
 - Do not read the client inside the workflow to decide a branch. Read it in a step and branch on the saved result.
-- Replacing the global client after workflows have started is a race. Build it before `DBOS.launch` and leave it.
+- Replacing the global client after workflows have started is a race. Build it before `yado.launch` and leave it.
 
 ## Related
 

@@ -7,21 +7,21 @@ Workflows can talk to each other and to outside code. Messages go to one workflo
 Use a message to send a workflow a signal, such as "the payment came through".
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def checkout(order_id: str) -> str:
     start_payment(order_id)
-    status = DBOS.recv("payment", timeout_seconds=600)
+    status = yado.recv("payment", timeout_seconds=600)
     return "paid" if status == "ok" else "timed out"
 
 
 # Anywhere, such as a webhook handler:
-DBOS.send("checkout-123", "ok", topic="payment", idempotency_key=webhook_id)
+yado.send("checkout-123", "ok", topic="payment", idempotency_key=webhook_id)
 ```
 
 | Call | Rules |
 |---|---|
-| `DBOS.send` | Works inside or outside a workflow. Raises `DBOSNonExistentWorkflowError` if the destination does not exist |
-| `DBOS.recv` | Workflows only, and not inside a step. On timeout it returns `None` |
+| `yado.send` | Works inside or outside a workflow. Raises `DBOSNonExistentWorkflowError` if the destination does not exist |
+| `yado.recv` | Workflows only, and not inside a step. On timeout it returns `None` |
 
 - Messages are FIFO within a destination and topic, and each one is read once.
 - Messages are stored, so they wait for a workflow that is not at its `recv` yet, or is down.
@@ -33,22 +33,22 @@ DBOS.send("checkout-123", "ok", topic="payment", idempotency_key=webhook_id)
 Use an event to publish progress or a result that others may read while the workflow runs.
 
 ```python
-@DBOS.workflow()
+@yado.workflow()
 def report(report_id: str) -> None:
-    DBOS.set_event("progress", "started")
+    yado.set_event("progress", "started")
     build(report_id)
-    DBOS.set_event("progress", "done")
+    yado.set_event("progress", "done")
 
 
-value = DBOS.get_event("report-1", "progress", timeout_seconds=30)
-everything = DBOS.get_all_events("report-1")
+value = yado.get_event("report-1", "progress", timeout_seconds=30)
+everything = yado.get_all_events("report-1")
 ```
 
 | Call | Rules |
 |---|---|
-| `DBOS.set_event` | Workflows only. A later call with the same key replaces the value |
-| `DBOS.get_event` | Works anywhere. On timeout it returns `None` |
-| `DBOS.get_all_events` | Works anywhere. Returns a `dict` |
+| `yado.set_event` | Workflows only. A later call with the same key replaces the value |
+| `yado.get_event` | Works anywhere. On timeout it returns `None` |
+| `yado.get_all_events` | Works anywhere. Returns a `dict` |
 
 Older values are kept as revisions until the workflow is deleted. A `get_event` inside a workflow replays the value it first saw, even if the event has changed since.
 
