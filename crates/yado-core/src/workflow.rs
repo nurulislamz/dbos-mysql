@@ -195,6 +195,7 @@ pub enum Outcome {
 /// Filters for `list_workflows`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct WorkflowFilter {
+    pub attributes: Option<String>,
     pub workflow_ids: Option<Vec<String>>,
     pub queue_names: Option<Vec<String>>,
     pub app_versions: Option<Vec<String>>,

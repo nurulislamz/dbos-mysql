@@ -222,6 +222,7 @@ class Engine:
         self,
         *,
         workflow_ids: list[str] | None = None,
+        attributes: str | None = None,
         queue_name: list[str] | None = None,
         app_version: list[str] | None = None,
         forked_from: list[str] | None = None,

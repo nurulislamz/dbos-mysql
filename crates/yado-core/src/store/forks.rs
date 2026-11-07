@@ -123,6 +123,7 @@ impl Store {
         .bind(original)
         .execute(&mut *tx)
         .await?;
+        self.index_attributes(&mut tx, new_id).await?;
         sqlx::query(self.sql(
             "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name, output, error, child_workflow_id, \
              serialization, completed_at_epoch_ms, started_at_epoch_ms) \

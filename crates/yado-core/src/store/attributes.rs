@@ -1,12 +1,42 @@
 use sqlx::Row;
 
 use super::events::recorded_send;
-use super::{SendFrom, SendOutcome, Store};
+use super::{Dialect, SendFrom, SendOutcome, Store};
 use crate::{Error, StepRecord};
+use sqlx::{Any, Transaction};
 
 const STEP: &str = "DBOS.updateWorkflowAttributes";
 
 impl Store {
+    pub(super) async fn index_attributes(
+        &self,
+        tx: &mut Transaction<'_, Any>,
+        workflow_id: &str,
+    ) -> Result<(), Error> {
+        sqlx::query(self.sql("DELETE FROM workflow_attribute_lookup WHERE workflow_uuid = ?"))
+            .bind(workflow_id)
+            .execute(&mut **tx)
+            .await?;
+        let select = match self.dialect {
+            Dialect::Sqlite => {
+                "SELECT workflow_uuid, j.key, workflow_status.attributes -> j.fullkey FROM workflow_status, json_each(workflow_status.attributes) AS j WHERE workflow_status.workflow_uuid = ? AND length(j.key) <= 255"
+            }
+            Dialect::Postgres => {
+                "SELECT workflow_uuid, j.key, j.value::text FROM workflow_status CROSS JOIN LATERAL jsonb_each(workflow_status.attributes::jsonb) AS j WHERE workflow_status.workflow_uuid = ? AND length(j.key) <= 255"
+            }
+            Dialect::MySql => {
+                "SELECT workflow_uuid, j.attr_key, CAST(JSON_EXTRACT(workflow_status.attributes, CONCAT('$.', JSON_QUOTE(j.attr_key))) AS CHAR CHARACTER SET utf8mb4) FROM workflow_status JOIN JSON_TABLE(JSON_KEYS(workflow_status.attributes), '$[*]' COLUMNS (attr_key TEXT PATH '$')) AS j WHERE workflow_status.workflow_uuid = ? AND CHAR_LENGTH(j.attr_key) <= 255"
+            }
+        };
+        let sql = format!(
+            "INSERT INTO workflow_attribute_lookup (workflow_uuid, attr_key, attr_value) {select}"
+        );
+        sqlx::query(self.sql(&sql))
+            .bind(workflow_id)
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
+    }
     pub async fn update_workflow_attributes(
         &self,
         workflow_id: &str,
@@ -61,6 +91,7 @@ impl Store {
                 };
                 sqlx::query(self.sql("UPDATE workflow_status SET attributes = ?, updated_at = {NOW} WHERE workflow_uuid = ?"))
                     .bind(text.as_deref()).bind(workflow_id).execute(&mut *tx).await?;
+                self.index_attributes(&mut tx, workflow_id).await?;
             }
             if let SendFrom::Workflow { lease, step_id } = from {
                 self.insert_step(&mut tx, &lease.workflow_id, step_id, STEP, &StepRecord::default(), serialization).await?;

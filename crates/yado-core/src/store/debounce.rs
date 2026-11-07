@@ -217,6 +217,7 @@ impl Store {
                 .await?;
             let owner: Option<String> = row.try_get("lease_token")?;
             if owner.as_deref() == Some(token) {
+                self.index_attributes(&mut tx, new.workflow_id).await?;
                 sqlx::query(self.sql(
                     "INSERT INTO workflow_queue_entries (workflow_uuid, queue_name, start_timeout_ms, deduplication_id, priority, delay_until_ms, debounced, debounce_deadline_ms) VALUES (?, ?, ?, ?, 0, ?, 1, ?)",
                 ))

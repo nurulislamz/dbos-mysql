@@ -100,6 +100,7 @@ impl PyEngine {
     #[pyo3(signature = (
         *,
         workflow_ids=None,
+        attributes=None,
         queue_name=None,
         app_version=None,
         forked_from=None,
@@ -125,6 +126,7 @@ impl PyEngine {
         &self,
         py: Python<'py>,
         workflow_ids: Option<Vec<String>>,
+        attributes: Option<String>,
         queue_name: Option<Vec<String>>,
         app_version: Option<Vec<String>>,
         forked_from: Option<Vec<String>>,
@@ -148,6 +150,7 @@ impl PyEngine {
     ) -> PyResult<Bound<'py, PyAny>> {
         let filter = WorkflowFilter {
             workflow_ids,
+            attributes,
             queue_names: queue_name,
             app_versions: app_version,
             forked_from,

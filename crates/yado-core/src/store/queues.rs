@@ -649,6 +649,7 @@ impl Store {
             check_workflow_name(new, &existing.name)?;
         }
         if owner.as_deref() == Some(token) {
+            self.index_attributes(&mut tx, new.workflow_id).await?;
             if let Some(id) = &options.deduplication_id {
                 let existing: Option<String> = sqlx::query_scalar(self.sql(
                     "SELECT workflow_queue_entries.workflow_uuid FROM workflow_queue_entries JOIN workflow_status ON workflow_status.workflow_uuid = workflow_queue_entries.workflow_uuid WHERE workflow_queue_entries.queue_name = ? AND workflow_queue_entries.deduplication_id = ? AND workflow_status.status IN ('PENDING', 'ENQUEUED', 'DELAYED') LIMIT 1",

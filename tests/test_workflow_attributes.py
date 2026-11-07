@@ -18,6 +18,8 @@ def test_workflow_attributes(dbos: DBOS) -> None:
     assert DBOS.get_workflow_status("attr-parent-1").attributes is None
     DBOS.update_workflow_attributes("attr-parent", {"nested": {"y": 2}, "null": None}, merge=True)
     assert DBOS.list_workflows(workflow_ids=["attr-parent"])[0].attributes == {"customer": "acme", "nested": {"y": 2}, "null": None}
+    assert [row.workflow_id for row in DBOS.list_workflows(attributes={"customer": "acme"})] == ["attr-parent"]
+    assert DBOS.list_workflows(attributes={"customer": "missing"}) == []
     DBOS.update_workflow_attributes("attr-parent", {})
     assert DBOS.get_workflow_status("attr-parent").attributes == {}
     DBOS.update_workflow_attributes("attr-parent", None)
@@ -36,6 +38,7 @@ async def test_workflow_attributes_async(dbos: DBOS) -> None:
 
     with SetWorkflowAttributes({"initial": 1}), SetWorkflowID("async-attr"):
         await workflow()
+    assert [row.workflow_id for row in await DBOS.list_workflows_async(attributes={"inside": True})] == ["async-attr"]
     status = await DBOS.get_workflow_status_async("async-attr")
     assert status.attributes == {"initial": 1, "inside": True}
     await DBOS.update_workflow_attributes_async("async-attr", {"replacement": 2})

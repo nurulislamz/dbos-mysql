@@ -219,8 +219,36 @@ impl Store {
     }
 
     async fn list_workflows_once(&self, filter: &WorkflowFilter) -> Result<Vec<Workflow>, Error> {
+        let attributes: serde_json::Value = match &filter.attributes {
+            Some(text) => serde_json::from_str(text)
+                .map_err(|e| Error::InvalidConfig(format!("invalid attribute filter: {e}")))?,
+            None => serde_json::json!({}),
+        };
+        let attributes = attributes
+            .as_object()
+            .ok_or_else(|| Error::InvalidConfig("attribute filter must be an object".into()))?;
+        if attributes.keys().any(|key| key.chars().count() > 255) {
+            return Err(Error::InvalidConfig(
+                "attribute filter key exceeds 255 characters".into(),
+            ));
+        }
+        let values: Vec<String> = attributes.values().map(|v| v.to_string()).collect();
         let order = if filter.sort_desc { "DESC" } else { "ASC" };
         let mut sql = format!("{SELECT_WORKFLOWS} WHERE 1 = 1");
+        for _ in attributes {
+            let value = match self.dialect {
+                super::Dialect::Sqlite => "json(?)",
+                super::Dialect::Postgres => "CAST(CAST(? AS jsonb) AS text)",
+                super::Dialect::MySql => "CAST(CAST(? AS JSON) AS CHAR CHARACTER SET utf8mb4)",
+            };
+            let prefix = match self.dialect {
+                super::Dialect::MySql => format!("attr_value = {value}"),
+                _ => format!(
+                    "substr(attr_value, 1, 255) = substr({value}, 1, 255) AND attr_value = {value}"
+                ),
+            };
+            sql.push_str(&format!(" AND workflow_status.workflow_uuid IN (SELECT workflow_uuid FROM workflow_attribute_lookup WHERE attr_key = ? AND {prefix})"));
+        }
         if let Some(ids) = &filter.workflow_ids {
             sql.push_str(&in_clause("workflow_status.workflow_uuid", ids.len()));
         }
@@ -293,6 +321,12 @@ impl Store {
         }
 
         let mut query = sqlx::query(self.sql(&sql));
+        for ((key, _), value) in attributes.iter().zip(&values) {
+            query = query.bind(key.as_str()).bind(value.as_str());
+            if self.dialect != super::Dialect::MySql {
+                query = query.bind(value.as_str());
+            }
+        }
         if let Some(ids) = &filter.workflow_ids {
             for id in ids {
                 query = query.bind(id.as_str());

@@ -108,6 +108,7 @@ impl Store {
             .await?;
         let owner: Option<String> = row.try_get("lease_token")?;
         if owner.as_deref() == Some(token) {
+            self.index_attributes(&mut tx, new.workflow_id).await?;
             let created_at_ms: i64 = row.try_get("created_at")?;
             let deadline = match new.timeout_ms {
                 Some(timeout) => Some(created_at_ms.checked_add(timeout).ok_or_else(|| {
