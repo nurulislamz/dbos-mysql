@@ -17,6 +17,7 @@ use yado_core::{
 
 mod attributes;
 mod awakeables;
+mod continue_as_new;
 mod datasources;
 mod debounce;
 mod events;
@@ -310,10 +311,11 @@ pub(crate) fn claims_to_py(claims: Vec<Claimed>) -> PyResult<Vec<PyClaim>> {
                     workflow_id: claim.lease.workflow_id.clone(),
                     run: Py::new(
                         py,
-                        PyRun(Arc::new(Run::new(
+                        PyRun(Arc::new(Run::new_at(
                             claim.lease,
                             claim.serialization,
                             claim.deadline_epoch_ms,
+                            claim.step_base,
                         ))),
                     )?,
                     name: claim.name,

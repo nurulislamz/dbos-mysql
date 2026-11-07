@@ -114,8 +114,8 @@ impl Store {
         let version: Option<String> = source.try_get("application_version")?;
         sqlx::query(self.sql(&format!(
             "INSERT INTO workflow_status (workflow_uuid, name, status, inputs, claim_after, recovery_attempts, \
-             max_recovery_attempts, serialization, forked_from, application_version, {COPIED_COLUMNS}, created_at, updated_at) \
-             SELECT ?, name, 'PENDING', inputs, {{NOW}}, 0, max_recovery_attempts, serialization, workflow_uuid, ?, \
+             max_recovery_attempts, serialization, forked_from, application_version, step_base, {COPIED_COLUMNS}, created_at, updated_at) \
+             SELECT ?, name, 'PENDING', inputs, {{NOW}}, 0, max_recovery_attempts, serialization, workflow_uuid, ?, step_base, \
              {COPIED_COLUMNS}, {{NOW}}, {{NOW}} FROM workflow_status WHERE workflow_uuid = ?"
         )))
         .bind(new_id)

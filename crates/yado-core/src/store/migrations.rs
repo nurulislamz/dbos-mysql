@@ -144,6 +144,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/034_application_versions.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'application_versions')",
     ),
+    plain(
+        35,
+        include_str!("../../schema/postgres/035_workflow_step_base.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'workflow_status' AND column_name = 'step_base') = 0 THEN 1 ELSE 0 END",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -273,6 +278,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/034_application_versions.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'application_versions')",
     ),
+    plain(
+        35,
+        include_str!("../../schema/mysql/035_workflow_step_base.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'workflow_status' AND column_name = 'step_base') = 0 THEN 1 ELSE 0 END",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -389,6 +399,11 @@ const SQLITE: &[Migration] = &[
         34,
         include_str!("../../schema/sqlite/034_application_versions.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'application_versions')",
+    ),
+    plain(
+        35,
+        include_str!("../../schema/sqlite/035_workflow_step_base.sql"),
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM pragma_table_info('workflow_status') WHERE name = 'step_base') = 0 THEN 1 ELSE 0 END",
     ),
 ];
 

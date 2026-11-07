@@ -98,7 +98,7 @@ impl Store {
         }
         let (compatible, binds) = self.compatible_clause();
         let select_sql = self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms, {{NOW}} AS now_ms FROM workflow_status \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, step_base, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms, {{NOW}} AS now_ms FROM workflow_status \
              WHERE claim_after <= {{NOW}} AND status = 'PENDING' AND NOT EXISTS \
              (SELECT 1 FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
              AND serialization IN ({}) AND name IN ({}){compatible} \
@@ -184,6 +184,7 @@ impl Store {
         .execute(&mut **tx)
         .await?;
         Ok(Some(Claimed {
+            step_base: get_u32(row, "step_base")?,
             lease: Lease {
                 workflow_id,
                 token: request_token.to_owned(),
@@ -203,7 +204,7 @@ impl Store {
         duration: Duration,
     ) -> Result<Option<Vec<Claimed>>, Error> {
         let rows = sqlx::query(self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, serialization, \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, serialization, step_base, \
              (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms \
              FROM workflow_status WHERE lease_token = ? AND status = 'PENDING' ORDER BY workflow_uuid {}",
             self.dialect.lock_row(),
@@ -230,6 +231,7 @@ impl Store {
             .execute(&mut **tx)
             .await?;
             claimed.push(Claimed {
+                step_base: get_u32(&row, "step_base")?,
                 lease: Lease {
                     workflow_id,
                     token: request_token.to_owned(),

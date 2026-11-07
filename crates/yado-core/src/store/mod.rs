@@ -12,6 +12,7 @@ use crate::workflow::{Lease, PORTABLE_JSON, PY_PICKLE, Status, StepRecord, Workf
 
 mod attributes;
 mod awakeables;
+mod continue_as_new;
 mod datasources;
 mod debounce;
 mod events;

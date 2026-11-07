@@ -107,8 +107,18 @@ all_dbs!(queue_claim_filters_application_identity, backend, {
         ("wrong-app", "v1", "other"),
         ("matching", "v1", "app"),
     ] {
-        sqlx::query("UPDATE workflow_status SET application_version = ?, application_name = ? WHERE workflow_uuid = ?")
-            .bind(version).bind(app).bind(id).execute(&mut connection).await.unwrap();
+        let sql = if backend == Backend::Postgres {
+            "UPDATE workflow_status SET application_version = $1, application_name = $2 WHERE workflow_uuid = $3"
+        } else {
+            "UPDATE workflow_status SET application_version = ?, application_name = ? WHERE workflow_uuid = ?"
+        };
+        sqlx::query(sql)
+            .bind(version)
+            .bind(app)
+            .bind(id)
+            .execute(&mut connection)
+            .await
+            .unwrap();
     }
     connection.close().await.unwrap();
     let store = Store::connect(&db.url)
@@ -369,7 +379,12 @@ all_dbs!(
         }
         let mut conn = sqlx::AnyConnection::connect(&db.url).await.unwrap();
         for (name, app) in [("a", "app-a"), ("b", "app-b")] {
-            sqlx::query("UPDATE workflow_queues SET application_name = ? WHERE name = ?")
+            let sql = if backend == Backend::Postgres {
+                "UPDATE workflow_queues SET application_name = $1 WHERE name = $2"
+            } else {
+                "UPDATE workflow_queues SET application_name = ? WHERE name = ?"
+            };
+            sqlx::query(sql)
                 .bind(app)
                 .bind(name)
                 .execute(&mut conn)

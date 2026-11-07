@@ -161,6 +161,7 @@ pub enum Started {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Claimed {
+    pub step_base: u32,
     pub lease: Lease,
     pub name: String,
     pub input: String,

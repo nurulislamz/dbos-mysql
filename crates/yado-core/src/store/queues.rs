@@ -963,7 +963,7 @@ impl Store {
                     }
                 }
                 let Some(row) = sqlx::query(self.sql(&format!(
-                "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization \
+                "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, step_base \
                  FROM workflow_status WHERE workflow_uuid = ? AND status = 'PENDING' \
                  AND lease_token IS NULL AND claim_after <= ? {}",
                 self.dialect.lock_row(),

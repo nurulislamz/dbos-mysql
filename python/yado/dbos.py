@@ -348,6 +348,19 @@ class WorkflowHandleAsync[T]:
         return _status_of(await _running()._engine.get_status(self.workflow_id))
 
 
+class _ContinueAsNew(BaseException):
+    def __init__(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        self.args_to_pass = args
+        self.kwargs_to_pass = kwargs
+
+
+class _ContinuedRun:
+    def __init__(self, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        self.run = run
+        self.args = args
+        self.kwargs = kwargs
+
+
 class _DBOSMeta(type):
     @property
     def executor_id(cls) -> str:
@@ -723,6 +736,12 @@ class DBOS(Versions, Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowM
         return [_step_of(step, load_output=load_output) for step in await _running()._engine.list_steps(workflow_id, limit=limit, offset=offset)]
 
     @classmethod
+    def continue_as_new(cls, *args: Any, **kwargs: Any) -> None:
+        if _current_run.get() is None or _current_step.get() is not None:
+            raise DBOSException("DBOS.continue_as_new must be called from a workflow")
+        raise _ContinueAsNew(args, kwargs)
+
+    @classmethod
     def _recover_pending_workflows(cls) -> list[WorkflowHandle[Any]]:
         instance = _running()
         return [instance._resume(claim) for claim in instance._blocking(instance._engine.recover_now, list(_registry))]
@@ -778,6 +797,13 @@ class DBOS(Versions, Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowM
             self._keepers.discard(keeper)
 
     async def _run_async(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        while True:
+            result = await self._run_async_once(info, run, args, kwargs)
+            if not isinstance(result, _ContinuedRun):
+                return result
+            run, args, kwargs = result.run, result.args, result.kwargs
+
+    async def _run_async_once(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         active = self._keep_lease(run)
         context = contextvars.copy_context()
         context.run(_bind_run, run, active)
@@ -827,12 +853,28 @@ class DBOS(Versions, Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowM
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
         if isinstance(error, DBOSWorkflowCancelledError | DBOSLeaseLostError):
             return _decode_result(await self._engine.conclude(run, lease_lost=True), info)
+        if isinstance(error, _ContinueAsNew):
+            try:
+                text = info.codec.encode_input(error.args_to_pass, error.kwargs_to_pass, run.serialization)
+                next_run = await self._engine.continue_as_new(run, text)
+            except DBOSLeaseLostError:
+                return _decode_result(await self._engine.conclude(run, lease_lost=True), info)
+            except Exception as failure:  # noqa: BLE001
+                return await self._finish_error(info, run, failure)
+            return _ContinuedRun(next_run, error.args_to_pass, error.kwargs_to_pass)
         if isinstance(error, Exception):
             return await self._finish_error(info, run, error)
         await self._engine.conclude(run)
         raise error
 
     def _run_sync(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        while True:
+            result = self._run_sync_once(info, run, args, kwargs)
+            if not isinstance(result, _ContinuedRun):
+                return result
+            run, args, kwargs = result.run, result.args, result.kwargs
+
+    def _run_sync_once(self, info: _Workflow, run: _native.Run, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         active = self._keep_lease(run)
         context = contextvars.copy_context()
         context.run(_bind_run, run, active)
@@ -841,6 +883,17 @@ class DBOS(Versions, Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowM
             parent = self._parent_sync(run)
             value = context.run(_spanned, info.name, _workflow_attributes(run), parent, info.function, *validated_args, **validated_kwargs)
         # A lost lease may still look owned in the row, so its error must not be offered as the result.
+        except _ContinueAsNew as continued:
+            _drop_datasource_checkpoints(run, context)
+            self._stop_keeper(active)
+            try:
+                text = info.codec.encode_input(continued.args_to_pass, continued.kwargs_to_pass, run.serialization)
+                next_run = self._blocking(self._engine.continue_as_new, run, text)
+            except DBOSLeaseLostError:
+                return _decode_result(self._waiting(self._engine.conclude, run, lease_lost=True), info)
+            except Exception as failure:  # noqa: BLE001
+                return self._finish_error_sync(info, run, failure)
+            return _ContinuedRun(next_run, continued.args_to_pass, continued.kwargs_to_pass)
         except (DBOSWorkflowCancelledError, DBOSLeaseLostError):
             self._stop_keeper(active)
             return _decode_result(self._waiting(self._engine.conclude, run, lease_lost=True), info)

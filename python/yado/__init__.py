@@ -54,6 +54,7 @@ close_stream = DBOS.close_stream
 close_stream_async = DBOS.close_stream_async
 complete_awakeable = DBOS.complete_awakeable
 complete_awakeable_async = DBOS.complete_awakeable_async
+continue_as_new = DBOS.continue_as_new
 create_awakeable = DBOS.create_awakeable
 create_awakeable_async = DBOS.create_awakeable_async
 delete_finished_workflows = DBOS.delete_finished_workflows
@@ -156,6 +157,7 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "continue_as_new",
     "list_application_versions",
     "list_application_versions_async",
     "get_latest_application_version",

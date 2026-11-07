@@ -180,7 +180,7 @@ impl Store {
         }
         let (compatible, binds) = self.compatible_clause();
         let select_sql = self.sql(&format!(
-            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms FROM workflow_status \
+            "SELECT workflow_uuid, name, inputs, recovery_attempts, max_recovery_attempts, serialization, step_base, (SELECT deadline_epoch_ms FROM workflow_timeouts WHERE workflow_timeouts.workflow_uuid = workflow_status.workflow_uuid) AS workflow_deadline_epoch_ms FROM workflow_status \
              WHERE workflow_uuid = ? AND claim_after <= {{NOW}} AND status = 'PENDING' AND NOT EXISTS \
              (SELECT 1 FROM workflow_queue_entries WHERE workflow_queue_entries.workflow_uuid = workflow_status.workflow_uuid) \
              AND serialization IN ({}) AND name IN ({}){compatible} {}",

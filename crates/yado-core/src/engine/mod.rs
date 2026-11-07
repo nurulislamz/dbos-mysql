@@ -15,6 +15,7 @@ use crate::{Error, Identity, Store};
 
 mod attributes;
 mod awakeables;
+mod continue_as_new;
 mod datasources;
 mod debounce;
 mod events;
@@ -90,9 +91,18 @@ pub struct Run {
 
 impl Run {
     pub fn new(lease: Lease, serialization: String, deadline_epoch_ms: Option<i64>) -> Self {
+        Self::new_at(lease, serialization, deadline_epoch_ms, 0)
+    }
+
+    pub fn new_at(
+        lease: Lease,
+        serialization: String,
+        deadline_epoch_ms: Option<i64>,
+        step_base: u32,
+    ) -> Self {
         Self {
             lease,
-            last_step_id: AtomicU32::new(0),
+            last_step_id: AtomicU32::new(step_base),
             reserved_step_ids: Mutex::new(HashSet::new()),
             serialization,
             deadline_epoch_ms,

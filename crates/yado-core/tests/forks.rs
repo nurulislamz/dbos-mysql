@@ -40,7 +40,12 @@ async fn begin_run(engine: &Engine, id: &str) -> Run {
 }
 
 fn run_of(claim: Claimed) -> Run {
-    Run::new(claim.lease, claim.serialization, claim.deadline_epoch_ms)
+    Run::new_at(
+        claim.lease,
+        claim.serialization,
+        claim.deadline_epoch_ms,
+        claim.step_base,
+    )
 }
 
 async fn save(engine: &Engine, run: &Run, step: u32, value: &str) {
@@ -277,11 +282,29 @@ all_dbs!(rewind_discards_from_the_start_step, backend, {
         .unwrap();
     let rows = engine.store().list_messages("a").await.unwrap();
     assert_eq!(rows.len(), 1);
-    let claim = engine
-        .rewind_workflow("a", Some(3), &names(), Some("v9"), None, None)
+    assert!(
+        engine
+            .rewind_workflow("a", Some(3), &names(), Some("v9"), None, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let versioned = Engine::connect(
+        &db.url,
+        EngineConfig {
+            application_version: Some("v9".into()),
+            ..EngineConfig::default()
+        },
+    )
+    .await
+    .unwrap();
+    let claim = versioned
+        .recover_now(&names())
         .await
         .unwrap()
-        .expect("a direct rewind is claimed here");
+        .into_iter()
+        .find(|claim| claim.lease.workflow_id == "a")
+        .unwrap();
     let row = engine.get_status("a").await.unwrap();
     assert_eq!(row.status, Status::Pending);
     assert_eq!(row.output, None);
