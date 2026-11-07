@@ -33,6 +33,7 @@ from yado.events import Events, WorkflowSerializationFormat
 from yado.awakeables import Awakeables
 from yado.forks import Forks
 from yado.patching import Patching
+from yado.versions import Versions
 from yado.queues import DEFAULT_QUEUE_POLLING_INTERVAL_SEC, Queue, Queues
 from yado.retention import Retention, retention_policy_of
 from yado.schedules import Schedules, clear as clear_schedules, flush as flush_schedules
@@ -354,6 +355,10 @@ class _DBOSMeta(type):
         return _instance._executor_id if _instance is not None else os.environ.get("DBOS__VMID") or "local"
 
     @property
+    def application_version(cls) -> str | None:
+        return _instance._engine.application_version if _instance is not None and _instance._engine is not None else None
+
+    @property
     def workflow_id(cls) -> str | None:
         run = _current_run.get()
         return run.workflow_id if run is not None else None
@@ -373,7 +378,7 @@ class _DBOSMeta(type):
         return tracing.current_span()
 
 
-class DBOS(Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
+class DBOS(Versions, Awakeables, WaitFirst, SDKCalls, Sleep, Patching, WorkflowManagement, Forks, WorkflowAttributes, Events, Streams, Queues, Schedules, Retention, metaclass=_DBOSMeta):
     logger = logger
 
     def __new__(cls, *, config: DBOSConfig) -> DBOS:

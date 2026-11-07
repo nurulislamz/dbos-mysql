@@ -260,6 +260,8 @@ asyncio.run(main())
 yado.destroy()
 ```
 
+A configured `application_version` is registered when a worker starts. Workers recover workflows pinned to their own version; only the latest registered version recovers workflows without a version. Use `DBOS.list_application_versions()` to inspect versions and `DBOS.set_latest_application_version(name)` to choose which registered version is latest. Without any registered version, unversioned workers can recover unversioned workflows.
+
 For MySQL, use `mysql://user:password@host:3306/database`. For Postgres, use `postgres://user:password@host:5432/database`.
 
 ## See your workflows

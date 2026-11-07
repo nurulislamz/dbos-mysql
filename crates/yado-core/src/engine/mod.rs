@@ -29,6 +29,7 @@ mod sleep;
 mod steps;
 mod streams;
 mod timeouts;
+mod versions;
 mod wait_first;
 mod wakeup;
 mod workflow_management;
@@ -311,6 +312,9 @@ impl Engine {
                 store.migrate().await?;
             } else {
                 store.check_schema().await?;
+            }
+            if let Some(version) = &config.application_version {
+                store.register_version(version).await?;
             }
         }
         Ok(Self {

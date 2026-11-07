@@ -139,6 +139,11 @@ const POSTGRES: &[Migration] = &[
         include_str!("../../schema/postgres/033_attribute_lookup.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'ix_workflow_attributes_lookup')",
     ),
+    plain(
+        34,
+        include_str!("../../schema/postgres/034_application_versions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'application_versions')",
+    ),
 ];
 
 const MYSQL: &[Migration] = &[
@@ -263,6 +268,11 @@ const MYSQL: &[Migration] = &[
         include_str!("../../schema/mysql/033_attribute_lookup.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workflow_attribute_lookup' AND INDEX_NAME = 'ix_workflow_attributes_lookup')",
     ),
+    plain(
+        34,
+        include_str!("../../schema/mysql/034_application_versions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'application_versions')",
+    ),
 ];
 
 const SQLITE: &[Migration] = &[
@@ -374,6 +384,11 @@ const SQLITE: &[Migration] = &[
         33,
         include_str!("../../schema/sqlite/033_attribute_lookup.sql"),
         "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'ix_workflow_attributes_lookup')",
+    ),
+    plain(
+        34,
+        include_str!("../../schema/sqlite/034_application_versions.sql"),
+        "SELECT COUNT(*) FROM (SELECT 1) AS one WHERE NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'application_versions')",
     ),
 ];
 

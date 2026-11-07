@@ -39,6 +39,12 @@ from yado.errors import (
     MaxRecoveryAttemptsExceededError,
 )
 
+list_application_versions = DBOS.list_application_versions
+list_application_versions_async = DBOS.list_application_versions_async
+get_latest_application_version = DBOS.get_latest_application_version
+get_latest_application_version_async = DBOS.get_latest_application_version_async
+set_latest_application_version = DBOS.set_latest_application_version
+set_latest_application_version_async = DBOS.set_latest_application_version_async
 asyncio_wait = DBOS.asyncio_wait
 cancel_workflow = DBOS.cancel_workflow
 cancel_workflow_async = DBOS.cancel_workflow_async
@@ -150,6 +156,12 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "list_application_versions",
+    "list_application_versions_async",
+    "get_latest_application_version",
+    "get_latest_application_version_async",
+    "set_latest_application_version",
+    "set_latest_application_version_async",
     "DBOS",
     "DBOSAwaitedWorkflowCancelledError",
     "DBOSAwaitedWorkflowMaxRecoveryAttemptsExceeded",

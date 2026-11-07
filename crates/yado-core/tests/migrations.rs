@@ -91,7 +91,7 @@ fn current_init(backend: Backend) -> &'static str {
 }
 
 /// What 001 no longer holds, because a shipped file is never edited.
-fn files_after_init(backend: Backend) -> [&'static str; 16] {
+fn files_after_init(backend: Backend) -> [&'static str; 17] {
     match backend {
         Backend::Sqlite => [
             include_str!("../schema/sqlite/007_workflow_columns.sql"),
@@ -110,6 +110,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 16] {
             include_str!("../schema/sqlite/030_queue_entry_debounce.sql"),
             include_str!("../schema/sqlite/032_workflow_awakeables.sql"),
             include_str!("../schema/sqlite/033_attribute_lookup.sql"),
+            include_str!("../schema/sqlite/034_application_versions.sql"),
         ],
         Backend::MySql => [
             include_str!("../schema/mysql/007_workflow_columns.sql"),
@@ -128,6 +129,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 16] {
             include_str!("../schema/mysql/030_queue_entry_debounce.sql"),
             include_str!("../schema/mysql/032_workflow_awakeables.sql"),
             include_str!("../schema/mysql/033_attribute_lookup.sql"),
+            include_str!("../schema/mysql/034_application_versions.sql"),
         ],
         Backend::Postgres => [
             include_str!("../schema/postgres/007_workflow_columns.sql"),
@@ -146,6 +148,7 @@ fn files_after_init(backend: Backend) -> [&'static str; 16] {
             include_str!("../schema/postgres/030_queue_entry_debounce.sql"),
             include_str!("../schema/postgres/032_workflow_awakeables.sql"),
             include_str!("../schema/postgres/033_attribute_lookup.sql"),
+            include_str!("../schema/postgres/034_application_versions.sql"),
         ],
     }
 }
@@ -153,13 +156,13 @@ fn files_after_init(backend: Backend) -> [&'static str; 16] {
 fn versions(backend: Backend) -> Vec<i64> {
     match backend {
         Backend::Sqlite => vec![
-            1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33,
+            1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33, 34,
         ],
         Backend::MySql => vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33, 34,
         ],
         Backend::Postgres => vec![
-            1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33,
+            1, 2, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 27, 29, 30, 32, 33, 34,
         ],
     }
 }
@@ -926,7 +929,7 @@ all_dbs!(
         let store = db.open().await;
         for sql in [
             "DROP TABLE workflow_attribute_lookup",
-            "DELETE FROM dwos_schema_migrations WHERE version = 33",
+            "DELETE FROM dwos_schema_migrations WHERE version >= 33",
             "UPDATE workflow_status SET attributes = '{\"customer\":\"acme\"}' WHERE workflow_uuid = 'backfill'",
             "INSERT INTO workflow_attributes (workflow_uuid, attr_key, attr_value) VALUES ('backfill', 'legacy', 'keep')",
         ] {

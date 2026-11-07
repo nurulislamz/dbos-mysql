@@ -25,6 +25,7 @@ mod sleep;
 mod steps;
 mod streams;
 mod timeouts;
+mod versions;
 mod workflow_management;
 mod workflows;
 
@@ -34,6 +35,7 @@ pub use forks::ForkOptions;
 pub use queues::{PartitionLimits, PartitionUpdate};
 pub use schedules::{NewSchedule, ScheduleFire};
 pub use streams::StreamRead;
+pub use versions::VersionRow;
 
 const MAX_NAME_CHARS: usize = 255;
 const POOL_SIZE: u32 = 10;
@@ -420,10 +422,13 @@ impl Store {
         let mut clause = String::new();
         let mut binds = Vec::new();
         if let Some(version) = &self.identity.application_version {
-            clause.push_str(" AND (workflow_status.application_version IS NULL OR workflow_status.application_version = ?)");
-            binds.push(version.as_str());
+            clause.push_str(&format!(" AND (workflow_status.application_version = ? OR (workflow_status.application_version IS NULL AND COALESCE({}, ?) = ?))", versions::LATEST_VERSION));
+            binds.extend([version.as_str(); 3]);
         } else {
-            clause.push_str(" AND workflow_status.application_version IS NULL");
+            clause.push_str(&format!(
+                " AND workflow_status.application_version IS NULL AND {} IS NULL",
+                versions::LATEST_VERSION
+            ));
         }
         if let Some(name) = &self.identity.application_name {
             clause.push_str(" AND (workflow_status.application_name IS NULL OR workflow_status.application_name = ?)");

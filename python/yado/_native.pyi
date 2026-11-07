@@ -164,7 +164,17 @@ class StreamItem:
     serialization: str | None
 
 # Every method that takes `blocking` returns the awaited value directly when it is True, with the GIL released.
+class VersionRow:
+    version_id: str
+    version_name: str
+    version_timestamp: int
+    created_at: int
+
 class Engine:
+    @property
+    def application_version(self) -> str | None: ...
+    def list_versions(self, *, blocking: bool = False) -> asyncio.Future[list[VersionRow]] | list[VersionRow]: ...
+    def set_latest_version(self, name: str, *, blocking: bool = False) -> asyncio.Future[None] | None: ...
     @staticmethod
     def connect(
         url: str,

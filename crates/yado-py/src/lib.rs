@@ -27,6 +27,7 @@ mod retention;
 mod schedules;
 mod sleep;
 mod streams;
+mod versions;
 mod wait_first;
 mod workflow_management;
 
@@ -775,6 +776,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(silence_logs, m)?)?;
     m.add_function(wrap_pyfunction!(step_id_for_call, m)?)?;
     m.add_class::<PyEngine>()?;
+    m.add_class::<versions::PyVersionRow>()?;
     m.add_class::<PyRun>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyStep>()?;
